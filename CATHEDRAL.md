@@ -30,7 +30,7 @@ curl -fsSL https://cathedral.computer/install.sh | sh   # installs ctcli; see ca
 ctcli build verify RECEIPT.json --source my-upload.tgz
 ```
 
-`build verify` is in ctcli 0.6.1 and later. 0.6.1 is prepared but not yet published; 0.6.0 does not have the command.
+`build verify` is in ctcli 0.6.1 and later, which `https://cathedral.computer/install.sh` installs. 0.6.0 does not have the command.
 
 `--source` takes the exact tarball the miner uploaded (or `--source-sha256 HEX`). Add `--image-id sha256:...` to also require the image ID a validator loaded. The answer is PASS, FAIL or NOT PROVEN, with the source hash, image ID, archive hash, builder digest, AMD-attested measurement and room it is bound to.
 
@@ -41,7 +41,7 @@ What PASS checks:
 
 ## What it does not prove
 
-- **That nobody could read the source.** An operator of the machine can still read a box today (Cathedral AB#353). Use it for sources that are, or will be, public.
+- **That nobody could read the source.** An operator of the machine can still read a box today. Use it for sources that are, or will be, public.
 - **That the image is safe or passed screening.** It proves where the image came from, not what it does. Screening still decides.
 - **What the build downloaded.** The room has internet access; base images, crates and packages fetched during the build are not pinned by the receipt.
 - **That the build is reproducible.** Two sealed builds of the same source give different image IDs today (timestamps and a non-reproducible Rust binary), so a receipt is checked against the image it names, not by rebuilding.
@@ -50,4 +50,4 @@ What PASS checks:
 
 ## Live numbers
 
-`PROOF.md`: 31 sealed build attempts of Ditto's public starter miner on Cathedral production, 21 built, 20 receipts that verify offline, every failure Cathedral-side and classed as retryable infrastructure. The receipts are in `docs/cathedral-proof/`.
+`PROOF.md`: 31 sealed build attempts of Ditto's public starter miner on Cathedral production, 21 built, 20 receipts that verify offline, every failure Cathedral-side and classed as retryable infrastructure. Three representative receipts are in `docs/cathedral-proof/`.

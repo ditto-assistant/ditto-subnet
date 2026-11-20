@@ -2,7 +2,7 @@
 
 Run 19 Nov 2026, 00:52 to 02:26 UTC, against Cathedral's production API with this branch's code (`ditto_screener.cathedral_build`, the same module the screener uses), a Cathedral test key, and `sealed-4x8` rooms (4 vCPU, 8 GiB) on the AMD SEV-SNP sealed pool. Every room was deleted (two after the client gave up on a 502; confirmed by the API).
 
-Sources: `miners/dittobench-starter-kit/` at 16 commits of this repo (public), each as one tarball, plus the kit at `736d5662` (this fork's `main`) built 15 more times. Nothing private was built.
+Sources: `miners/dittobench-starter-kit/` at 16 commits of this repo (public), each as one tarball, plus the kit at `736d56621a0545938cfc9bca7fe407d509eb1502` built 15 more times. Nothing private was built.
 
 ## Numbers
 
@@ -37,7 +37,7 @@ Six sealed builds of the identical tarball gave six different image IDs. Only th
 
 ## Check it yourself
 
-Every built receipt is in `docs/cathedral-proof/` (number, then the starter-kit commit). `build verify` ships in ctcli 0.6.1, which is prepared but not yet on Cathedral's index (0.6.0 does not have it). With 0.6.1 or later:
+Three representative receipts are in `docs/cathedral-proof/` (number, then the starter-kit commit): 01 and 16 PASS, 13 NOT PROVEN. The table below lists all 21. `build verify` ships in ctcli 0.6.1, which Cathedral's installer now installs (0.6.0 does not have it). With 0.6.1 or later:
 
 ```
 curl -fsSL https://cathedral.computer/install.sh | sh   # installs ctcli; see cathedral.computer for pip, pipx, uv, Windows
@@ -72,8 +72,8 @@ A source tarball rebuilt with `git archive` gets new timestamps and so a new sha
 | 29 | `736d566` | `5ad58eb23923` | `52e1fbd4a7ca` | nc-sealed-2 | 593 | PASS |
 | 30 | `736d566` | `5ad58eb23923` | `3727529a6649` | nc-sealed-2 | 628 | PASS |
 
-Short hashes in the table; the full values are in each receipt.
+Short hashes in the table. The full values are in the committed receipts (01, 13, 16); the other 18 are not in the repo.
 
 ## What this does not show
 
-The limits in `CATHEDRAL.md` apply. In short: an operator could still read a source (Cathedral AB#353; use public sources), the receipt says nothing about the image's safety or what the build downloaded, the build is not reproducible, and the build facts are chip-rooted while "nothing else touched the room" rests on Cathedral's signed chain.
+The limits in `CATHEDRAL.md` apply. In short: an operator could still read a source; use public sources, the receipt says nothing about the image's safety or what the build downloaded, the build is not reproducible, and the build facts are chip-rooted while "nothing else touched the room" rests on Cathedral's signed chain.
