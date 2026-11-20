@@ -720,6 +720,15 @@ def _allocator_busy_backoff_seconds(streak: int) -> float:
     return random.uniform(ceiling / 2, ceiling)
 
 
+def _lease_memory_limit_mib(lease: object) -> int | None:
+    """The harness memory cap a lease was issued under, when it names one."""
+    runtime = getattr(lease, "benchmark_runtime", None)
+    cap = getattr(runtime, "sandbox_memory_limit_mib", None)
+    if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0:
+        return cap
+    return None
+
+
 def _jittered(seconds: float) -> float:
     spread = seconds * _IDLE_REPOLL_JITTER_FRACTION
     return max(0.0, random.uniform(seconds - spread, seconds + spread))
@@ -884,6 +893,10 @@ class _SlotState:
     last_progress_heartbeat_monotonic: float | None = None
     last_progress_bucket: int | None = None
     retain_failed_progress_until: float = 0.0
+    # The harness memory cap this slot's running lease was issued under. Host
+    # memory admission reserves it in full while the lease runs, even after the
+    # operator lowers the live cap.
+    memory_limit_mib: int | None = None
     # Set when the platform's heartbeat roster stops listing this slot's lease.
     # Only ever *requests* a stop: the scoring path owns the unwind, so the
     # scorer-side container kill and the slot reset keep their single home.
@@ -2006,8 +2019,16 @@ class ValidatorWorker:
             return None
         cap = self._sandbox_memory_limit_mib
         configured = len(self._slots)
+        # A running lease keeps the cap it was issued under. After the operator
+        # lowers the live cap, whatever those leases may use beyond it is host
+        # memory new slots cannot have, so it comes off the host before sizing.
+        over_cap = sum(
+            max(0, (slot.memory_limit_mib or cap) - cap)
+            for slot in self._slots.values()
+            if slot.active_agent_id is not None
+        )
         admitted = self._resource_ceilings.memory_admitted_slots(
-            specs.memory_total_mib, cap
+            specs.memory_total_mib - over_cap, cap
         )
         key = (admitted, configured, cap)
         if key != self._memory_admitted_slots_logged:
@@ -2789,6 +2810,7 @@ class ValidatorWorker:
         agent_id: UUID,
         ticket_deadline: datetime,
         bench_version: int = DEFAULT_BENCH_VERSION,
+        memory_limit_mib: int | None = None,
     ) -> None:
         """Reset progress throttling and publish artifact preparation promptly.
 
@@ -2798,6 +2820,13 @@ class ValidatorWorker:
         re-emit ``preparing`` or discard the progress already published for this
         exact lease.
         """
+        slot = self._slot_state()
+        if memory_limit_mib is not None:
+            slot.memory_limit_mib = memory_limit_mib
+        elif slot.memory_limit_mib is None:
+            # A lease that names no cap runs at the one this worker believes
+            # is live.
+            slot.memory_limit_mib = self._sandbox_memory_limit_mib
         if (
             self._active_agent_id == agent_id
             and self._active_ticket_deadline == ticket_deadline
@@ -2822,6 +2851,7 @@ class ValidatorWorker:
         self._last_progress_heartbeat_monotonic = None
         self._last_progress_bucket = None
         self._slot_state().bench_version = None
+        self._slot_state().memory_limit_mib = None
 
     async def _treasury_weight_capability(self) -> TreasuryWeightCapability | None:
         """Advertise only local crypto approval plus the actual queued backend guard."""
@@ -3989,6 +4019,7 @@ class ValidatorWorker:
                 job.agent_id,
                 job.deadline,
                 job.bench_version or DEFAULT_BENCH_VERSION,
+                memory_limit_mib=_lease_memory_limit_mib(job),
             )
             # Bounded by the lease and by the roster, like canonical scoring. An
             # unwatched retest ignored ``slot.revoked``: an operator reject that
@@ -4182,7 +4213,10 @@ class ValidatorWorker:
         heartbeat_task: asyncio.Task[None] | None = None
         try:
             await self._begin_active_ticket(
-                job.agent_id, job.deadline, job.bench_version
+                job.agent_id,
+                job.deadline,
+                job.bench_version,
+                memory_limit_mib=_lease_memory_limit_mib(lease),
             )
             heartbeat_task = asyncio.create_task(
                 self._heartbeat_while_active(heartbeat_stop)
@@ -5246,7 +5280,10 @@ class ValidatorWorker:
         # re-announces ``preparing`` for the run proper; re-announcing the first
         # stage of a lease is explicitly allowed and simply rebaselines.
         await self._begin_active_ticket(
-            job.agent_id, job.deadline, job.bench_version or DEFAULT_BENCH_VERSION
+            job.agent_id,
+            job.deadline,
+            job.bench_version or DEFAULT_BENCH_VERSION,
+            memory_limit_mib=_lease_memory_limit_mib(job),
         )
         try:
             broker = await self._activate_ticket_inference(job)

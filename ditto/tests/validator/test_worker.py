@@ -6771,6 +6771,49 @@ class TestResourceConstrainedAdmission:
         ]
         assert levels == [logging.ERROR, logging.WARNING, logging.INFO]
 
+    async def test_a_running_lease_keeps_its_cap_after_the_live_cap_drops(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Lowering the cap must not over-admit around a lease issued above it.
+
+        32,099 MiB host, one lease running at 8192 MiB, live cap lowered to
+        4096: 8192 + 5 x 4096 fits in 31,075 MiB, a seventh slot would not.
+        Sizing every slot at the new cap would claim 7.
+        """
+        worker = self._memory_host(32099)
+        monkeypatch.setattr(worker, "_publish_benchmark_progress", AsyncMock())
+        token = worker_mod._CURRENT_SLOT.set("slot-0")
+        try:
+            lease = SimpleNamespace(
+                benchmark_runtime=SimpleNamespace(sandbox_memory_limit_mib=8192)
+            )
+            await worker._begin_active_ticket(
+                uuid4(),
+                datetime.now(UTC) + timedelta(hours=1),
+                18,
+                memory_limit_mib=worker_mod._lease_memory_limit_mib(lease),
+            )
+            assert worker._slots["slot-0"].memory_limit_mib == 8192
+            worker._adopt_live_sandbox_cap(4096)
+            assert worker._memory_admitted_slots() == 6
+            worker._clear_active_ticket()
+            assert worker._slots["slot-0"].memory_limit_mib is None
+            # The lease ended: every slot is sized at the live cap again.
+            assert worker._memory_admitted_slots() == 7
+        finally:
+            worker_mod._CURRENT_SLOT.reset(token)
+
+    def test_lease_memory_cap_is_read_only_from_a_well_formed_runtime(self) -> None:
+        def lease(cap: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                benchmark_runtime=SimpleNamespace(sandbox_memory_limit_mib=cap)
+            )
+
+        assert worker_mod._lease_memory_limit_mib(lease(6144)) == 6144
+        for malformed in (None, True, 0, "8192", MagicMock()):
+            assert worker_mod._lease_memory_limit_mib(lease(malformed)) is None
+        assert worker_mod._lease_memory_limit_mib(SimpleNamespace()) is None
+
     def test_heartbeat_reply_resizes_admission_to_the_live_cap(self) -> None:
         """A host admitting no slot gets no lease; the heartbeat must tell it."""
         worker = self._memory_host(7934)
