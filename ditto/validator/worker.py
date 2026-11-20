@@ -1166,8 +1166,9 @@ class ValidatorWorker:
         # The harness memory cap host-memory admission sizes against: the
         # published envelope until a lease stamps the live Platform value.
         self._sandbox_memory_limit_mib = runtime_envelope().memory_limit_mib
-        # (admitted, configured, cap) last logged, so the log fires on change.
-        self._memory_admitted_slots_logged: tuple[int, int, int] | None = None
+        # (admitted, configured, cap, held) last logged, so the log fires on
+        # change, including a change in memory held by higher-cap leases.
+        self._memory_admitted_slots_logged: tuple[int, int, int, int] | None = None
         # Opaque per-run token for the active ticket, learned from the first
         # scorer snapshot that carries a run id (None for the pre-run stages).
         # Rides every published BenchmarkProgress so the platform can tell a
@@ -2030,7 +2031,7 @@ class ValidatorWorker:
         admitted = self._resource_ceilings.memory_admitted_slots(
             specs.memory_total_mib - over_cap, cap
         )
-        key = (admitted, configured, cap)
+        key = (admitted, configured, cap, over_cap)
         if key != self._memory_admitted_slots_logged:
             self._log_memory_admission(
                 admitted=admitted,

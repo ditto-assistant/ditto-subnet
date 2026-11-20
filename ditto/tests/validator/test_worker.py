@@ -6833,6 +6833,24 @@ class TestResourceConstrainedAdmission:
             "offered. Needs at least 25600 MiB for all 4. A further 2048 MiB is "
             "held until leases issued under a higher cap finish."
         ]
+        # A second higher-cap lease holds more without changing the admitted
+        # count; the log still follows the held figure.
+        caplog.clear()
+        worker._slots["slot-1"].active_agent_id = uuid4()
+        worker._slots["slot-1"].memory_limit_mib = 6656
+        with caplog.at_level(logging.WARNING, logger=worker_mod.logger.name):
+            # 15,987 - 2,560 held = 13,427: (13,427 - 1,024) // 6,144 = 2.
+            assert worker._memory_admitted_slots() == 2
+            assert worker._memory_admitted_slots() == 2
+        held = [
+            record.getMessage()
+            for record in caplog.records
+            if "host memory admits" in record.getMessage()
+        ]
+        assert len(held) == 1
+        assert held[0].endswith(
+            "A further 2560 MiB is held until leases issued under a higher cap finish."
+        )
 
     def test_lease_memory_cap_is_read_only_from_a_well_formed_runtime(self) -> None:
         def lease(cap: object) -> SimpleNamespace:
