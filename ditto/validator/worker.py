@@ -720,6 +720,15 @@ def _allocator_busy_backoff_seconds(streak: int) -> float:
     return random.uniform(ceiling / 2, ceiling)
 
 
+def _lease_memory_limit_mib(lease: object) -> int | None:
+    """The harness memory cap a lease was issued under, when it names one."""
+    runtime = getattr(lease, "benchmark_runtime", None)
+    cap = getattr(runtime, "sandbox_memory_limit_mib", None)
+    if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0:
+        return cap
+    return None
+
+
 def _jittered(seconds: float) -> float:
     spread = seconds * _IDLE_REPOLL_JITTER_FRACTION
     return max(0.0, random.uniform(seconds - spread, seconds + spread))
@@ -884,6 +893,10 @@ class _SlotState:
     last_progress_heartbeat_monotonic: float | None = None
     last_progress_bucket: int | None = None
     retain_failed_progress_until: float = 0.0
+    # The harness memory cap this slot's running lease was issued under. Host
+    # memory admission reserves it in full while the lease runs, even after the
+    # operator lowers the live cap.
+    memory_limit_mib: int | None = None
     # Set when the platform's heartbeat roster stops listing this slot's lease.
     # Only ever *requests* a stop: the scoring path owns the unwind, so the
     # scorer-side container kill and the slot reset keep their single home.
@@ -1153,7 +1166,9 @@ class ValidatorWorker:
         # The harness memory cap host-memory admission sizes against: the
         # published envelope until a lease stamps the live Platform value.
         self._sandbox_memory_limit_mib = runtime_envelope().memory_limit_mib
-        self._memory_admitted_slots_logged: int | None = None
+        # (admitted, configured, cap, held) last logged, so the log fires on
+        # change, including a change in memory held by higher-cap leases.
+        self._memory_admitted_slots_logged: tuple[int, int, int, int] | None = None
         # Opaque per-run token for the active ticket, learned from the first
         # scorer snapshot that carries a run id (None for the pre-run stages).
         # Rides every published BenchmarkProgress so the platform can tell a
@@ -2003,24 +2018,99 @@ class ValidatorWorker:
             return None
         if not isinstance(specs, HostSpecs):
             return None
-        admitted = self._resource_ceilings.memory_admitted_slots(
-            specs.memory_total_mib, self._sandbox_memory_limit_mib
+        cap = self._sandbox_memory_limit_mib
+        configured = len(self._slots)
+        # A running lease keeps the cap it was issued under. After the operator
+        # lowers the live cap, whatever those leases may use beyond it is host
+        # memory new slots cannot have, so it comes off the host before sizing.
+        over_cap = sum(
+            max(0, (slot.memory_limit_mib or cap) - cap)
+            for slot in self._slots.values()
+            if slot.active_agent_id is not None
         )
-        if (
-            admitted < len(self._slots)
-            and admitted != self._memory_admitted_slots_logged
-        ):
-            logger.warning(
-                "host memory admits %s of %s configured slot(s): %s MiB host, "
-                "%s MiB reserve, %s MiB harness cap",
-                admitted,
-                len(self._slots),
-                specs.memory_total_mib,
-                self._resource_ceilings.host_memory_reserve_mib,
-                self._sandbox_memory_limit_mib,
+        admitted = self._resource_ceilings.memory_admitted_slots(
+            specs.memory_total_mib - over_cap, cap
+        )
+        key = (admitted, configured, cap, over_cap)
+        if key != self._memory_admitted_slots_logged:
+            self._log_memory_admission(
+                admitted=admitted,
+                configured=configured,
+                cap=cap,
+                host_mib=specs.memory_total_mib,
+                held_mib=over_cap,
+                previously_limited=(
+                    self._memory_admitted_slots_logged is not None
+                    and self._memory_admitted_slots_logged[0]
+                    < self._memory_admitted_slots_logged[1]
+                ),
             )
-        self._memory_admitted_slots_logged = admitted
+        self._memory_admitted_slots_logged = key
         return admitted
+
+    def _log_memory_admission(
+        self,
+        *,
+        admitted: int,
+        configured: int,
+        cap: int,
+        host_mib: int,
+        previously_limited: bool,
+        held_mib: int = 0,
+    ) -> None:
+        """Say how many slots host memory admits, and what would admit them all.
+
+        Logged on change only. The validator's own log is the one place a
+        third-party operator is sure to look, so it carries the fix path in
+        host memory, not just the count. The figures are what to provision at
+        the live cap; ``held_mib`` is memory that running leases issued under a
+        higher cap hold until they finish, named separately because it drains
+        on its own and needs no new hardware.
+        """
+        reserve = self._resource_ceilings.host_memory_reserve_mib
+        needed_all = self._resource_ceilings.memory_required_mib(configured, cap)
+        held = (
+            f" A further {held_mib} MiB is held until leases issued under a "
+            "higher cap finish."
+            if held_mib > 0
+            else ""
+        )
+        if admitted == 0:
+            logger.error(
+                "host memory admits no benchmark slot at the %s MiB harness "
+                "cap (%s MiB host, %s MiB reserve): this validator cannot score. "
+                "It keeps heartbeating and setting weights. Needs at least %s "
+                "MiB for 1 slot and %s MiB for all %s configured slot(s).%s",
+                cap,
+                host_mib,
+                reserve,
+                self._resource_ceilings.memory_required_mib(1, cap),
+                needed_all,
+                configured,
+                held,
+            )
+        elif admitted < configured:
+            logger.warning(
+                "host memory admits %s of %s configured slot(s) at the %s MiB "
+                "harness cap (%s MiB host, %s MiB reserve); the rest are never "
+                "offered. Needs at least %s MiB for all %s.%s",
+                admitted,
+                configured,
+                cap,
+                host_mib,
+                reserve,
+                needed_all,
+                configured,
+                held,
+            )
+        elif previously_limited:
+            logger.info(
+                "host memory now admits all %s configured slot(s) at the %s MiB "
+                "harness cap (%s MiB host)",
+                configured,
+                cap,
+                host_mib,
+            )
 
     async def _scoring_preflight(self) -> bool:
         """Functionally probe scorer dependencies before requesting a lease."""
@@ -2338,6 +2428,7 @@ class ValidatorWorker:
             self._bootstrap_resume_ready = response.accepted and _stack_can_self_resume(
                 scorer_benchmarks, stack_health
             )
+            self._adopt_live_sandbox_cap(response.sandbox_memory_limit_mib)
             self._apply_lease_roster(response, advertised=capacity)
             return response.accepted
         except Exception as e:  # noqa: BLE001 - observability must never gate work
@@ -2349,6 +2440,29 @@ class ValidatorWorker:
             self._bootstrap_resume_ready = False
             logger.warning("validator heartbeat failed (scoring continues): %s", e)
             return False
+
+    def _adopt_live_sandbox_cap(self, cap_mib: int | None) -> None:
+        """Size host memory admission to the cap Platform says is live.
+
+        A lease also carries the cap, but a host whose memory admits no slot
+        never gets a lease, so without this it would judge itself against the
+        envelope default forever, whatever the operator set. ``None`` (an older
+        Platform, or a cap it could not read) keeps the cap last seen.
+        """
+        if (
+            not isinstance(cap_mib, int)
+            or isinstance(cap_mib, bool)
+            or cap_mib <= 0
+            or cap_mib == self._sandbox_memory_limit_mib
+        ):
+            return
+        logger.info(
+            "live harness memory cap is %s MiB (was %s MiB); re-sizing host "
+            "memory admission",
+            cap_mib,
+            self._sandbox_memory_limit_mib,
+        )
+        self._sandbox_memory_limit_mib = cap_mib
 
     def _apply_lease_roster(
         self, response: ValidatorHeartbeatResponse, *, advertised: BenchmarkCapacity
@@ -2710,6 +2824,7 @@ class ValidatorWorker:
         agent_id: UUID,
         ticket_deadline: datetime,
         bench_version: int = DEFAULT_BENCH_VERSION,
+        memory_limit_mib: int | None = None,
     ) -> None:
         """Reset progress throttling and publish artifact preparation promptly.
 
@@ -2719,6 +2834,13 @@ class ValidatorWorker:
         re-emit ``preparing`` or discard the progress already published for this
         exact lease.
         """
+        slot = self._slot_state()
+        if memory_limit_mib is not None:
+            slot.memory_limit_mib = memory_limit_mib
+        elif slot.memory_limit_mib is None:
+            # A lease that names no cap runs at the one this worker believes
+            # is live.
+            slot.memory_limit_mib = self._sandbox_memory_limit_mib
         if (
             self._active_agent_id == agent_id
             and self._active_ticket_deadline == ticket_deadline
@@ -2743,6 +2865,7 @@ class ValidatorWorker:
         self._last_progress_heartbeat_monotonic = None
         self._last_progress_bucket = None
         self._slot_state().bench_version = None
+        self._slot_state().memory_limit_mib = None
 
     async def _treasury_weight_capability(self) -> TreasuryWeightCapability | None:
         """Advertise only local crypto approval plus the actual queued backend guard."""
@@ -3910,6 +4033,7 @@ class ValidatorWorker:
                 job.agent_id,
                 job.deadline,
                 job.bench_version or DEFAULT_BENCH_VERSION,
+                memory_limit_mib=_lease_memory_limit_mib(job),
             )
             # Bounded by the lease and by the roster, like canonical scoring. An
             # unwatched retest ignored ``slot.revoked``: an operator reject that
@@ -4103,7 +4227,10 @@ class ValidatorWorker:
         heartbeat_task: asyncio.Task[None] | None = None
         try:
             await self._begin_active_ticket(
-                job.agent_id, job.deadline, job.bench_version
+                job.agent_id,
+                job.deadline,
+                job.bench_version,
+                memory_limit_mib=_lease_memory_limit_mib(lease),
             )
             heartbeat_task = asyncio.create_task(
                 self._heartbeat_while_active(heartbeat_stop)
@@ -5167,7 +5294,10 @@ class ValidatorWorker:
         # re-announces ``preparing`` for the run proper; re-announcing the first
         # stage of a lease is explicitly allowed and simply rebaselines.
         await self._begin_active_ticket(
-            job.agent_id, job.deadline, job.bench_version or DEFAULT_BENCH_VERSION
+            job.agent_id,
+            job.deadline,
+            job.bench_version or DEFAULT_BENCH_VERSION,
+            memory_limit_mib=_lease_memory_limit_mib(job),
         )
         try:
             broker = await self._activate_ticket_inference(job)

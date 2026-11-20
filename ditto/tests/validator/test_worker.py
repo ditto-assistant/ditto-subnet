@@ -6721,6 +6721,181 @@ class TestResourceConstrainedAdmission:
         )
         assert len(worker._available_slots()) == 1
 
+    def _memory_host(self, memory_total_mib: int) -> ValidatorWorker:
+        collector = self._collector()
+        collector.host_specs = MagicMock(
+            return_value=HostSpecs(
+                cpu_count=4,
+                memory_total_mib=memory_total_mib,
+                disk_total_gib=200,
+                architecture="x86_64",
+            )
+        )
+        worker, _ = self._worker(collector=collector)
+        worker._sandbox_memory_limit_mib = 8192
+        return worker
+
+    def test_memory_admission_logs_the_fix_path_once_per_change(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """SN-488: the validator's own log says how much memory would fix it."""
+        worker = self._memory_host(7934)
+        with caplog.at_level(logging.INFO, logger=worker_mod.logger.name):
+            assert worker._available_slots() == set()
+            assert worker._available_slots() == set()
+            # The operator lowers the cap: one slot fits now.
+            worker._sandbox_memory_limit_mib = 6144
+            assert len(worker._available_slots()) == 1
+            worker._sandbox_memory_limit_mib = 1536
+            assert len(worker._available_slots()) == 4
+        lines = [
+            record.getMessage()
+            for record in caplog.records
+            if "host memory" in record.getMessage()
+        ]
+        assert lines == [
+            "host memory admits no benchmark slot at the 8192 MiB harness cap "
+            "(7934 MiB host, 1024 MiB reserve): this validator cannot score. It "
+            "keeps heartbeating and setting weights. Needs at least 9216 MiB for "
+            "1 slot and 33792 MiB for all 4 configured slot(s).",
+            "host memory admits 1 of 4 configured slot(s) at the 6144 MiB harness "
+            "cap (7934 MiB host, 1024 MiB reserve); the rest are never offered. "
+            "Needs at least 25600 MiB for all 4.",
+            "host memory now admits all 4 configured slot(s) at the 1536 MiB "
+            "harness cap (7934 MiB host)",
+        ]
+        levels = [
+            record.levelno
+            for record in caplog.records
+            if "host memory" in record.getMessage()
+        ]
+        assert levels == [logging.ERROR, logging.WARNING, logging.INFO]
+
+    async def test_a_running_lease_keeps_its_cap_after_the_live_cap_drops(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Lowering the cap must not over-admit around a lease issued above it.
+
+        32,099 MiB host, one lease running at 8192 MiB, live cap lowered to
+        4096: 8192 + 5 x 4096 fits in 31,075 MiB, a seventh slot would not.
+        Sizing every slot at the new cap would claim 7.
+        """
+        worker = self._memory_host(32099)
+        monkeypatch.setattr(worker, "_publish_benchmark_progress", AsyncMock())
+        token = worker_mod._CURRENT_SLOT.set("slot-0")
+        try:
+            lease = SimpleNamespace(
+                benchmark_runtime=SimpleNamespace(sandbox_memory_limit_mib=8192)
+            )
+            await worker._begin_active_ticket(
+                uuid4(),
+                datetime.now(UTC) + timedelta(hours=1),
+                18,
+                memory_limit_mib=worker_mod._lease_memory_limit_mib(lease),
+            )
+            assert worker._slots["slot-0"].memory_limit_mib == 8192
+            with caplog.at_level(logging.WARNING, logger=worker_mod.logger.name):
+                worker._adopt_live_sandbox_cap(4096)
+                assert worker._memory_admitted_slots() == 6
+            # Configured 4 at 4096 fit a clean host, so the log is only about
+            # what the older lease holds: there is no hardware to add.
+            assert not [
+                record
+                for record in caplog.records
+                if "host memory admits" in record.getMessage()
+            ]
+            worker._clear_active_ticket()
+            assert worker._slots["slot-0"].memory_limit_mib is None
+            # The lease ended: every slot is sized at the live cap again.
+            assert worker._memory_admitted_slots() == 7
+        finally:
+            worker_mod._CURRENT_SLOT.reset(token)
+
+    def test_memory_log_names_memory_held_by_higher_cap_leases(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The fix path stays what to provision; held memory is named apart."""
+        worker = self._memory_host(15987)
+        worker._slots["slot-0"].active_agent_id = uuid4()
+        worker._slots["slot-0"].memory_limit_mib = 8192
+        worker._sandbox_memory_limit_mib = 6144
+        with caplog.at_level(logging.WARNING, logger=worker_mod.logger.name):
+            # 15,987 - 2,048 held = 13,939: (13,939 - 1,024) // 6,144 = 2 of 4.
+            assert worker._memory_admitted_slots() == 2
+        lines = [
+            record.getMessage()
+            for record in caplog.records
+            if "host memory admits" in record.getMessage()
+        ]
+        assert lines == [
+            "host memory admits 2 of 4 configured slot(s) at the 6144 MiB "
+            "harness cap (15987 MiB host, 1024 MiB reserve); the rest are never "
+            "offered. Needs at least 25600 MiB for all 4. A further 2048 MiB is "
+            "held until leases issued under a higher cap finish."
+        ]
+        # A second higher-cap lease holds more without changing the admitted
+        # count; the log still follows the held figure.
+        caplog.clear()
+        worker._slots["slot-1"].active_agent_id = uuid4()
+        worker._slots["slot-1"].memory_limit_mib = 6656
+        with caplog.at_level(logging.WARNING, logger=worker_mod.logger.name):
+            # 15,987 - 2,560 held = 13,427: (13,427 - 1,024) // 6,144 = 2.
+            assert worker._memory_admitted_slots() == 2
+            assert worker._memory_admitted_slots() == 2
+        held = [
+            record.getMessage()
+            for record in caplog.records
+            if "host memory admits" in record.getMessage()
+        ]
+        assert len(held) == 1
+        assert held[0].endswith(
+            "A further 2560 MiB is held until leases issued under a higher cap finish."
+        )
+
+    def test_lease_memory_cap_is_read_only_from_a_well_formed_runtime(self) -> None:
+        def lease(cap: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                benchmark_runtime=SimpleNamespace(sandbox_memory_limit_mib=cap)
+            )
+
+        assert worker_mod._lease_memory_limit_mib(lease(6144)) == 6144
+        for malformed in (None, True, 0, "8192", MagicMock()):
+            assert worker_mod._lease_memory_limit_mib(lease(malformed)) is None
+        assert worker_mod._lease_memory_limit_mib(SimpleNamespace()) is None
+
+    def test_heartbeat_reply_resizes_admission_to_the_live_cap(self) -> None:
+        """A host admitting no slot gets no lease; the heartbeat must tell it."""
+        worker = self._memory_host(7934)
+        assert worker._available_slots() == set()
+        worker._adopt_live_sandbox_cap(6144)
+        assert worker._sandbox_memory_limit_mib == 6144
+        assert len(worker._available_slots()) == 1
+        # Not answered, or nonsense from a fake, keeps the cap last seen.
+        for unanswered in (None, MagicMock(), True, 0):
+            worker._adopt_live_sandbox_cap(unanswered)  # type: ignore[arg-type]
+            assert worker._sandbox_memory_limit_mib == 6144
+
+    async def test_a_heartbeat_reply_cap_reaches_the_next_capacity_snapshot(
+        self,
+    ) -> None:
+        worker = self._memory_host(7934)
+        submit = AsyncMock(
+            return_value=ValidatorHeartbeatResponse(
+                accepted=True,
+                seen_at=datetime.now(UTC),
+                leases=None,
+                sandbox_memory_limit_mib=6144,
+            )
+        )
+        worker._platform.submit_heartbeat = submit  # type: ignore[method-assign]
+
+        await worker.run_once(set_weights=False)
+
+        final = submit.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        # Advertised at 8192 MiB as nothing; at the live 6144 MiB, one slot.
+        assert final.benchmark_capacity.healthy_slots == ["slot-0"]
+
     async def test_a_nearly_full_disk_claims_nothing_but_still_heartbeats(
         self,
     ) -> None:
