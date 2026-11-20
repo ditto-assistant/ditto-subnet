@@ -18,6 +18,12 @@ import {
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/)
 const uuid = z.string().uuid()
+// An OpenRouter model id (vendor/model), mirrored from Platform FrontierModel.
+const frontierModel = z
+  .string()
+  .min(3)
+  .max(128)
+  .regex(/^[a-z0-9][a-z0-9._-]*\/[A-Za-z0-9._:-]+$/)
 const frontierState = z.enum(['oracle_pending', 'audit_pending', 'settled'])
 const ss58 = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{47,48}$/)
 
@@ -138,6 +144,11 @@ export const generatorCompetitionSettingsSchema = z.object({
   frontier_audit_cases: z.number().int().min(0).max(16).default(3),
   frontier_audit_grace_hours: z.number().int().min(1).max(336).default(24),
   frontier_oracle_timeout_hours: z.number().int().min(1).max(168).default(12),
+  // The inference model the oracle ticket is granted instead of the bench
+  // model (panel tickets never get it). Platform refuses a model missing from
+  // its DITTO_FRONTIER_ORACLE_MODELS and falls back to the bench model while
+  // the model has no admitted route. Null is the bench model.
+  frontier_oracle_model: frontierModel.nullable().default(null),
   // Frontier escalation (ships off: inference spend): a stronger reference
   // agent re-checks a capped, secret-seed sample of the cases the oracle
   // failed (at most frontier_escalation_max_cases per round and
@@ -982,6 +993,15 @@ export const generatorFrontierSchema = z.object({
   created_at: z.string(),
   settled_at: z.string().nullable().optional(),
   settle_reason: z.string().nullable().optional(),
+  // The round's frozen frontier_oracle_model (null: the bench model), and the
+  // model the oracle ticket was really granted; fallback is true when it ran
+  // on the bench model because the set model had no admitted route.
+  oracle_model: z.string().nullable().optional().default(null),
+  oracle_model_run: z
+    .object({ model: z.string(), fallback: z.boolean(), leased_at: z.string() })
+    .nullable()
+    .optional()
+    .default(null),
 })
 
 // The MCP paging contract (docs/mcp.md, Paging): count is the queue total,

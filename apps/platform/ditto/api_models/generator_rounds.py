@@ -821,6 +821,16 @@ class GeneratorFrontierAuditView(RoundModel):
     """When the round's attestations apply anyway if still unruled."""
 
 
+class GeneratorFrontierModelRunView(RoundModel):
+    """The inference model an oracle lease was really granted."""
+
+    model: str
+    fallback: bool
+    """True when the frozen frontier model had no grant (no admitted route,
+    or delisted) and the lease fell back to the bench model."""
+    leased_at: datetime
+
+
 class GeneratorFrontierView(RoundModel):
     """A scored round's frontier lane: candidates, oracle, audits, outcome."""
 
@@ -836,6 +846,13 @@ class GeneratorFrontierView(RoundModel):
     """When the round settles with no attestations if the oracle never
     reports (while ``oracle_pending``)."""
     oracle: GeneratorFrontierOracleView | None
+    oracle_model: str | None = None
+    """The round's frozen ``frontier_oracle_model``; null runs the oracle on
+    the bench model."""
+    oracle_model_run: GeneratorFrontierModelRunView | None = None
+    """The model the newest oracle lease's grant really pinned, with
+    ``oracle_model`` set; null on the bench model or before the first
+    lease."""
     escalation: GeneratorFrontierEscalationView | None = None
     """The escalation tier, when the round's policy ran one after the
     oracle reported; null with escalation off."""
