@@ -8,6 +8,10 @@ registration, archive bytes and structure (the Go contract's rules), duplicate
 source, duplicate tree, cooldown, the on-chain fee verification, then one
 insert that supersedes the hotkey's previous generator and records the fee.
 
+``POST /generator/rounds/{round}/frontier/disputes`` takes a column owner's
+signed dispute that an oracle-failed case is valid (``generator_frontier``,
+"Disputes"); ``GET`` there lists what a hotkey may dispute and its disputes.
+
 ``GET /generator/upload-terms`` tells a client, before it pays anything,
 whether a fee is required, its amount and receiving address, and every
 refusal Platform can already decide without the archive.
@@ -31,7 +35,7 @@ import time
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import bittensor
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -49,12 +53,18 @@ from ditto.api_models.generator import (
     source_signature_payload,
 )
 from ditto.api_models.generator_rounds import (
+    GeneratorFrontierDisputeRequest,
+    GeneratorFrontierDisputeView,
+    GeneratorFrontierReport,
+    GeneratorFrontierReportRequest,
     GeneratorRoundDetail,
     GeneratorRoundListResponse,
     GeneratorRoundSchedule,
     PublicGeneratorBoardEntry,
     PublicGeneratorBoardResponse,
     PublicGeneratorSubmissionDetail,
+    frontier_dispute_signature_payload,
+    frontier_report_signature_payload,
 )
 from ditto.api_server.dependencies import (
     get_chain_client,
@@ -67,6 +77,13 @@ from ditto.api_server.generator_competition import (
     inspect_upload,
     load_settings,
     submission_summary,
+)
+from ditto.api_server.generator_frontier import (
+    FrontierDisputeRefused,
+    check_dispute,
+    dispute_views,
+    file_dispute,
+    frontier_report,
 )
 from ditto.api_server.generator_identity import (
     agent_identities,
@@ -110,9 +127,11 @@ from ditto.db.queries.generator import (
 )
 from ditto.db.queries.name_claims import upload_name_is_reserved
 from ditto.db.queries.payments import (
+    get_dispute_payment_for_proof,
     get_evaluation_payment_for_proof,
     get_generator_payment_for_proof,
     get_readmission_payment_for_proof,
+    insert_dispute_payment,
     insert_generator_payment,
 )
 from ditto.db.queries.scores import emission_owner
@@ -124,7 +143,7 @@ from ditto.db.queries.submission_settings import (
 
 if TYPE_CHECKING:
     from ditto.chain.client import ChainClient
-    from ditto.db.models import GeneratorSubmission
+    from ditto.db.models import GeneratorRound, GeneratorSubmission
 
 logger = logging.getLogger(__name__)
 
@@ -765,4 +784,193 @@ async def public_round(
             else standing
             for standing in standings
         ],
+    )
+
+
+def _verify_hotkey_signature(
+    hotkey: str, message: bytes, signature: str, timestamp: int, nonce: UUID
+) -> bool:
+    if nonce.version != 4 or abs(time.time() - timestamp) > SIGNATURE_MAX_SKEW_SECONDS:
+        return False
+    try:
+        keypair = bittensor.Keypair(ss58_address=hotkey)
+        return bool(
+            keypair.verify(message, bytes.fromhex(signature.removeprefix("0x")))
+        )
+    except (ValueError, TypeError):
+        return False
+
+
+@router.post(
+    "/rounds/{round_index}/frontier/report",
+    response_model=GeneratorFrontierReport,
+)
+async def frontier_report_for_hotkey(
+    round_index: int,
+    payload: GeneratorFrontierReportRequest,
+    session: SessionDep,
+    response: Response,
+) -> GeneratorFrontierReport:
+    """The frontier oracle's outcome on the signing hotkey's columns: once
+    the round is revealed, the case ids it answered and failed with their
+    scores (never case content, and nothing before the reveal), what the
+    hotkey may dispute now, and its disputes with each ruling's reason."""
+    response.headers["Cache-Control"] = "no-store"
+    message = frontier_report_signature_payload(
+        hotkey=payload.hotkey,
+        round_index=round_index,
+        timestamp=payload.signature_timestamp,
+        nonce=payload.signature_nonce,
+    )
+    if not _verify_hotkey_signature(
+        payload.hotkey,
+        message,
+        payload.signature,
+        payload.signature_timestamp,
+        payload.signature_nonce,
+    ):
+        raise HTTPException(
+            status_code=400, detail="signature did not verify against the hotkey"
+        )
+    row = await get_round(session, round_index, read_view=True)
+    if row is None or not row.frontier:
+        raise HTTPException(status_code=404, detail="round has no frontier lane")
+    return frontier_report(row, hotkey=payload.hotkey, now=datetime.now(UTC))
+
+
+@router.post(
+    "/rounds/{round_index}/frontier/disputes",
+    response_model=GeneratorFrontierDisputeView,
+)
+async def dispute_frontier_case(
+    round_index: int,
+    payload: GeneratorFrontierDisputeRequest,
+    request: Request,
+    session: SessionDep,
+    response: Response,
+) -> GeneratorFrontierDisputeView:
+    """Dispute that a case the panel and the frontier oracle both failed is
+    valid, with a TAO deposit. Only the column's own hotkey may dispute,
+    once the round is revealed and its oracle has reported, inside the
+    round's dispute window and caps. The deposit is a finalized transfer from
+    the hotkey's coldkey to the generator upload fee's address, verified on
+    chain like that fee. An operator rules the dispute: upheld scores the
+    case as frontier when the round settles and owes the whole deposit back;
+    rejected keeps the deposit."""
+    response.headers["Cache-Control"] = "no-store"
+    message = frontier_dispute_signature_payload(
+        hotkey=payload.hotkey,
+        round_index=round_index,
+        case_id=payload.case_id,
+        proof_sha256=payload.proof_sha256,
+        timestamp=payload.signature_timestamp,
+        nonce=payload.signature_nonce,
+    )
+    if not _verify_hotkey_signature(
+        payload.hotkey,
+        message,
+        payload.signature,
+        payload.signature_timestamp,
+        payload.signature_nonce,
+    ):
+        raise HTTPException(
+            status_code=400, detail="signature did not verify against the hotkey"
+        )
+    if await is_hotkey_banned(session, hotkey=payload.hotkey):
+        raise HTTPException(status_code=403, detail="hotkey is banned from submitting")
+    if await get_dispute_payment_for_proof(
+        session,
+        block_hash=payload.payment_block_hash,
+        extrinsic_index=payload.payment_extrinsic_index,
+    ):
+        raise PaymentReplayedError("payment proof already paid a dispute deposit")
+    reasoning = payload.reasoning.strip()
+
+    async def locked_round() -> GeneratorRound:
+        row = await get_round(session, round_index, for_update=True)
+        if row is None or not row.frontier:
+            raise HTTPException(status_code=404, detail="round has no frontier lane")
+        if row.dataset_bytes is None:
+            raise HTTPException(status_code=409, detail="round dataset is unavailable")
+        return row
+
+    # Every refusal Platform can decide alone runs before the chain reads, so
+    # a doomed dispute costs no chain call and never spends its proof.
+    row = await locked_round()
+    try:
+        check_dispute(
+            row,
+            row.dataset_bytes or b"",
+            hotkey=payload.hotkey,
+            case_id=payload.case_id,
+            evidence_pair_ids=payload.evidence_pair_ids,
+            amount_rao=payload.payment_amount_rao,
+            now=datetime.now(UTC),
+        )
+    except FrontierDisputeRefused as exc:
+        await session.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    # No transaction is held open across the slow chain reads.
+    await session.rollback()
+    _fee, address = await _generator_fee(session, request, upload_fee_required=False)
+    if session.in_transaction():
+        await session.rollback()
+    verifier: PaymentVerifier = await get_payment_verifier(request)
+    try:
+        verified = await verifier.verify_payment(
+            PaymentProof(
+                block_hash=payload.payment_block_hash,
+                block_number=payload.payment_block_number,
+                extrinsic_index=payload.payment_extrinsic_index,
+            ),
+            expected_hotkey=payload.hotkey,
+            expected_amount_rao=payload.payment_amount_rao,
+            expected_send_address=address,
+        )
+    except ChainError as exc:
+        logger.warning("chain unreachable during dispute deposit verify: %s", exc)
+        raise HTTPException(
+            status_code=503, detail="chain unavailable; retry shortly"
+        ) from exc
+    _ensure_payment_fresh(verified)
+
+    row = await locked_round()
+    dispute_id = uuid4()
+    try:
+        dispute = file_dispute(
+            row,
+            row.dataset_bytes or b"",
+            dispute_id=dispute_id,
+            hotkey=payload.hotkey,
+            case_id=payload.case_id,
+            evidence_pair_ids=payload.evidence_pair_ids,
+            reasoning=reasoning,
+            amount_rao=verified.amount_rao,
+            signature=payload.signature,
+            now=datetime.now(UTC),
+        )
+        await insert_dispute_payment(
+            session,
+            verified=verified,
+            dispute_id=dispute_id,
+            round_index=round_index,
+            case_id=payload.case_id,
+            block_number=payload.payment_block_number,
+        )
+    except FrontierDisputeRefused as exc:
+        await session.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except PaymentReplayedError:
+        await session.rollback()
+        raise
+    await session.commit()
+    logger.info(
+        "frontier dispute filed round=%s case=%s hotkey=%s deposit_rao=%d",
+        round_index,
+        dispute["case_id"],
+        payload.hotkey,
+        verified.amount_rao,
+    )
+    return next(
+        view for view in dispute_views(row) if view.case_id == dispute["case_id"]
     )

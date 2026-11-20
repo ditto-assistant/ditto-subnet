@@ -44,6 +44,16 @@ export function frontierAuditConfirmation(roundIndex: number, columnId: string, 
   return `RULE FRONTIER AUDIT ${roundIndex} ${columnId} ${valid ? 'VALID' : 'INVALID'}`
 }
 
+// Platform frontier_refund_paid_confirmation.
+export function frontierRefundPaidConfirmation(disputeId: string) {
+  return `RECORD FRONTIER DISPUTE REFUND ${disputeId}`
+}
+
+// Platform frontier_dispute_confirmation.
+export function frontierDisputeConfirmation(roundIndex: number, caseId: string, upheld: boolean) {
+  return `RULE FRONTIER DISPUTE ${roundIndex} ${caseId} ${upheld ? 'UPHELD' : 'REJECTED'}`
+}
+
 export function frontierSettleConfirmation(roundIndex: number) {
   return `SETTLE GENERATOR FRONTIER ${roundIndex}`
 }
@@ -152,6 +162,24 @@ export const generatorCompetitionSettingsSchema = z.object({
   frontier_escalation_max_cases: z.number().int().min(1).max(64).default(8),
   frontier_escalation_max_cases_per_column: z.number().int().min(1).max(16).default(4),
   frontier_escalation_max_failed_fraction: z.number().gt(0).max(1).default(0.25),
+  // Frontier disputes (ships off): the column's owner may dispute an
+  // oracle-failed case as valid with its hop notes, a reasoning and a TAO
+  // deposit of at least frontier_dispute_min_tao, paid to the generator upload
+  // fee's address and verified like that fee. A larger deposit ranks higher in
+  // review. An operator rules it (rule_generator_frontier_dispute): upheld, the
+  // case is attested like an oracle pass and the whole deposit is owed back as
+  // an operator payout (list_generator_frontier_dispute_refunds); rejected,
+  // the deposit is kept. Disputes open from the later of the oracle report and
+  // the round's reveal for frontier_dispute_window_hours, at most
+  // frontier_dispute_max_per_column per column and
+  // frontier_dispute_max_per_round per round, and never from a column whose
+  // oracle failures exceed frontier_escalation_max_failed_fraction. A Platform
+  // or revision that predates disputes reads as off.
+  frontier_disputes_enabled: z.boolean().default(false),
+  frontier_dispute_window_hours: z.number().int().min(1).max(168).default(6),
+  frontier_dispute_max_per_column: z.number().int().min(1).max(16).default(4),
+  frontier_dispute_max_per_round: z.number().int().min(1).max(64).default(8),
+  frontier_dispute_min_tao: z.number().min(0.001).max(100).default(0.05),
   // Pre-screens (ships off: inference spend): batches of up to
   // prescreen_columns never-scored generators, prescreen_cases cases each, on
   // the top prescreen_panel_size runnable owners while no round needs the
@@ -248,6 +276,14 @@ export const setGeneratorSettingsInputSchema = z
         message: `a round holds at most ${MAX_ROUND_COLUMNS} columns: `
           + `counted_columns + challenger_columns = ${columns}`,
         path: ['settings', 'challenger_columns'],
+      })
+    }
+    // Platform refuses a per-column cap above the round-wide cap.
+    if (input.settings.frontier_dispute_max_per_column > input.settings.frontier_dispute_max_per_round) {
+      context.addIssue({
+        code: 'custom',
+        message: 'frontier_dispute_max_per_column must not exceed frontier_dispute_max_per_round',
+        path: ['settings', 'frontier_dispute_max_per_column'],
       })
     }
   })
@@ -929,6 +965,28 @@ export const generatorFrontierAuditSchema = z.object({
   audit_deadline: z.string().nullable().optional(),
 })
 
+const frontierDisputeStatus = z.enum(['pending', 'upheld', 'rejected', 'expired'])
+
+export const generatorFrontierDisputeSchema = z.object({
+  dispute_id: uuid.nullable().optional().default(null),
+  round_index: z.number().int(),
+  column_id: z.string(),
+  case_id: z.string(),
+  submission_id: uuid.nullable(),
+  miner_hotkey: z.string(),
+  status: frontierDisputeStatus,
+  evidence_pair_ids: z.array(z.string()),
+  reasoning: z.string(),
+  amount_rao: z.number().int().nonnegative().default(0),
+  filed_at: z.string(),
+  oracle_score: z.number().nullable().optional(),
+  reason: z.string().nullable().optional(),
+  actor: z.string().nullable().optional(),
+  ruled_at: z.string().nullable().optional(),
+  rule_deadline: z.string().nullable().optional(),
+  refund_rao: z.number().int().positive().nullable().optional().default(null),
+})
+
 export const generatorFrontierSchema = z.object({
   round_index: z.number().int(),
   state: frontierState,
@@ -982,6 +1040,22 @@ export const generatorFrontierSchema = z.object({
   created_at: z.string(),
   settled_at: z.string().nullable().optional(),
   settle_reason: z.string().nullable().optional(),
+  // The dispute policy frozen into the lane; null when the round took no
+  // disputes (and from a Platform that predates them).
+  dispute_policy: z
+    .object({
+      window_hours: z.number().int(),
+      max_per_column: z.number().int(),
+      max_per_round: z.number().int(),
+      max_failed_fraction: z.number(),
+      min_rao: z.number().int().nonnegative().default(0),
+      window_opens_at: z.string().nullable().optional().default(null),
+      window_closes_at: z.string().nullable().optional().default(null),
+    })
+    .nullable()
+    .optional()
+    .default(null),
+  disputes: z.array(generatorFrontierDisputeSchema).default([]),
 })
 
 // The MCP paging contract (docs/mcp.md, Paging): count is the queue total,
@@ -997,6 +1071,15 @@ export const generatorFrontierAuditListSchema = z.object({
   has_more: z.boolean().optional(),
 })
 
+export const generatorFrontierDisputeListSchema = z.object({
+  disputes: z.array(generatorFrontierDisputeSchema),
+  count: z.number().int().nonnegative(),
+  returned: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().optional(),
+  offset: z.number().int().nonnegative().optional(),
+  has_more: z.boolean().optional(),
+})
+
 const frontierMemoryPair = z.object({
   pair_id: z.string(),
   timestamp: z.string(),
@@ -1005,32 +1088,39 @@ const frontierMemoryPair = z.object({
   response: z.string(),
 })
 
+const frontierCaseSchema = z.object({
+  case_id: z.string(),
+  question: z.string(),
+  expected_answer: z.string(),
+  answer_kind: z.string().nullable().optional(),
+  answer_items: z.array(z.string()).default([]),
+  accept_any: z.array(z.string()).default([]),
+  distractor_answers: z.array(z.string()).default([]),
+  forbidden_answer: z.string().nullable().optional(),
+  dump_guard: z.array(z.string()).default([]),
+  user_id: z.string(),
+  run_after_wave: z.number().int(),
+  evidence: z.array(frontierMemoryPair),
+  visible_pairs: z.number().int(),
+  memory_matches: z.array(frontierMemoryPair),
+  memory_truncated: z.boolean(),
+  panel_mean_score: z.number().nullable().optional(),
+  panel_solvers: z.number().int().nullable().optional(),
+  panel_size: z.number().int().nullable().optional(),
+  oracle_score: z.number().nullable().optional(),
+  oracle_fault: z.boolean().nullable().optional(),
+})
+
 export const generatorFrontierAuditDetailSchema = z.object({
   audit: generatorFrontierAuditSchema,
-  cases: z.array(
-    z.object({
-      case_id: z.string(),
-      question: z.string(),
-      expected_answer: z.string(),
-      answer_kind: z.string().nullable().optional(),
-      answer_items: z.array(z.string()).default([]),
-      accept_any: z.array(z.string()).default([]),
-      distractor_answers: z.array(z.string()).default([]),
-      forbidden_answer: z.string().nullable().optional(),
-      dump_guard: z.array(z.string()).default([]),
-      user_id: z.string(),
-      run_after_wave: z.number().int(),
-      evidence: z.array(frontierMemoryPair),
-      visible_pairs: z.number().int(),
-      memory_matches: z.array(frontierMemoryPair),
-      memory_truncated: z.boolean(),
-      panel_mean_score: z.number().nullable().optional(),
-      panel_solvers: z.number().int().nullable().optional(),
-      panel_size: z.number().int().nullable().optional(),
-      oracle_score: z.number().nullable().optional(),
-      oracle_fault: z.boolean().nullable().optional(),
-    }),
-  ),
+  cases: z.array(frontierCaseSchema),
+})
+
+export const generatorFrontierDisputeDetailSchema = z.object({
+  dispute: generatorFrontierDisputeSchema,
+  case: frontierCaseSchema,
+  cited: z.array(frontierMemoryPair),
+  cited_declared: z.array(z.string()),
 })
 
 export const listGeneratorFrontierAuditsInputSchema = z.object({
@@ -1082,6 +1172,93 @@ export const settleGeneratorFrontierInputSchema = z
   })
   .superRefine((input, context) => {
     const expected = frontierSettleConfirmation(input.roundIndex)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
+        path: ['confirmation'],
+      })
+    }
+  })
+
+export const listGeneratorFrontierDisputesInputSchema = z.object({
+  includeRuled: z.boolean().default(false),
+  limit: z.number().int().min(1).max(200).default(50),
+  offset: z.number().int().min(0).default(0),
+})
+
+// A round case id is column/case.
+const roundCaseId = z.string().min(3).max(72).regex(/^\S+\/\S+$/)
+
+export const generatorFrontierDisputeInputSchema = z.object({
+  roundIndex: z.number().int().nonnegative(),
+  caseId: roundCaseId,
+})
+
+export const ruleGeneratorFrontierDisputeInputSchema = z
+  .object({
+    roundIndex: z.number().int().nonnegative(),
+    caseId: roundCaseId,
+    upheld: z.boolean(),
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = frontierDisputeConfirmation(input.roundIndex, input.caseId, input.upheld)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
+        path: ['confirmation'],
+      })
+    }
+  })
+
+// A dispute deposit and the refund it owes: an operator payout, since
+// Platform holds no key that can send TAO.
+export const generatorFrontierRefundSchema = z.object({
+  dispute_id: uuid,
+  round_index: z.number().int(),
+  case_id: z.string(),
+  miner_hotkey: z.string(),
+  miner_coldkey: z.string(),
+  amount_rao: z.number().int().positive(),
+  refund_rao: z.number().int().positive().nullable(),
+  refund_status: z.enum(['none', 'pending', 'paid']),
+  payment_block_hash: z.string(),
+  payment_extrinsic_index: z.number().int().nonnegative(),
+  refund_block_hash: z.string().nullable().optional(),
+  refund_extrinsic_index: z.number().int().nullable().optional(),
+  refund_paid_at: z.string().nullable().optional(),
+  refund_actor: z.string().nullable().optional(),
+  created_at: z.string(),
+})
+
+export const generatorFrontierRefundListSchema = z.object({
+  refunds: z.array(generatorFrontierRefundSchema),
+  count: z.number().int().nonnegative(),
+  returned: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().optional(),
+  offset: z.number().int().nonnegative().optional(),
+  has_more: z.boolean().optional(),
+})
+
+export const listGeneratorFrontierRefundsInputSchema = z.object({
+  status: z.enum(['pending', 'paid', 'none', 'all']).default('pending'),
+  limit: z.number().int().min(1).max(200).default(50),
+  offset: z.number().int().min(0).default(0),
+})
+
+export const recordGeneratorFrontierRefundInputSchema = z
+  .object({
+    disputeId: uuid,
+    refundBlockHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+    refundExtrinsicIndex: z.number().int().nonnegative(),
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = frontierRefundPaidConfirmation(input.disputeId)
     if (input.confirmation !== expected) {
       context.addIssue({
         code: 'custom',

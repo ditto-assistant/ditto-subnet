@@ -2189,6 +2189,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/frontier/dispute-refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Frontier Dispute Refunds
+         * @description Dispute deposits and the refunds they owe, oldest first. ``pending``
+         *     (the default) is the operator payout queue: send ``refund_rao`` to
+         *     ``miner_coldkey``, then record the transfer. ``none`` lists kept
+         *     deposits, ``all`` every deposit.
+         */
+        get: operations["admin_frontier_dispute_refunds_api_v1_admin_generator_competition_frontier_dispute_refunds_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/frontier/dispute-refunds/{dispute_id}/paid": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Record Dispute Refund Paid
+         * @description Record the on-chain transfer that paid a pending dispute refund.
+         */
+        post: operations["admin_record_dispute_refund_paid_api_v1_admin_generator_competition_frontier_dispute_refunds__dispute_id__paid_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/frontier/disputes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Frontier Disputes
+         * @description The frontier dispute queue: column owners' disputes that an oracle-failed
+         *     case is valid, awaiting a ruling, in review order: the largest deposit
+         *     first, then the earliest filed. ``include_ruled``
+         *     also lists ruled disputes of rounds that have not settled yet.
+         */
+        get: operations["admin_frontier_disputes_api_v1_admin_generator_competition_frontier_disputes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/prescreens": {
         parameters: {
             query?: never;
@@ -2464,6 +2530,38 @@ export interface paths {
          *     credit for the round. The round settles once every audit is ruled.
          */
         post: operations["admin_rule_frontier_audit_api_v1_admin_generator_competition_rounds__round_index__frontier_audits__column_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/frontier/disputes/{case_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Frontier Dispute Detail
+         * @description One dispute with its case as the generator wrote it: question, gold and
+         *     declared competitors, the pairs the dispute cites (and which of them the
+         *     case declares as evidence), the reasoning, and the panel's and oracle's
+         *     scores.
+         */
+        get: operations["admin_frontier_dispute_detail_api_v1_admin_generator_competition_rounds__round_index__frontier_disputes__case_id__get"];
+        put?: never;
+        /**
+         * Admin Rule Frontier Dispute
+         * @description Rule one frontier dispute. Upheld attests the case like an oracle pass
+         *     (it scores frontier when the round settles, unless the column's audit
+         *     fails) and records a pending refund of the whole deposit to the paying
+         *     coldkey; rejected leaves it unsolved, keeps the deposit and spends the
+         *     dispute's slot, and its reason is shown to the miner. A ruled dispute is
+         *     final.
+         */
+        post: operations["admin_rule_frontier_dispute_api_v1_admin_generator_competition_rounds__round_index__frontier_disputes__case_id__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7105,6 +7203,56 @@ export interface paths {
         get: operations["public_round_api_v1_generator_rounds__round_index__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator/rounds/{round_index}/frontier/disputes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispute Frontier Case
+         * @description Dispute that a case the panel and the frontier oracle both failed is
+         *     valid, with a TAO deposit. Only the column's own hotkey may dispute,
+         *     once the round is revealed and its oracle has reported, inside the
+         *     round's dispute window and caps. The deposit is a finalized transfer from
+         *     the hotkey's coldkey to the generator upload fee's address, verified on
+         *     chain like that fee. An operator rules the dispute: upheld scores the
+         *     case as frontier when the round settles and owes the whole deposit back;
+         *     rejected keeps the deposit.
+         */
+        post: operations["dispute_frontier_case_api_v1_generator_rounds__round_index__frontier_disputes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator/rounds/{round_index}/frontier/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Frontier Report For Hotkey
+         * @description The frontier oracle's outcome on the signing hotkey's columns: once
+         *     the round is revealed, the case ids it answered and failed with their
+         *     scores (never case content, and nothing before the reveal), what the
+         *     hotkey may dispute now, and its disputes with each ruling's reason.
+         */
+        post: operations["frontier_report_for_hotkey_api_v1_generator_rounds__round_index__frontier_report_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -27583,6 +27731,31 @@ export interface components {
              * @default 24
              */
             frontier_audit_grace_hours: number;
+            /**
+             * Frontier Dispute Max Per Column
+             * @default 4
+             */
+            frontier_dispute_max_per_column: number;
+            /**
+             * Frontier Dispute Max Per Round
+             * @default 8
+             */
+            frontier_dispute_max_per_round: number;
+            /**
+             * Frontier Dispute Min Tao
+             * @default 0.05
+             */
+            frontier_dispute_min_tao: number;
+            /**
+             * Frontier Dispute Window Hours
+             * @default 6
+             */
+            frontier_dispute_window_hours: number;
+            /**
+             * Frontier Disputes Enabled
+             * @default false
+             */
+            frontier_disputes_enabled: boolean;
             /** Frontier Escalation Agent Id */
             frontier_escalation_agent_id?: string | null;
             /**
@@ -27881,6 +28054,154 @@ export interface components {
             visible_pairs: number;
         };
         /**
+         * GeneratorFrontierDisputeDetail
+         * @description One dispute with its case as the generator wrote it and the cited
+         *     pairs, so a reviewer can rule it without another read.
+         */
+        GeneratorFrontierDisputeDetail: {
+            case: components["schemas"]["GeneratorFrontierCaseView"];
+            /** Cited */
+            cited: components["schemas"]["GeneratorFrontierMemoryPair"][];
+            /** Cited Declared */
+            cited_declared: string[];
+            dispute: components["schemas"]["GeneratorFrontierDisputeView"];
+        };
+        /** GeneratorFrontierDisputeListResponse */
+        GeneratorFrontierDisputeListResponse: {
+            /** Count */
+            count: number;
+            /** Disputes */
+            disputes: components["schemas"]["GeneratorFrontierDisputeView"][];
+            /** Has More */
+            has_more: boolean;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Returned */
+            returned: number;
+        };
+        /**
+         * GeneratorFrontierDisputePolicyView
+         * @description The dispute policy frozen into a round's frontier lane.
+         */
+        GeneratorFrontierDisputePolicyView: {
+            /** Max Failed Fraction */
+            max_failed_fraction: number;
+            /** Max Per Column */
+            max_per_column: number;
+            /** Max Per Round */
+            max_per_round: number;
+            /**
+             * Min Rao
+             * @default 0
+             */
+            min_rao: number;
+            /** Window Closes At */
+            window_closes_at?: string | null;
+            /** Window Hours */
+            window_hours: number;
+            /** Window Opens At */
+            window_opens_at?: string | null;
+        };
+        /**
+         * GeneratorFrontierDisputeRequest
+         * @description A column owner's signed dispute that an oracle-failed case is valid.
+         */
+        GeneratorFrontierDisputeRequest: {
+            /** Case Id */
+            case_id: string;
+            /** Evidence Pair Ids */
+            evidence_pair_ids: string[];
+            /** Hotkey */
+            hotkey: string;
+            /** Payment Amount Rao */
+            payment_amount_rao: number;
+            /** Payment Block Hash */
+            payment_block_hash: string;
+            /** Payment Block Number */
+            payment_block_number: number;
+            /** Payment Extrinsic Index */
+            payment_extrinsic_index: number;
+            /** Reasoning */
+            reasoning: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Signature Nonce
+             * Format: uuid
+             */
+            signature_nonce: string;
+            /** Signature Timestamp */
+            signature_timestamp: number;
+        };
+        /**
+         * GeneratorFrontierDisputeRuling
+         * @description An operator's ruling on one frontier dispute.
+         */
+        GeneratorFrontierDisputeRuling: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+            /** Upheld */
+            upheld: boolean;
+        };
+        /**
+         * GeneratorFrontierDisputeView
+         * @description One frontier dispute and its ruling.
+         */
+        GeneratorFrontierDisputeView: {
+            /** Actor */
+            actor?: string | null;
+            /**
+             * Amount Rao
+             * @default 0
+             */
+            amount_rao: number;
+            /** Case Id */
+            case_id: string;
+            /** Column Id */
+            column_id: string;
+            /** Dispute Id */
+            dispute_id?: string | null;
+            /** Evidence Pair Ids */
+            evidence_pair_ids: string[];
+            /**
+             * Filed At
+             * Format: date-time
+             */
+            filed_at: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Oracle Score */
+            oracle_score?: number | null;
+            /** Reason */
+            reason?: string | null;
+            /** Reasoning */
+            reasoning: string;
+            /** Refund Rao */
+            refund_rao?: number | null;
+            /** Round Index */
+            round_index: number;
+            /** Rule Deadline */
+            rule_deadline?: string | null;
+            /** Ruled At */
+            ruled_at?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "upheld" | "rejected" | "expired";
+            /** Submission Id */
+            submission_id: string | null;
+        };
+        /**
          * GeneratorFrontierEscalationView
          * @description The escalation tier's re-check of the cases the oracle failed
          *     (``frontier_escalation_agent_id``).
@@ -27933,6 +28254,13 @@ export interface components {
             /** Wave */
             wave: number;
         };
+        /** GeneratorFrontierOracleCaseResult */
+        GeneratorFrontierOracleCaseResult: {
+            /** Case Id */
+            case_id: string;
+            /** Score */
+            score: number;
+        };
         /**
          * GeneratorFrontierOracleView
          * @description The oracle run's outcome on a round's frontier candidates.
@@ -27957,6 +28285,135 @@ export interface components {
             run_id: string;
             /** Validator Hotkey */
             validator_hotkey: string;
+        };
+        /** GeneratorFrontierRefundListResponse */
+        GeneratorFrontierRefundListResponse: {
+            /** Count */
+            count: number;
+            /** Has More */
+            has_more: boolean;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Refunds */
+            refunds: components["schemas"]["GeneratorFrontierRefundView"][];
+            /** Returned */
+            returned: number;
+        };
+        /**
+         * GeneratorFrontierRefundPaid
+         * @description An operator's record of the transfer that paid a dispute refund.
+         */
+        GeneratorFrontierRefundPaid: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+            /** Refund Block Hash */
+            refund_block_hash: string;
+            /** Refund Extrinsic Index */
+            refund_extrinsic_index: number;
+        };
+        /**
+         * GeneratorFrontierRefundView
+         * @description One dispute deposit and the refund it owes, an operator payout.
+         */
+        GeneratorFrontierRefundView: {
+            /** Amount Rao */
+            amount_rao: number;
+            /** Case Id */
+            case_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Dispute Id
+             * Format: uuid
+             */
+            dispute_id: string;
+            /** Miner Coldkey */
+            miner_coldkey: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Payment Block Hash */
+            payment_block_hash: string;
+            /** Payment Extrinsic Index */
+            payment_extrinsic_index: number;
+            /** Refund Actor */
+            refund_actor?: string | null;
+            /** Refund Block Hash */
+            refund_block_hash?: string | null;
+            /** Refund Extrinsic Index */
+            refund_extrinsic_index?: number | null;
+            /** Refund Paid At */
+            refund_paid_at?: string | null;
+            /** Refund Rao */
+            refund_rao: number | null;
+            /**
+             * Refund Status
+             * @enum {string}
+             */
+            refund_status: "none" | "pending" | "paid";
+            /** Round Index */
+            round_index: number;
+        };
+        /**
+         * GeneratorFrontierReport
+         * @description What the frontier oracle did on a hotkey's columns, and what it may
+         *     dispute now. Case ids and scores only: case content stays private until
+         *     the round is revealed, and the miner reads it from its own generator.
+         */
+        GeneratorFrontierReport: {
+            /** Blocker */
+            blocker?: string | null;
+            /** Disputable */
+            disputable?: string[];
+            /** Disputes */
+            disputes?: components["schemas"]["GeneratorFrontierDisputeView"][];
+            /** Disputes Enabled */
+            disputes_enabled: boolean;
+            /** Hotkey */
+            hotkey: string;
+            /** Min Deposit Rao */
+            min_deposit_rao?: number | null;
+            /** Oracle Failed */
+            oracle_failed?: components["schemas"]["GeneratorFrontierOracleCaseResult"][];
+            /** Round Index */
+            round_index: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "oracle_pending" | "audit_pending" | "settled";
+            /** Window Closes At */
+            window_closes_at?: string | null;
+            /** Window Opens At */
+            window_opens_at?: string | null;
+        };
+        /**
+         * GeneratorFrontierReportRequest
+         * @description A column owner's signed read of its round's frontier report.
+         */
+        GeneratorFrontierReportRequest: {
+            /** Hotkey */
+            hotkey: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Signature Nonce
+             * Format: uuid
+             */
+            signature_nonce: string;
+            /** Signature Timestamp */
+            signature_timestamp: number;
         };
         /**
          * GeneratorFrontierSettleRequest
@@ -28005,6 +28462,9 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            dispute_policy?: components["schemas"]["GeneratorFrontierDisputePolicyView"] | null;
+            /** Disputes */
+            disputes?: components["schemas"]["GeneratorFrontierDisputeView"][];
             escalation?: components["schemas"]["GeneratorFrontierEscalationView"] | null;
             /** Frontier Weight */
             frontier_weight: number;
@@ -56369,6 +56829,113 @@ export interface operations {
             };
         };
     };
+    admin_frontier_dispute_refunds_api_v1_admin_generator_competition_frontier_dispute_refunds_get: {
+        parameters: {
+            query?: {
+                status?: "none" | "pending" | "paid" | "all";
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierRefundListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_record_dispute_refund_paid_api_v1_admin_generator_competition_frontier_dispute_refunds__dispute_id__paid_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                dispute_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorFrontierRefundPaid"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierRefundView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_frontier_disputes_api_v1_admin_generator_competition_frontier_disputes_get: {
+        parameters: {
+            query?: {
+                include_ruled?: boolean;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierDisputeListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     admin_list_prescreens_api_v1_admin_generator_competition_prescreens_get: {
         parameters: {
             query?: {
@@ -56817,6 +57384,78 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["GeneratorFrontierAuditRuling"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_frontier_dispute_detail_api_v1_admin_generator_competition_rounds__round_index__frontier_disputes__case_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierDisputeDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_rule_frontier_dispute_api_v1_admin_generator_competition_rounds__round_index__frontier_disputes__case_id__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorFrontierDisputeRuling"];
             };
         };
         responses: {
@@ -65732,6 +66371,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GeneratorRoundDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dispute_frontier_case_api_v1_generator_rounds__round_index__frontier_disputes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorFrontierDisputeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierDisputeView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    frontier_report_for_hotkey_api_v1_generator_rounds__round_index__frontier_report_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorFrontierReportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierReport"];
                 };
             };
             /** @description Validation Error */

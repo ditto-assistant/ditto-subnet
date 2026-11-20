@@ -748,6 +748,11 @@ describe('Backroom MCP tools', () => {
         'get_generator_frontier_audit',
         'rule_generator_frontier_audit',
         'settle_generator_round_frontier',
+        'list_generator_frontier_disputes',
+        'get_generator_frontier_dispute',
+        'rule_generator_frontier_dispute',
+        'list_generator_frontier_dispute_refunds',
+        'record_generator_frontier_dispute_refund',
         'register_default_generator',
         'create_default_generator_upload',
         'get_model_context_settings',
@@ -1219,7 +1224,11 @@ describe('Backroom MCP tools', () => {
     // summaries, detail in tool help) add 7,405 bytes, 2,432 of them the
     // whole-policy settings write with its base allowlist: measured 254,268
     // bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(254_800)
+    // The five frontier dispute tools (queue, case read, ruling, refund
+    // payout list, refund record; one-line summaries, detail in tool help)
+    // and the five dispute settings on the settings write measure 258,292
+    // bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(258_800)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1289,7 +1298,9 @@ describe('Backroom MCP tools', () => {
       // keep about 200 chars.
       // The ten one-line model_context (CPM) summaries add 665 chars:
       // measured 31,153; keep about 200 chars.
-      31_350,
+      // The five one-line frontier dispute summaries add 372 chars: measured
+      // 31,525; keep about 200 chars.
+      31_725,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

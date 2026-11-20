@@ -322,7 +322,12 @@ class _Lane:
         self.candidates: list[str]
 
     async def setup(
-        self, app: FastAPI, monkeypatch: pytest.MonkeyPatch, **settings: Any
+        self,
+        app: FastAPI,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        miner_hotkey: str = "5GenMinerA",
+        **settings: Any,
     ) -> None:
         self.chain = _install(app, self.maker)
         app.state.generator_round_loop = None
@@ -344,7 +349,7 @@ class _Lane:
         monkeypatch.setattr(lane_mod, "oracle_capable", lambda _heartbeat: True)
         await _register_default(self.client)
         self.submission = await _seed_generator(
-            self.maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a"
+            self.maker, hotkey=miner_hotkey, owner="coldkey:ga", salt="a"
         )
         await _qualify_all(self.maker)
 
