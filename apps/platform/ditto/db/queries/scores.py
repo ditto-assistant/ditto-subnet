@@ -3383,6 +3383,7 @@ async def list_provisional_ledger(
     session: AsyncSession,
     *,
     bench_version: int | None = None,
+    active_version: int | None = None,
 ) -> list[tuple[LedgerRow, int]]:
     """Return each unfinalized owner's best partially scored submission.
 
@@ -3396,6 +3397,10 @@ async def list_provisional_ledger(
     One row per *owner*, matching how :func:`list_eligible_ledger` partitions
     the finalized board: a coldkey funding several hotkeys holds one emission
     position, so its provisional overlay must not preview several either.
+
+    ``active_version`` is the caller's already-resolved live era, so one
+    response judges close-out against the same era it reports; when omitted
+    it is read here.
 
     A row the miner projection has closed is not provisional: it will never
     reach quorum. Retired, terminal-failure (``scoring_failed``), withdrawn
@@ -3462,7 +3467,9 @@ async def list_provisional_ledger(
             session,
             agents=[agent for agent, _coldkey, _scores in by_agent.values()],
             active_version=(
-                canonical_version
+                active_version
+                if active_version is not None
+                else canonical_version
                 if bench_version is None
                 else await active_bench_version(session)
             ),

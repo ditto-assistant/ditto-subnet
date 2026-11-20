@@ -4354,7 +4354,11 @@ async def build_public_leaderboard(
             if score_counts.get(row.agent_id, 0) < SCORING_QUORUM
         ]
         + [(row, score_counts.get(row.agent_id, 0)) for row in v9_display_rows]
-        + list(await list_provisional_ledger(session, bench_version=bench_version))
+        + list(
+            await list_provisional_ledger(
+                session, bench_version=bench_version, active_version=active_version
+            )
+        )
     )
     # Pre-quorum rows have no continual mean, so the canonical comparator reads
     # their raw composite -- the same call ``list_provisional_ledger`` makes.
