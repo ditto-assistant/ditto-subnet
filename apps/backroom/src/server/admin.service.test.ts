@@ -1079,6 +1079,7 @@ describe('screening submission admin service', () => {
     await expect(fetchScreeningSubmission({ agentId })).resolves.toEqual({
       ...submission,
       miner_coldkey: null,
+      public_status: null,
       image_builds: [],
     })
     expect(fetchMock).toHaveBeenCalledWith(

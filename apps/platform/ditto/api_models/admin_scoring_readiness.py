@@ -34,6 +34,13 @@ class AgentScoringReadiness(BaseModel):
     agent_name: str
     miner_hotkey: str
     status: str
+    """The stored lifecycle status. A row the queue will never finish can still
+    store ``evaluating``; read ``public_status`` for what the miner sees."""
+    public_status: str | None = None
+    """What the miner sees for this row (SN-483): the miner projection's
+    close-out (``retired``, ``scoring_failed``, ``not_queued``,
+    ``era_changed``) when it closes the row, else the stored status in the
+    public vocabulary."""
     active_bench_version: int
     scoring_bench_version: int
     """Benchmark era this submission is actually queued in — every check below

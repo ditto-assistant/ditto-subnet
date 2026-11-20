@@ -273,6 +273,34 @@ async def closed_submission_statuses(
     return result
 
 
+async def public_statuses(
+    session: AsyncSession,
+    *,
+    agents: Sequence[Agent],
+    active_version: int,
+    now: datetime | None = None,
+) -> dict[UUID, str]:
+    """The status each agent's miner sees, for operator reads (SN-483).
+
+    The miner projection's close-out (``retired``, ``scoring_failed``,
+    ``not_queued``, ``era_changed``) when :func:`closed_submission_statuses`
+    names the row, otherwise the stored status in the public vocabulary.
+    Backroom shows this beside the stored ``agent_status`` so an operator
+    never reads a closed row as live work. Bounded by the given agents.
+    """
+    closed = await closed_submission_statuses(
+        session, agents=agents, active_version=active_version, now=now
+    )
+    return {
+        agent.agent_id: (
+            closed[agent.agent_id].status
+            if agent.agent_id in closed
+            else public_agent_status(agent.status.value)
+        )
+        for agent in agents
+    }
+
+
 __all__ = [
     "PUBLIC_ACTIVITY_STATUSES",
     "ClosedSubmissionStatus",
@@ -284,4 +312,5 @@ __all__ = [
     "holds_live_lease",
     "live_lease_predicate",
     "public_agent_status",
+    "public_statuses",
 ]

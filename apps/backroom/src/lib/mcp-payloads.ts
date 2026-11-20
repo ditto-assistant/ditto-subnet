@@ -57,6 +57,9 @@ export function compactScreeningSubmissions(
         agent_name: submission.agent_name,
         agent_version: submission.agent_version,
         agent_status: submission.agent_status,
+        // SN-483: the status the miner sees; a closed row can still store
+        // `evaluating`.
+        public_status: submission.public_status,
         submitted_at: submission.submitted_at,
         artifact_sha256: submission.artifact_sha256,
       } as ResponseRow

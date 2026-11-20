@@ -8910,6 +8910,7 @@ describe('Backroom MCP tools', () => {
       agent_version: 2,
       artifact_sha256: 'ab'.repeat(32),
       agent_status: 'scored',
+      public_status: 'scored',
       screening_policy_version: 9,
       screening_reason: null,
       screening_reason_code: null,
@@ -8952,6 +8953,7 @@ describe('Backroom MCP tools', () => {
           agent_name: 'moonlight_v1',
           agent_version: 2,
           agent_status: 'scored',
+          public_status: 'scored',
           submitted_at: '2026-07-19T12:00:00Z',
           artifact_sha256: 'ab'.repeat(32),
         },
@@ -9054,6 +9056,7 @@ describe('Backroom MCP tools', () => {
     expect(readJsonResult(response)).toEqual({
       ...submission,
       miner_coldkey: null,
+      public_status: null,
       image_builds: [],
     })
     expect(fetchMock).toHaveBeenCalledWith(

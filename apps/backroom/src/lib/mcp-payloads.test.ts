@@ -108,6 +108,7 @@ describe('screening list summaries', () => {
           agent_version: 2,
           artifact_sha256: 'ab'.repeat(32),
           agent_status: 'screening_failed',
+          public_status: 'screening_failed',
           screening_policy_version: 9,
           screening_reason: 'latest infrastructure failure',
           screening_reason_code: 'infra',
@@ -165,6 +166,7 @@ describe('screening list summaries', () => {
       agent_name: 'screened-agent',
       agent_version: 2,
       agent_status: 'screening_failed',
+      public_status: 'screening_failed',
       submitted_at: '2026-07-25T12:00:00Z',
       artifact_sha256: 'ab'.repeat(32),
     })

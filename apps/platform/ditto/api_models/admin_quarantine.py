@@ -624,6 +624,13 @@ class AdminScreeningSubmission(BaseModel):
     agent_version: int | None = None
     artifact_sha256: str
     agent_status: str
+    """The stored lifecycle status. A row the queue will never finish can still
+    store ``evaluating``; ``public_status`` is what its miner sees."""
+    public_status: str | None = None
+    """What the miner sees for this row (SN-483): the miner projection's
+    close-out (``retired``, ``scoring_failed``, ``not_queued``,
+    ``era_changed``) when it closes the row, else the stored status in the
+    public vocabulary."""
     screening_policy_version: int
     screening_reason: str | None
     screening_reason_code: str | None
