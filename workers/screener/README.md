@@ -303,6 +303,34 @@ Required values are supplied through the production host's protected
 - `SCREENER_SIGNED_RUNTIME_LEASE_MAX_AGE_SECONDS` (default `300`, 1-3600):
   oldest signed cohort observation accepted at claim receipt. The report-only
   L2 canary uses the same receipt-anchored rule.
+- `SCREENER_BUILD_BACKEND`: `local` (default) or `cathedral`; anything else
+  refuses to start. `cathedral` builds the miner tarball in a Cathedral sealed
+  AMD SEV-SNP room instead of the local `docker buildx build`, then runs every
+  existing check (load, smoke, export, upload) unchanged and saves a build
+  receipt per build as `<source sha256>-<sandbox id>.json`. Off by default; with
+  `local` nothing about builds changes. Cathedral-side failures (API, transport,
+  hash mismatch, a time-out Cathedral imposes) are retryable infrastructure
+  with code `cathedral-build-infrastructure`, never a miner reject. A failed
+  Dockerfile build, Ditto's own build time limit (when the room can honour it
+  in full, up to 1700 s) and a declared `VOLUME` are the same miner rejects as
+  a local build. With `SCREENER_BUILD_TIMEOUT_SECONDS` above 1700 (the default
+  is 2700), a Cathedral in-room time-out is infrastructure (Cathedral's cap,
+  not Ditto's); nodes that want time-out rejects set it to 1700 or less. Only
+  public sources are safe to build there (an operator can still read a box).
+  Settings, used only when the backend is `cathedral`:
+  - `SCREENER_CATHEDRAL_API_KEY_FILE`: required path to the API key; read at use,
+    never logged.
+  - `SCREENER_CATHEDRAL_API_URL` (default `https://api.polaris.computer`).
+  - `SCREENER_CATHEDRAL_TEMPLATE` (default `sealed-4x8`).
+  - `SCREENER_CATHEDRAL_BUILDER_IMAGE` (default `docker:27-dind`; must be a
+    `docker:*-dind` image).
+  - `SCREENER_CATHEDRAL_BUILDER_DIGEST` (default the digest of `docker:27-dind`
+    on 18 Nov 2026, `sha256:d2dc198f...b165f8`); a room reporting another
+    builder digest is refused as infrastructure.
+  - `SCREENER_CATHEDRAL_BUILD_MEMORY` (default `7g`, part of the signed recipe).
+  - `SCREENER_CATHEDRAL_MAX_SPEND_USD` (default `0.5`).
+  - `SCREENER_CATHEDRAL_RECEIPT_DIR` (default
+    `/opt/ditto/screener/state/build-receipts`).
 - `SCREENER_STATIC_PREFLIGHT_V2_MODE`: `off` (default), `shadow`, or `enforce`.
   `off` and `shadow` preserve the v1 decisive result; `shadow` additionally
   computes the reachability-and-causality v2 candidate for comparison.

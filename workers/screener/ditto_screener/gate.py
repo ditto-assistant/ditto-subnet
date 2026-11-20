@@ -78,6 +78,18 @@ import httpx
 
 from ditto_screener import tool_catalog_probe
 from ditto_screener.adjudicator import build_adjudicator
+from ditto_screener.cathedral_build import (
+    INFRASTRUCTURE_DETAIL_PREFIX as CATHEDRAL_INFRA_PREFIX,
+)
+from ditto_screener.cathedral_build import (
+    CathedralBuilder,
+    CathedralBuildRejected,
+    CathedralBuildSettings,
+    CathedralBuildTimedOut,
+    CathedralImageTooLarge,
+    CathedralInfrastructureError,
+    CathedralLeaseExpired,
+)
 from ditto_screener.errors import ScreenedImageUploadUnavailable
 from ditto_screener.fake_gateway import LOCKED_HARNESS_MODEL, tool_capability
 from ditto_screener.heartbeat import (
@@ -132,6 +144,7 @@ from ditto_screening_protocol import (
     ScoredRuntimeEvidenceLease,
 )
 from ditto_screening_protocol.reason_codes import (
+    CATHEDRAL_BUILD_INFRASTRUCTURE,
     DOCKER_BUILD_INFRASTRUCTURE,
     IMAGE_UPLOAD_PLATFORM_UNAVAILABLE,
 )
@@ -496,6 +509,10 @@ class _ScreenedImageTooLargeError(ValueError):
 
 class _ScreenedImageExportError(RuntimeError):
     """The host could not export an otherwise passing screened image."""
+
+
+_VOLUMES_DETAIL_PREFIX = "image declares writable volumes"
+_IMAGE_TOO_LARGE_PREFIX = "[image too large] "
 
 
 class _LeaseDeadlineError(TimeoutError):
@@ -1228,6 +1245,12 @@ class BuildGate:
     ) -> None:
         self._config = config
         self._client = client
+        # Optional client for the Cathedral API (tests inject a mock transport);
+        # None makes each sealed build open its own.
+        self._cathedral_client: httpx.AsyncClient | None = None
+        # Idempotency key -> room id, so one attempt never starts two paid rooms
+        # in this process.
+        self._cathedral_rooms: dict[str, str] = {}
         self._policy = policy
         self._journal = journal
         self._static_preflight_audit = StaticPreflightAuditJournal(
@@ -1864,6 +1887,8 @@ class BuildGate:
             remaining = self._lease_remaining(deadline)
             if remaining is not None:
                 build_timeout = min(build_timeout, remaining)
+            # The Cathedral build is bounded by its own limit and the live
+            # lease (polled each round), never by the lease left right now.
             started = asyncio.get_running_loop().time()
             built = False
             build_detail = ""
@@ -1907,12 +1932,22 @@ class BuildGate:
                         detail=f"screener error: {executor_error}",
                     )
                 used_local_docker = True
-                built, build_detail, built_image_id = await self._build(
-                    tmp_path,
-                    build_tag,
-                    timeout=self._config.build_timeout_seconds,
-                    deadline=deadline,
-                )
+                if self._config.build_backend == "cathedral":
+                    built, build_detail, built_image_id = await self._build_cathedral(
+                        tmp_path,
+                        agent_id=agent_id,
+                        attempt_id=attempt_id,
+                        build_tag=build_tag,
+                        timeout=self._config.build_timeout_seconds,
+                        deadline=deadline,
+                    )
+                else:
+                    built, build_detail, built_image_id = await self._build(
+                        tmp_path,
+                        build_tag,
+                        timeout=self._config.build_timeout_seconds,
+                        deadline=deadline,
+                    )
             build_elapsed_ms = round(
                 (asyncio.get_running_loop().time() - started) * 1000
             )
@@ -1923,6 +1958,24 @@ class BuildGate:
                         code="replay-image-load-failed",
                         summary="verified replay image could not be loaded",
                         detail=f"screener error: {build_detail}",
+                    )
+                if self._config.build_backend == "cathedral" and (
+                    build_detail.startswith(CATHEDRAL_INFRA_PREFIX)
+                ):
+                    # Cathedral's failures, including its time-outs, are never
+                    # the miner's: not docker-build and not docker-build-timeout.
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code=CATHEDRAL_BUILD_INFRASTRUCTURE,
+                        summary="Cathedral sealed build infrastructure failed",
+                        detail=f"screener error: {build_detail}",
+                    )
+                if build_detail.startswith(_IMAGE_TOO_LARGE_PREFIX):
+                    return core_decision(
+                        ScreeningOutcome.DETERMINISTIC_REJECT,
+                        code="screened-image-too-large",
+                        summary="screened Docker image exceeded the archive size limit",
+                        detail=build_detail.removeprefix(_IMAGE_TOO_LARGE_PREFIX),
                     )
                 if build_detail.startswith("[timeout after"):
                     return core_decision(
@@ -3411,14 +3464,134 @@ class BuildGate:
             )
         return False, f"Docker build failed: {_log_tail(out)}", None
 
+    async def _build_cathedral(
+        self,
+        tar_path: str,
+        *,
+        agent_id: object,
+        attempt_id: object,
+        build_tag: str,
+        timeout: float,
+        deadline: Deadline,
+    ) -> tuple[bool, str, str | None]:
+        """Build in a Cathedral sealed room; same triple as :meth:`_build`.
+
+        ``timeout`` is Ditto's own build limit. Failures map like a local
+        build's: a Dockerfile failure, Ditto's time limit (when the room could
+        honour it in full) and declared volumes are the miner's; every
+        Cathedral-side failure is infrastructure.
+        """
+        config = self._config
+        assert config.cathedral_api_key_file is not None
+        builder = CathedralBuilder(
+            CathedralBuildSettings(
+                api_url=config.cathedral_api_url,
+                api_key_file=config.cathedral_api_key_file,
+                template=config.cathedral_template,
+                builder_image=config.cathedral_builder_image,
+                builder_digest=config.cathedral_builder_digest,
+                memory=config.cathedral_build_memory,
+                max_spend_usd=config.cathedral_max_spend_usd,
+                receipt_dir=config.cathedral_receipt_dir,
+            ),
+            client=self._cathedral_client,
+            rooms=self._cathedral_rooms,
+        )
+
+        def infra(detail: str) -> tuple[bool, str, str | None]:
+            return False, CATHEDRAL_INFRA_PREFIX + detail, None
+
+        archive_path: str | None = None
+        portable_path: str | None = None
+        try:
+            built = await builder.build(
+                tar_path,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                timeout=timeout,
+                max_archive_bytes=_MAX_SCREENED_IMAGE_BYTES,
+                disk_reserve_bytes=_IMAGE_EXPORT_DISK_RESERVE_BYTES,
+                lease_remaining=lambda: self._lease_remaining(deadline),
+            )
+            archive_path = built.archive_path
+            # Docker 25+ saves an OCI layout; normalize to the portable
+            # contract the config check and the loader expect.
+            fd, portable_path = tempfile.mkstemp(
+                prefix="ditto-portable-image-", suffix=".tar"
+            )
+            os.close(fd)
+            try:
+                portable = await asyncio.to_thread(
+                    self._portable_image_archive,
+                    archive_path,
+                    portable_path,
+                    deadline=deadline,
+                )
+            except _LeaseDeadlineError as error:
+                return False, f"[lease expired after build: {error}]", None
+            except _ScreenedImageTooLargeError as error:
+                return False, _IMAGE_TOO_LARGE_PREFIX + str(error), None
+            except _ScreenedImageExportError as error:
+                return infra(f"image archive is not usable: {error}")
+            if portable.image_id != built.image_id or not await asyncio.to_thread(
+                self._replay_image_config_matches, portable.path, built.image_id
+            ):
+                return infra("image archive config differs from the reported image ID")
+            loaded, detail, image_id = await self._load_remote_image(
+                portable.path,
+                built.image_id,
+                timeout=min(timeout, 120.0),
+                tag_as=build_tag,
+            )
+            if not loaded:
+                if detail.startswith(_VOLUMES_DETAIL_PREFIX):
+                    # The miner's image, same reject as a local build.
+                    return False, detail, None
+                return infra(detail)
+            if image_id != built.image_id:
+                return infra("loaded image ID differs from the reported image ID")
+            return True, "", image_id
+        except CathedralBuildRejected as rejected:
+            return False, f"Docker build failed: {_log_tail(rejected.stdout)}", None
+        except CathedralImageTooLarge as too_large:
+            return False, _IMAGE_TOO_LARGE_PREFIX + str(too_large), None
+        except CathedralBuildTimedOut as timed_out:
+            return (
+                False,
+                f"[timeout after {timed_out.limit}s] sealed build exceeded the "
+                "build time limit",
+                None,
+            )
+        except CathedralLeaseExpired as lapsed:
+            return (
+                False,
+                f"[lease expired after {lapsed.elapsed:g}s] sealed build did not "
+                "finish before the lease ended",
+                None,
+            )
+        except CathedralInfrastructureError as error:
+            return infra(str(error))
+        except OSError as error:
+            return infra(f"local filesystem error ({type(error).__name__})")
+        finally:
+            for leftover in (archive_path, portable_path):
+                if leftover is not None:
+                    with contextlib.suppress(OSError):
+                        os.unlink(leftover)
+
     async def _load_remote_image(
         self,
         path: str,
         tag: str,
         *,
         timeout: float,
+        tag_as: str | None = None,
     ) -> tuple[bool, str, str | None]:
-        """Import a Platform-verified Kaniko archive into the local daemon."""
+        """Import a Platform-verified Kaniko archive into the local daemon.
+
+        ``tag_as`` tags the loaded image right away, so teardown's ``rmi`` of
+        that tag removes it on every later path (including the VOLUME reject).
+        """
         code, output = await self._run(
             ["image", "load", "--input", path], timeout=timeout
         )
@@ -3431,6 +3604,12 @@ class BuildGate:
         image_id = image_id.strip()
         if inspect_code != 0 or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
             return False, "docker image inspect failed after remote load", None
+        if tag_as is not None:
+            tag_code, tag_output = await self._run(
+                ["image", "tag", image_id, tag_as], timeout=30.0
+            )
+            if tag_code != 0:
+                return False, f"docker image tag failed: {_log_tail(tag_output)}", None
         inspect_code, volumes = await self._run(
             [
                 "image",
@@ -3446,7 +3625,7 @@ class BuildGate:
         if volumes.strip() == "declared":
             return (
                 False,
-                "image declares writable volumes; harness images must use only "
+                _VOLUMES_DETAIL_PREFIX + "; harness images must use only "
                 "the validator-owned bounded /tmp tmpfs",
                 None,
             )

@@ -96,6 +96,10 @@ class ScreeningReasonCode:
 
 # Codes imported by name in the worker or Platform.
 DOCKER_BUILD_INFRASTRUCTURE: Final = "docker-build-infrastructure"
+CATHEDRAL_BUILD_INFRASTRUCTURE: Final = "cathedral-build-infrastructure"
+"""The opt-in Cathedral sealed build failed on Cathedral's side (API, transport,
+room, timeout, or a part that did not match its hash). Never the miner's fault;
+parks for an operator retry."""
 WORKER_CLAIM_NOT_STARTED: Final = "worker-claim-not-started"
 L2_RUNTIME_EVIDENCE_UNAVAILABLE: Final = "l2-runtime-evidence-unavailable"
 SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE: Final = (
@@ -223,6 +227,7 @@ _REGISTRY: Final[tuple[ScreeningReasonCode, ...]] = (
     ScreeningReasonCode("replay-image-load-failed", _O, _WORKER),
     ScreeningReasonCode("screened-image-export-failed", _O, _WORKER),
     ScreeningReasonCode("image-upload-failed", _O, _WORKER),
+    ScreeningReasonCode(CATHEDRAL_BUILD_INFRASTRUCTURE, _O, _WORKER),
     # --- AGENT_FAULT: deterministic, miner-owned rejections.
     ScreeningReasonCode("docker-build", _A, _WORKER),
     ScreeningReasonCode("docker-build-timeout", _A, _WORKER),
