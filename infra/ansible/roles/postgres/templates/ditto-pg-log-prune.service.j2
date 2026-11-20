@@ -1,0 +1,15 @@
+# Managed by infra/ansible/roles/postgres.
+[Unit]
+Description=Compress and prune PostgreSQL collector logs
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+ExecStart=/usr/local/sbin/ditto-pg-log-prune
+Nice=10
+IOSchedulingClass=idle
+ProtectSystem=strict
+ReadWritePaths={{ postgres_tuning.log_directory | replace("'", '') }}
+NoNewPrivileges=true
