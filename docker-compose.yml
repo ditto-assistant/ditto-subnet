@@ -120,7 +120,7 @@ services:
       # every miner container and from the public validator service.
       - dittobench-private-artifacts:/var/lib/dittobench-private-artifacts
     healthcheck:
-      test: [CMD-SHELL, "docker info >/dev/null 2>&1"]
+      test: [CMD, "/usr/local/sbin/dockerd", "--ditto-healthcheck"]
       interval: 10s
       timeout: 15s
       retries: 30
