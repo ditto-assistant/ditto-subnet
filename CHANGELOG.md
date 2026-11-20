@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.498.1 (2026-11-20)
+
+### Bug Fixes
+
+- **platform,backroom**: Keep closed rows off the provisional board (SN-483)
+  ([#3585](https://github.com/ditto-assistant/ditto-subnet/pull/3585),
+  [`6ef2ce0`](https://github.com/ditto-assistant/ditto-subnet/commit/6ef2ce03784dce93a1a22ce9afdc0045d5ea673a))
+
+### Documentation
+
+- Scope tool cases in generator packs (SN-474)
+  ([#3589](https://github.com/ditto-assistant/ditto-subnet/pull/3589),
+  [`e0c40c3`](https://github.com/ditto-assistant/ditto-subnet/commit/e0c40c319b3d4b2d838cd0d3891077398f6bb766))
+
+
 ## v0.498.0 (2026-11-18)
 
 ### Features
