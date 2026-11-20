@@ -2037,6 +2037,7 @@ class ValidatorWorker:
                 configured=configured,
                 cap=cap,
                 host_mib=specs.memory_total_mib,
+                held_mib=over_cap,
                 previously_limited=(
                     self._memory_admitted_slots_logged is not None
                     and self._memory_admitted_slots_logged[0]
@@ -2054,33 +2055,44 @@ class ValidatorWorker:
         cap: int,
         host_mib: int,
         previously_limited: bool,
+        held_mib: int = 0,
     ) -> None:
         """Say how many slots host memory admits, and what would admit them all.
 
         Logged on change only. The validator's own log is the one place a
         third-party operator is sure to look, so it carries the fix path in
-        host memory, not just the count.
+        host memory, not just the count. The figures are what to provision at
+        the live cap; ``held_mib`` is memory that running leases issued under a
+        higher cap hold until they finish, named separately because it drains
+        on its own and needs no new hardware.
         """
         reserve = self._resource_ceilings.host_memory_reserve_mib
         needed_all = self._resource_ceilings.memory_required_mib(configured, cap)
+        held = (
+            f" A further {held_mib} MiB is held until leases issued under a "
+            "higher cap finish."
+            if held_mib > 0
+            else ""
+        )
         if admitted == 0:
             logger.error(
                 "host memory admits no benchmark slot at the %s MiB harness "
                 "cap (%s MiB host, %s MiB reserve): this validator cannot score. "
                 "It keeps heartbeating and setting weights. Needs at least %s "
-                "MiB for 1 slot and %s MiB for all %s configured slot(s).",
+                "MiB for 1 slot and %s MiB for all %s configured slot(s).%s",
                 cap,
                 host_mib,
                 reserve,
                 self._resource_ceilings.memory_required_mib(1, cap),
                 needed_all,
                 configured,
+                held,
             )
         elif admitted < configured:
             logger.warning(
                 "host memory admits %s of %s configured slot(s) at the %s MiB "
                 "harness cap (%s MiB host, %s MiB reserve); the rest are never "
-                "offered. Needs at least %s MiB for all %s.",
+                "offered. Needs at least %s MiB for all %s.%s",
                 admitted,
                 configured,
                 cap,
@@ -2088,6 +2100,7 @@ class ValidatorWorker:
                 reserve,
                 needed_all,
                 configured,
+                held,
             )
         elif previously_limited:
             logger.info(

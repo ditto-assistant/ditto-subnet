@@ -6772,7 +6772,7 @@ class TestResourceConstrainedAdmission:
         assert levels == [logging.ERROR, logging.WARNING, logging.INFO]
 
     async def test_a_running_lease_keeps_its_cap_after_the_live_cap_drops(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Lowering the cap must not over-admit around a lease issued above it.
 
@@ -6794,14 +6794,45 @@ class TestResourceConstrainedAdmission:
                 memory_limit_mib=worker_mod._lease_memory_limit_mib(lease),
             )
             assert worker._slots["slot-0"].memory_limit_mib == 8192
-            worker._adopt_live_sandbox_cap(4096)
-            assert worker._memory_admitted_slots() == 6
+            with caplog.at_level(logging.WARNING, logger=worker_mod.logger.name):
+                worker._adopt_live_sandbox_cap(4096)
+                assert worker._memory_admitted_slots() == 6
+            # Configured 4 at 4096 fit a clean host, so the log is only about
+            # what the older lease holds: there is no hardware to add.
+            assert not [
+                record
+                for record in caplog.records
+                if "host memory admits" in record.getMessage()
+            ]
             worker._clear_active_ticket()
             assert worker._slots["slot-0"].memory_limit_mib is None
             # The lease ended: every slot is sized at the live cap again.
             assert worker._memory_admitted_slots() == 7
         finally:
             worker_mod._CURRENT_SLOT.reset(token)
+
+    def test_memory_log_names_memory_held_by_higher_cap_leases(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The fix path stays what to provision; held memory is named apart."""
+        worker = self._memory_host(15987)
+        worker._slots["slot-0"].active_agent_id = uuid4()
+        worker._slots["slot-0"].memory_limit_mib = 8192
+        worker._sandbox_memory_limit_mib = 6144
+        with caplog.at_level(logging.WARNING, logger=worker_mod.logger.name):
+            # 15,987 - 2,048 held = 13,939: (13,939 - 1,024) // 6,144 = 2 of 4.
+            assert worker._memory_admitted_slots() == 2
+        lines = [
+            record.getMessage()
+            for record in caplog.records
+            if "host memory admits" in record.getMessage()
+        ]
+        assert lines == [
+            "host memory admits 2 of 4 configured slot(s) at the 6144 MiB "
+            "harness cap (15987 MiB host, 1024 MiB reserve); the rest are never "
+            "offered. Needs at least 25600 MiB for all 4. A further 2048 MiB is "
+            "held until leases issued under a higher cap finish."
+        ]
 
     def test_lease_memory_cap_is_read_only_from_a_well_formed_runtime(self) -> None:
         def lease(cap: object) -> SimpleNamespace:
