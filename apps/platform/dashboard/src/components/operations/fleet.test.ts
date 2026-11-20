@@ -82,10 +82,16 @@ describe("slots host memory cannot back (SN-488)", () => {
     expect(Object.keys(cappedSlotIds(entry))).toEqual([]);
   });
 
+  it("never marks a slot the validator offers, whatever the estimate says", () => {
+    const offering = { ...entry, healthy_slots: ["slot-0", "slot-1", "slot-2"] };
+    expect(memoryLimitedSlotIds(offering)["slot-1"]).toBeUndefined();
+    expect(memoryLimitedSlotIds(offering)["slot-2"]).toBeUndefined();
+    expect(memoryLimitedSlotIds(offering)["slot-3"]).toBe(true);
+  });
+
   it("marks all of a host that fits no harness, and none when unannounced", () => {
-    expect(Object.keys(memoryLimitedSlotIds({ ...entry, memory_admitted_slots: 0 }))).toHaveLength(
-      8,
-    );
+    const none = { ...entry, memory_admitted_slots: 0, healthy_slots: [] };
+    expect(Object.keys(memoryLimitedSlotIds(none))).toHaveLength(8);
     expect(memoryLimitedSlotIds({ ...entry, memory_admitted_slots: null })).toEqual({});
     expect(memoryLimitedSlotIds({ ...entry, memory_admitted_slots: undefined })).toEqual({});
   });

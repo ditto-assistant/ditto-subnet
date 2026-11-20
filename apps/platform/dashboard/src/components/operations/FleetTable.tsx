@@ -563,8 +563,8 @@ function SlotRows(props: { entry: FleetEntryExt; slotPolicy: SlotPolicy | null }
     let unavailable = 0;
     let memoryLimitedCount = 0;
     inactiveSlots().forEach((slotId) => {
-      if (memoryLimited()[slotId]) memoryLimitedCount += 1;
-      else if (props.entry.admission !== "accepting") unavailable += 1;
+      if (props.entry.admission !== "accepting") unavailable += 1;
+      else if (memoryLimited()[slotId]) memoryLimitedCount += 1;
       else if ((props.entry.healthy_slots || []).indexOf(slotId) < 0) unavailable += 1;
       else if (capped()[slotId]) cappedCount += 1;
       else idle += 1;
@@ -591,17 +591,17 @@ function SlotRows(props: { entry: FleetEntryExt; slotPolicy: SlotPolicy | null }
   };
 
   const inactiveState = (slotId: string): { label: string; tone: string; title?: string } => {
-    // Before admission: a host that fits no harness may still say
-    // "accepting", and memory is the reason that stays true until it changes.
+    // The validator's own admission wins; then memory explains a slot it does
+    // not offer (only those are ever marked memory-limited).
+    if (props.entry.admission !== "accepting") {
+      return { label: String(props.entry.admission), tone: "warn" };
+    }
     if (memoryLimited()[slotId]) {
       return {
         label: "Memory-limited",
         tone: "warn",
         title: props.entry.memory_note || undefined,
       };
-    }
-    if (props.entry.admission !== "accepting") {
-      return { label: String(props.entry.admission), tone: "warn" };
     }
     if ((props.entry.healthy_slots || []).indexOf(slotId) < 0) {
       return { label: "Unavailable", tone: "warn" };

@@ -6006,14 +6006,27 @@ async def load_validator_fleet(
         slot_settings=await resolve_slot_settings(app_state),
         round_reservation_active=await round_reservation_active(app_state, session),
         lease_inference_activity=lease_inference_activity,
-        sandbox_memory_limit_mib=await _live_sandbox_memory_limit_mib(session),
+        sandbox_memory_limit_mib=await _live_sandbox_memory_limit_mib(
+            app_state, session
+        ),
     )
 
 
-async def _live_sandbox_memory_limit_mib(session: AsyncSession) -> int:
-    """The live per-harness memory cap host memory admission is judged at."""
-    row = await latest_inference_concurrency_settings_revision(session)
-    return settings_from_row(row).benchmark_runtime.sandbox_memory_limit_mib
+async def _live_sandbox_memory_limit_mib(app_state: Any, session: AsyncSession) -> int:
+    """The live per-harness memory cap host memory admission is judged at.
+
+    Read through the app's short-TTL settings cache, the one ticket issue uses,
+    so the fleet views that poll it add no query per request; a direct read is
+    only the fallback for an app without the resolver.
+    """
+    resolver = getattr(app_state, "inference_concurrency_settings", None)
+    if resolver is not None:
+        settings = await resolver.resolve(getattr(app_state, "session_maker", None))
+    else:
+        settings = settings_from_row(
+            await latest_inference_concurrency_settings_revision(session)
+        )
+    return int(settings.benchmark_runtime.sandbox_memory_limit_mib)
 
 
 @router.get("/validators", response_model=PublicValidatorHeartbeatsResponse)
@@ -8269,6 +8282,11 @@ async def operations(
         active_bench_version=active_version,
         slot_settings=await resolve_slot_settings(request.app.state),
         round_reservation_active=await round_reservation_active(
+            request.app.state, session
+        ),
+        # The dashboard reads the fleet from this snapshot, not /validators, so
+        # it needs the same cap for its memory-limited slots and fix path.
+        sandbox_memory_limit_mib=await _live_sandbox_memory_limit_mib(
             request.app.state, session
         ),
     )

@@ -636,6 +636,16 @@ class TestSlotBreakdown:
         assert big["memory_note"] is None
         assert note not in big["health_reasons"]
 
+        # The dashboard reads the fleet from the operations snapshot, so it
+        # must carry the same memory fields as /validators.
+        operations = await client.get("/api/v1/public/operations")
+        assert operations.status_code == 200, operations.text
+        snapshot = operations.json()["validators"]
+        assert snapshot["sandbox_memory_limit_mib"] == 6144
+        ops_rows = {row["validator_hotkey"]: row for row in snapshot["validators"]}
+        assert ops_rows[_SERVING]["memory_note"] == note
+        assert ops_rows[_SERVING]["health"] == "critical"
+
 
 def _validator_view(**fields: Any) -> PublicValidatorHeartbeat:
     """Only the fields the slot breakdown reads; the rest are not needed."""
