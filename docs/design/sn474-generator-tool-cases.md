@@ -286,16 +286,20 @@ kind-agnostic. So `ScoreRound` and the ledger need no new math.
   `solve_threshold` 0.5. With linear coverage, dropping one of k ≥ 2 required
   calls still scores (k−1)/k ≥ 0.5 when the answer happens to be right: a
   guessed answer would count as solved.
-- **Proposal:** the pack tool policy squares coverage:
+- **Proposal:** in the pack tool policy, a missing required call halves the
+  coverage term:
 
-  `score = answer credit × coverage² × 0.5^forbidden`
+  `score = answer credit × g(coverage) × 0.5^forbidden`, where
+  `g(1) = 1` and `g(c) = c / 2` for `c < 1`.
 
-  For k ≥ 3 required calls, a single dropped call then scores ≤ 0.44, below
-  threshold. The validator requires k ≥ 3, or k ≥ 2 when the answer is only
-  reachable through every required call.
-- Partial credit still works: a mostly right trajectory with the right answer
-  earns most of the score. The panel mean feeds case credit as today
-  (`challenge/score.go:191-196`).
+  Any dropped required call then scores at most (k−1)/(2k) < 0.5, for every k
+  up to the cap of 6. So a case counts as solved only with every required
+  call made. A power of coverage would not do this: squaring works for k = 3
+  (0.44) but not for k = 4 ((3/4)² = 0.56). The validator requires k ≥ 2, so
+  one lucky call cannot solve a case.
+- Partial credit still works below the threshold: a trajectory missing one of
+  four calls, with the right answer, earns 0.375 rather than 0. The panel mean
+  feeds case credit as today (`challenge/score.go:191-196`).
 - Grading stays deterministic with no LLM judge, as in the rest of DittoBench.
 
 ### 3.3 Versioning
