@@ -494,6 +494,18 @@ const (
 
 func isReasoningEffort(s string) bool { return s == "low" || s == "medium" || s == "high" }
 
+// grantReasoningForRequest resolves the reasoning block for a ticket's chat
+// grant. A v7+ grant pins a model other than the bench model only for a
+// frontier oracle ticket (frontier_reasoning in
+// inference_routing.py): that subnet-run agent's effort is pinned medium.
+// Every other grant keeps the bench contract.
+func grantReasoningForRequest(payload map[string]any, model string, benchVersion int32) (map[string]any, *httpError) {
+	if benchVersion >= 7 && model != v7Model {
+		return map[string]any{"effort": "medium", "exclude": true}, nil
+	}
+	return benchmarkReasoningForRequest(payload, model, benchVersion)
+}
+
 // benchmarkReasoningForRequest resolves the provider reasoning block. A nil
 // map with nil error means "no reasoning contract for this model".
 func benchmarkReasoningForRequest(payload map[string]any, model string, benchVersion int32) (map[string]any, *httpError) {
@@ -567,7 +579,7 @@ func lockedUpstreamPayload(payload map[string]any, model string, maxTokens int, 
 	upstream["max_tokens"] = maxTokens
 	upstream["n"] = 1
 	upstream["stream"] = false
-	reasoning, herr := benchmarkReasoningForRequest(payload, model, benchVersion)
+	reasoning, herr := grantReasoningForRequest(payload, model, benchVersion)
 	if herr != nil {
 		return nil, herr
 	}

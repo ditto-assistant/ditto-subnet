@@ -1049,8 +1049,20 @@ def test_v7_upstream_profile_pins_medium_reasoning_without_changing_v6() -> None
     assert v7["reasoning"] == {"effort": "medium", "exclude": True}
     assert "max_completion_tokens" not in v7
 
-    v6 = _locked_upstream_payload(payload, model="qwen/qwen3-32b", max_tokens=256)
+    v6 = _locked_upstream_payload(
+        payload, model="qwen/qwen3-32b", max_tokens=256, bench_version=6
+    )
     assert "reasoning" not in v6
+
+    # A v7+ grant on another model is a frontier oracle grant: pinned
+    # medium, whatever the caller asks.
+    frontier = _locked_upstream_payload(
+        {**payload, "reasoning": {"effort": "high"}},
+        model="openai/gpt-oss-120b",
+        max_tokens=256,
+        bench_version=9,
+    )
+    assert frontier["reasoning"] == {"effort": "medium", "exclude": True}
 
 
 def _confirmation_grant(*, lane: str, model: str) -> SimpleNamespace:

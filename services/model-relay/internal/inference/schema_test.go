@@ -185,6 +185,36 @@ func TestBenchmarkReasoningForRequest(t *testing.T) {
 	}
 }
 
+func TestGrantReasoningForRequestPinsFrontierModelsMedium(t *testing.T) {
+	const frontier = "openai/gpt-oss-120b"
+	// A v7+ frontier grant: medium, whatever the request asks.
+	for _, body := range []string{`{}`, `{"reasoning":{"effort":"low"}}`, `{"reasoning_effort":"high"}`} {
+		block, err := grantReasoningForRequest(parsePayload(t, body), frontier, 9)
+		if err != nil || block["effort"] != "medium" || block["exclude"] != true || len(block) != 2 {
+			t.Fatalf("%s: want pinned medium, got %v %v", body, block, err)
+		}
+	}
+	upstream, herr := lockedUpstreamPayload(parsePayload(t, `{"messages":[{"role":"user","content":"hi"}],"reasoning":{"effort":"low"}}`), frontier, 40, 9)
+	if herr != nil {
+		t.Fatalf("frontier upstream: %v", herr)
+	}
+	if block, _ := upstream["reasoning"].(map[string]any); block["effort"] != "medium" {
+		t.Fatalf("frontier upstream reasoning: got %v", upstream["reasoning"])
+	}
+	// The bench model keeps its contract; pre-v7 grants have none.
+	if block, err := grantReasoningForRequest(parsePayload(t, `{"reasoning":{"effort":"low"}}`), v7Model, 9); err != nil || block["effort"] != "low" {
+		t.Fatalf("bench model v9: got %v %v", block, err)
+	}
+	if block, err := grantReasoningForRequest(parsePayload(t, `{}`), "qwen/qwen3-32b", 6); block != nil || err != nil {
+		t.Fatalf("pre-v7: want nil, got %v %v", block, err)
+	}
+	// The shared bench resolver, which the confirmation lane also uses, is
+	// unchanged for a non-bench model.
+	if block, err := benchmarkReasoningForRequest(parsePayload(t, `{}`), frontier, 9); block != nil || err != nil {
+		t.Fatalf("bench resolver: want nil, got %v %v", block, err)
+	}
+}
+
 func TestLockedUpstreamPayload(t *testing.T) {
 	payload := parsePayload(t, `{
 		"model":"wrong-model","max_tokens":50,"max_completion_tokens":40,

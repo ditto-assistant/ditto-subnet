@@ -77,6 +77,7 @@ from ditto.api_server.generator_frontier import (
     oracle_round,
     oracle_run_agent,
     oracle_run_cases,
+    oracle_run_model,
     record_oracle_results,
 )
 from ditto.api_server.generator_prescreens import (
@@ -111,6 +112,7 @@ from ditto.api_server.generator_rounds import (
     validate_round_results,
 )
 from ditto.api_server.inference_concurrency_settings import resolved_proxy_config
+from ditto.api_server.inference_routing import benchmark_model
 from ditto.db.models import (
     Agent,
     GeneratorPrescreen,
@@ -669,9 +671,24 @@ async def _lease_oracle_job(
             return None
         agent = await session.get(Agent, ticket.agent_id)
         assert agent is not None
+        # The round's frozen frontier model, or None for the bench model.
+        model = oracle_run_model(frontier)
         grant = await ensure_inference_grant(
-            session, ticket=ticket, config=inference_config
+            session, ticket=ticket, config=inference_config, model=model
         )
+        if grant is None and model is not None:
+            # No admitted route for the frontier model yet (or it was
+            # delisted): run the oracle on the bench model rather than stall
+            # the round until it times out.
+            logger.warning(
+                "frontier model %s has no grant for round %s; "
+                "falling back to the bench model",
+                model,
+                row.round_index,
+            )
+            grant = await ensure_inference_grant(
+                session, ticket=ticket, config=inference_config
+            )
         if grant is None:
             raise HTTPException(503, "ticket inference capability is unavailable")
         session.add(
@@ -686,7 +703,17 @@ async def _lease_oracle_job(
                 kind="oracle",
             )
         )
-        note_oracle_lease(row)
+        # Record the model the grant pins, not the one asked for: after a
+        # fallback the lease may hold an earlier grant on another model.
+        note_oracle_lease(
+            row,
+            model_ran=(
+                grant.allowed_models[0]
+                if grant.allowed_models
+                else benchmark_model(bench_version)
+            ),
+            now=now,
+        )
         contract = benchmark_contract(bench_version)
         return GeneratorRoundJobResponse(
             round_index=row.round_index,

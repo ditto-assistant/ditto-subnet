@@ -81,6 +81,7 @@ from ditto.api_server.inference_routing import (
     BENCH_V9_DEFAULT_REASONING_EFFORT,
     BENCH_V9_REASONING_EFFORTS,
     benchmark_reasoning,
+    frontier_reasoning,
     record_route_observation,
 )
 from ditto.db.queries.confirmation_inference import (
@@ -1422,6 +1423,23 @@ def _output_token_limit(payload: dict[str, Any], maximum: int) -> int:
     return min(*requested, maximum) if requested else maximum
 
 
+def _grant_reasoning_for_request(
+    payload: dict[str, Any], *, model: str, bench_version: int
+) -> dict[str, Any] | None:
+    """The reasoning block for a ticket's chat grant.
+
+    A v7+ grant pins a model other than the bench model only for a frontier
+    oracle ticket; that subnet-run agent's effort is pinned medium
+    whatever the request asks. Every other grant keeps the bench contract.
+    """
+    frontier = frontier_reasoning(model, bench_version)
+    if frontier is not None:
+        return frontier
+    return _benchmark_reasoning_for_request(
+        payload, model=model, bench_version=bench_version
+    )
+
+
 def _benchmark_reasoning_for_request(
     payload: dict[str, Any], *, model: str, bench_version: int
 ) -> dict[str, Any] | None:
@@ -1560,7 +1578,7 @@ def _locked_upstream_payload(
     # Unconditional assignment, not a merge: provider-only nested controls
     # never survive. V7/V8 use the historical fixed-medium contract; V9 uses
     # the validated agent effort (or medium when omitted).
-    reasoning = _benchmark_reasoning_for_request(
+    reasoning = _grant_reasoning_for_request(
         payload, model=model, bench_version=bench_version
     )
     if reasoning is None:
@@ -2048,7 +2066,7 @@ async def proxy_chat_completions(
         # V9 reasoning is an agent strategy, but it is still validated before
         # reserving provider capacity or writing request accounting. Invalid or
         # conflicting aliases therefore fail without spending the grant.
-        _benchmark_reasoning_for_request(
+        _grant_reasoning_for_request(
             payload, model=model, bench_version=grant.bench_version
         )
         reserved = await begin_inference_request(

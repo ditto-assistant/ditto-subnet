@@ -10,7 +10,11 @@ from ditto.api_models.inference_concurrency_settings import (
     MAX_CHAT_REQUEST_BUDGET,
     MAX_CHAT_TOKEN_BUDGET,
 )
-from ditto.api_server.config import check_config, parse_api_server_config_from_env
+from ditto.api_server.config import (
+    DEFAULT_FRONTIER_ORACLE_MODELS,
+    check_config,
+    parse_api_server_config_from_env,
+)
 from ditto.api_server.errors import ApiServerConfigError
 from ditto.api_server.validator_names import ValidatorNamesConfig
 from ditto.tests.api_server.conftest import make_api_server_config
@@ -73,6 +77,25 @@ class TestParseApiServerConfigFromEnv:
         assert config.inference_proxy.per_ticket_concurrency == 16
         assert config.inference_proxy.per_validator_concurrency == 48
         assert config.inference_proxy.global_concurrency == 96
+        # The three ladder candidates are listed unless the operator says
+        # not; listing grants nothing while the frontier settings are unset.
+        assert config.inference_proxy.frontier_oracle_models == (
+            "openai/gpt-oss-120b",
+            "openai/gpt-5.6-luna",
+            "qwen/qwen3.8-27b",
+        )
+
+    def test_frontier_oracle_models_parse_from_env(self, monkeypatch):
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv(
+            "DITTO_INFERENCE_ALLOWED_MODELS", "openai/gpt-oss-20b,openai/gpt-oss-120b"
+        )
+        monkeypatch.setenv("DITTO_FRONTIER_ORACLE_MODELS", " openai/gpt-oss-120b, ")
+
+        config = parse_api_server_config_from_env(commit_hash="abc")
+
+        assert config.inference_proxy.frontier_oracle_models == ("openai/gpt-oss-120b",)
+        check_config(config)
 
     @pytest.mark.parametrize(
         ("raw", "expected"),
@@ -218,6 +241,15 @@ class TestCheckConfig:
         )
         with pytest.raises(ApiServerConfigError, match="ROUTING_MODE"):
             check_config(config)
+
+    def test_a_frontier_oracle_model_need_not_be_an_agent_model(self):
+        # The default list boots with the stock agent allow list, so an
+        # operator who never set DITTO_FRONTIER_ORACLE_MODELS still boots.
+        config = make_api_server_config()
+        listed = tuple(DEFAULT_FRONTIER_ORACLE_MODELS.split(","))
+        assert config.inference_proxy.frontier_oracle_models == listed
+        assert not set(listed) & set(config.inference_proxy.allowed_models)
+        check_config(config)
 
     def test_port_out_of_range_raises(self):
         config = replace(make_api_server_config(), port=0)

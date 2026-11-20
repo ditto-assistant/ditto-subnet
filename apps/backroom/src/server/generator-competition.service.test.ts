@@ -1082,6 +1082,30 @@ describe('generator competition MCP tools', () => {
     }
   })
 
+  it('leaves the oracle model unset by default and checks its shape', () => {
+    const parsed = generatorCompetitionSettingsSchema.parse(settings)
+    expect(parsed).toMatchObject({ frontier_oracle_model: null })
+    expect(parsed).not.toHaveProperty('frontier_escalation_model')
+    // The escalation ladder ships empty: one step on the bench model.
+    expect(parsed).toMatchObject({ frontier_escalation_models: [] })
+    const ladder = ['openai/gpt-5.6-luna', 'qwen/qwen3.8-27b']
+    expect(generatorCompetitionSettingsSchema.parse({ ...settings, frontier_escalation_models: ladder }))
+      .toMatchObject({ frontier_escalation_models: ladder })
+    for (const bad of [
+      ['openai/gpt-5.6-luna', 'openai/gpt-5.6-luna'], ['gpt-5.6-luna'],
+      ['a/b1', 'a/b2', 'a/b3', 'a/b4', 'a/b5'],
+    ]) {
+      expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, frontier_escalation_models: bad }))
+        .toThrow()
+    }
+    expect(
+      generatorCompetitionSettingsSchema.parse({ ...settings, frontier_oracle_model: 'openai/gpt-oss-120b' }),
+    ).toMatchObject({ frontier_oracle_model: 'openai/gpt-oss-120b' })
+    for (const bad of ['gpt-oss-120b', '', 'openai/', 'OpenAI/x y']) {
+      expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, frontier_oracle_model: bad })).toThrow()
+    }
+  })
+
   it('reads a round frontier with or without its escalation tier', () => {
     const AGENT = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
     const ESCALATION = '1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d'
@@ -1101,6 +1125,26 @@ describe('generator competition MCP tools', () => {
       agent_id: ESCALATION, selected: ['c1/k0'], outcome: 'pending', passed: [], results: [],
       skipped_columns: { c3: 'oracle failed 40/70 cases (57% > 25%)' },
     })
+     // The oracle model and the model that really ran; an older Platform sends
+    // neither and both read as null.
+    expect(generatorFrontierSchema.parse(base)).toMatchObject({ oracle_model: null, oracle_model_run: null })
+    const run = { model: 'openai/gpt-oss-20b', fallback: true, leased_at: '2026-11-09T09:00:00Z' }
+    expect(generatorFrontierSchema.parse({ ...base, oracle_model: 'openai/gpt-oss-120b', oracle_model_run: run }))
+      .toMatchObject({ oracle_model: 'openai/gpt-oss-120b', oracle_model_run: run })
+    // Without a ladder an escalation step reads as step 0 on the bench model,
+    // with no earlier steps.
+    expect(generatorFrontierSchema.parse({ ...base, escalation })).toMatchObject({
+      escalation: { step: 0, model: null, model_run: null }, escalation_steps: [],
+    })
+    const stepRun = { model: 'qwen/qwen3.8-27b', fallback: false, leased_at: '2026-11-09T10:00:00Z' }
+    const laddered = generatorFrontierSchema.parse({
+      ...base,
+      escalation: { ...escalation, step: 1, model: 'qwen/qwen3.8-27b', model_run: stepRun },
+      escalation_steps: [{ ...escalation, deadline: null, outcome: 'reported', model: 'openai/gpt-5.6-luna' }],
+    })
+    expect(laddered.escalation).toMatchObject({ step: 1, model: 'qwen/qwen3.8-27b', model_run: stepRun })
+    expect(laddered.escalation_steps).toHaveLength(1)
+    expect(laddered.escalation_steps[0]).toMatchObject({ step: 0, model: 'openai/gpt-5.6-luna', outcome: 'reported' })
   })
 
   it('defaults the season catch-up settings a write omits and bounds the cap', () => {
