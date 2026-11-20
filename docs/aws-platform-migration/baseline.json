@@ -1,0 +1,185 @@
+{
+  "observed_at": "2026-11-13T19:01:54.458789+00:00",
+  "window_start": "2026-11-06T19:01:54.458789+00:00",
+  "project": "ditto-app-dev",
+  "hosts": {
+    "ditto-platform-prod": {
+      "machine_type": "e2-standard-4",
+      "disks": [
+        {
+          "size_gib": "100",
+          "source": "ditto-platform-prod"
+        }
+      ],
+      "metrics": {
+        "cpu/utilization": {
+          "points": 168,
+          "complete": true,
+          "hourly_mean_p50": 0.31519792575227457,
+          "hourly_mean_p95": 0.38084863267121055,
+          "max_hourly": 0.4471117656606171,
+          "sum": null,
+          "series": 1
+        },
+        "disk/read_ops_count": {
+          "points": 168,
+          "complete": true,
+          "hourly_mean_p50": 19.0,
+          "hourly_mean_p95": 5197.0,
+          "max_hourly": 419713.0,
+          "sum": 542490.0,
+          "series": 1
+        },
+        "disk/write_ops_count": {
+          "points": 168,
+          "complete": true,
+          "hourly_mean_p50": 24380.0,
+          "hourly_mean_p95": 57128.0,
+          "max_hourly": 138482.0,
+          "sum": 4612902.0,
+          "series": 1
+        },
+        "disk/read_bytes_count": {
+          "points": 168,
+          "complete": true,
+          "hourly_mean_p50": 413696.0,
+          "hourly_mean_p95": 143130112.0,
+          "max_hourly": 81563918336.0,
+          "sum": 86192276992.0,
+          "series": 1
+        },
+        "disk/write_bytes_count": {
+          "points": 168,
+          "complete": true,
+          "hourly_mean_p50": 2787128282.5,
+          "hourly_mean_p95": 8492947175.0,
+          "max_hourly": 28560765473.0,
+          "sum": 628267214692.0,
+          "series": 1
+        },
+        "network/sent_bytes_count": {
+          "points": 168,
+          "complete": true,
+          "hourly_mean_p50": 2151187128.0,
+          "hourly_mean_p95": 6013327105.0,
+          "max_hourly": 12014793783.0,
+          "sum": 444272071098.0,
+          "series": 1
+        },
+        "network/received_bytes_count": {
+          "points": 168,
+          "complete": true,
+          "hourly_mean_p50": 14708527057.0,
+          "hourly_mean_p95": 22141104962.0,
+          "max_hourly": 147379080926.0,
+          "sum": 2746492054652.0,
+          "series": 1
+        }
+      }
+    },
+    "ditto-pg-platform": {
+      "machine_type": "e2-standard-2",
+      "disks": [
+        {
+          "size_gib": "100",
+          "source": "ditto-pg-platform"
+        },
+        {
+          "size_gib": "50",
+          "source": "ditto-pg-platform-data"
+        }
+      ],
+      "metrics": {
+        "cpu/utilization": {
+          "points": 168,
+          "complete": true,
+          "hourly_mean_p50": 0.34483192379263017,
+          "hourly_mean_p95": 0.4372292368201952,
+          "max_hourly": 0.48563714051282847,
+          "sum": null,
+          "series": 1
+        },
+        "disk/read_ops_count": {
+          "points": 336,
+          "complete": true,
+          "hourly_mean_p50": 12.5,
+          "hourly_mean_p95": 4583.0,
+          "max_hourly": 187191.0,
+          "sum": 679000.0,
+          "series": 2
+        },
+        "disk/write_ops_count": {
+          "points": 336,
+          "complete": true,
+          "hourly_mean_p50": 12602.5,
+          "hourly_mean_p95": 109779.0,
+          "max_hourly": 291488.0,
+          "sum": 11195266.0,
+          "series": 2
+        },
+        "disk/read_bytes_count": {
+          "points": 336,
+          "complete": true,
+          "hourly_mean_p50": 98925.5,
+          "hourly_mean_p95": 150040406.0,
+          "max_hourly": 13360452126.0,
+          "sum": 26296382700.0,
+          "series": 2
+        },
+        "disk/write_bytes_count": {
+          "points": 336,
+          "complete": true,
+          "hourly_mean_p50": 402423694.5,
+          "hourly_mean_p95": 1826549588.0,
+          "max_hourly": 9265157592.0,
+          "sum": 224915633627.0,
+          "series": 2
+        },
+        "network/sent_bytes_count": {
+          "points": 168,
+          "complete": true,
+          "hourly_mean_p50": 13213333271.5,
+          "hourly_mean_p95": 16778768874.0,
+          "max_hourly": 143710910532.0,
+          "sum": 2427872288684.0,
+          "series": 1
+        },
+        "network/received_bytes_count": {
+          "points": 168,
+          "complete": true,
+          "hourly_mean_p50": 1112756152.5,
+          "hourly_mean_p95": 1287821068.0,
+          "max_hourly": 1418585445.0,
+          "sum": 187601194006.0,
+          "series": 1
+        }
+      }
+    }
+  },
+  "database": {
+    "observed_at": "2026-11-13T19:00:56Z",
+    "name": "ditto_platform_prod",
+    "version": "17.11",
+    "bytes": 23286060723,
+    "shared_instance_databases": [
+      "ditto_platform_dev",
+      "ditto_platform_prod"
+    ],
+    "wal_level": "replica",
+    "max_replication_slots": 10,
+    "pg_stat_statements_reset": "2026-09-08T23:56:37.876048Z",
+    "io_timing_counters": "zero; no measured latency can be inferred",
+    "extensions": {
+      "pg_stat_statements": "1.11",
+      "pgcrypto": "1.3",
+      "uuid-ossp": "1.1",
+      "vector": "0.8.0"
+    }
+  },
+  "notes": [
+    "CPU percentiles are percentiles of 168 hourly means, not instantaneous peaks.",
+    "Disk counters include all disks and both databases on the shared DB host; they are not Aurora I/O charges.",
+    "Network counters include internal DB traffic and dev traffic; they do not directly establish internet or cross-AZ charges.",
+    "Size and extension inventory were read earlier the same day; no SQL text, rows, credentials or private artifacts were exported."
+  ]
+}
