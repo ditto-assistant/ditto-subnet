@@ -3456,10 +3456,16 @@ async def list_provisional_ledger(
         by_agent[agent.agent_id][2].append(row_score_view(row))
 
     if by_agent:
+        # Close-out is what the miner sees, which is always judged against the
+        # live active era, also on a historical board's preview.
         closed = await closed_submission_statuses(
             session,
             agents=[agent for agent, _coldkey, _scores in by_agent.values()],
-            active_version=canonical_version,
+            active_version=(
+                canonical_version
+                if bench_version is None
+                else await active_bench_version(session)
+            ),
         )
         for agent_id in closed:
             by_agent.pop(agent_id, None)

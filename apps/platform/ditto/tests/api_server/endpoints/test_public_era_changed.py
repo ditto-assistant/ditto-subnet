@@ -779,6 +779,13 @@ async def test_closed_rows_never_appear_as_provisional_board_rows(
     assert sibling in shown
     assert seeded.current in shown
 
+    # A historical board judges close-out against the live active era too:
+    # the v17 dead-retry row (two v17 scores, era_changed on v18) must not
+    # come back in v17's provisional preview (r4637685436).
+    async with maker() as session:
+        historical = await list_provisional_ledger(session, bench_version=_FROM)
+    assert seeded.dead_retry not in {row.agent_id for row, _count in historical}
+
     board = (await client.get("/api/v1/public/leaderboard")).json()
     board_ids = {entry["agent_id"] for entry in board["entries"]}
     assert str(terminal) not in board_ids
