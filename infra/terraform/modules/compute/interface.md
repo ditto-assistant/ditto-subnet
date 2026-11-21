@@ -40,7 +40,8 @@ read only what the host needs.
 
 ## Sizes
 
-Add a logical size to every provider map in the same change. Keep the class
+Add a logical size to every provider map in the same change, unless it is
+listed under AWS-only sizes below. Keep the class
 comparable (vCPU, memory, shared vs dedicated) and x86_64: generator output
 bytes and fingerprints must match miners' x86 machines, and Go fuses FMA on
 arm64.
@@ -55,6 +56,18 @@ arm64.
 | `screener-burst-n2d` | n2d-standard-8 | m6a.2xlarge |
 | `screener-on-demand` | c3d-highcpu-8 | c7a.2xlarge |
 | `prod-64gb` | e2-standard-16 | m6i.4xlarge |
+
+### AWS-only sizes
+
+A size whose class has no comparable machine on the other provider is not
+mapped to a near miss. It is listed here, mapped only in `aws/locals.tf`, and
+rejected by a validation on `size` in `gcp/variables.tf`, so a GCP plan fails
+with an explicit error rather than a warning. Moving such a host to GCP needs a
+new logical size, not a remap.
+
+| Logical size | AWS | Why not on GCP |
+|---|---|---|
+| `gpu-l40s` | g6e.xlarge (1x L40S 48 GB, 4 vCPU, 32 GiB) | GCE offers no L40S; L4 (24 GB) and A100 (40/80 GB) differ in memory and throughput, which changes what the CPM scorer can load and how long a run takes. |
 
 ## Provider differences
 

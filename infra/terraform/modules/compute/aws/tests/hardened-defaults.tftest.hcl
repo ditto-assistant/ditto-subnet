@@ -116,6 +116,27 @@ run "on_demand_screener_size" {
   }
 }
 
+run "gpu_l40s_size" {
+  command = plan
+  variables {
+    size  = "gpu-l40s"
+    image = "ubuntu-24"
+  }
+
+  assert {
+    condition     = aws_instance.this.instance_type == "g6e.xlarge"
+    error_message = "gpu-l40s maps to the x86 g6e.xlarge class (one L40S 48 GB)."
+  }
+  assert {
+    condition     = length(aws_instance.this.credit_specification) == 0
+    error_message = "The GPU class is not burstable."
+  }
+  assert {
+    condition     = aws_instance.this.metadata_options[0].http_tokens == "required" && aws_instance.this.root_block_device[0].encrypted
+    error_message = "The GPU class keeps IMDSv2 and an encrypted root volume."
+  }
+}
+
 run "unsupported_shutdown_behavior_fails" {
   command = plan
   variables {

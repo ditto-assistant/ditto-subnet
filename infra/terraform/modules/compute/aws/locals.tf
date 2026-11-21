@@ -1,6 +1,7 @@
 locals {
   # Logical -> native EC2 instance type. Keep every key in step with
-  # ../gcp/locals.tf; the shared table is in ../interface.md. Every class is
+  # ../gcp/locals.tf, except the AWS-only sizes ../interface.md lists (which
+  # ../gcp/variables.tf rejects); the shared table is in ../interface.md. Every class is
   # x86_64: generator output bytes and fingerprints must match miners' x86
   # machines, and Go fuses FMA on arm64, so Graviton is deliberately absent.
   instance_type_map = {
@@ -29,6 +30,12 @@ locals {
     # stopped state. AMD Genoa, one physical core per vCPU (no SMT), so cargo
     # builds get dedicated cores; 16 GiB fits one worker process and its build.
     "screener-on-demand" = "c7a.2xlarge" # 8 vCPU / 16 GiB
+
+    # AWS-only (../interface.md "AWS-only sizes"): GCP has no L40S, and its
+    # nearest classes (L4 24 GB, A100 40/80 GB) differ in memory and speed, so
+    # ../gcp rejects this size instead of mapping it. The CPM scorer's GPU host:
+    # one NVIDIA L40S 48 GB, 4 vCPU (AMD EPYC), 32 GiB.
+    "gpu-l40s" = "g6e.xlarge"
   }
 
   # Logical -> SSM public parameter that resolves the newest official x86_64
