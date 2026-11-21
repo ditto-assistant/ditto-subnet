@@ -127,6 +127,42 @@ run "rejects_a_small_root_volume" {
   expect_failures = [var.boot_disk_gb]
 }
 
+# Both values are rendered into the root first-boot script, so shell syntax in
+# either must fail at plan instead of reaching the instance.
+run "rejects_shell_syntax_in_the_ssm_agent_version" {
+  command = plan
+  variables {
+    ssm_agent_version = "3.3.5538.0'; touch /tmp/pwned; '"
+  }
+
+  expect_failures = [var.ssm_agent_version]
+}
+
+run "rejects_a_non_numeric_ssm_agent_version" {
+  command = plan
+  variables {
+    ssm_agent_version = "latest"
+  }
+
+  expect_failures = [var.ssm_agent_version]
+}
+
+run "rejects_shell_syntax_in_the_region" {
+  command = plan
+  variables {
+    region = "us-east-1\"; touch /tmp/pwned; \""
+  }
+
+  expect_failures = [var.region]
+}
+
+run "accepts_other_region_shapes" {
+  command = plan
+  variables {
+    region = "us-gov-west-1"
+  }
+}
+
 # The instance the root asks for, planned through the shared module with the
 # root's exact inputs: the module's resources are not addressable from a root
 # run, so this run tests the module directly.

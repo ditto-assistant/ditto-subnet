@@ -8,6 +8,13 @@ variable "region" {
   description = "AWS region. Must match the backend and the Ansible aws_ec2 inventory."
   type        = string
   default     = "us-east-1"
+
+  # Rendered into the root first-boot script (user-data.sh.tftpl), so only an
+  # AWS region name's shell-safe shape is accepted.
+  validation {
+    condition     = can(regex("^[a-z]{2}(-[a-z]+)+-[0-9]+$", var.region))
+    error_message = "region must be an AWS region name such as us-east-1; it is interpolated into the first-boot script."
+  }
 }
 
 variable "enable_cpm_scorer" {
@@ -67,6 +74,13 @@ variable "ssm_agent_version" {
   description = "Exact amazon-ssm-agent release installed at first boot. It replaces the snap-packaged agent Canonical's AMI ships, which tracks the snap store instead of a pinned release."
   type        = string
   default     = "3.3.5538.0"
+
+  # Rendered into the root first-boot script inside single quotes, so only a
+  # dotted numeric release number is accepted.
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$", var.ssm_agent_version))
+    error_message = "ssm_agent_version must be an amazon-ssm-agent release number such as 3.3.5538.0; it is interpolated into the first-boot script."
+  }
 }
 
 variable "ssm_agent_sha256" {
