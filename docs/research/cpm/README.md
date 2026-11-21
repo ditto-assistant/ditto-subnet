@@ -85,3 +85,5 @@ whole seeds for validation and test.
 - [competition-v1.md](competition-v1.md): the v1 build contract.
 - [bittensor-compute.md](bittensor-compute.md): proposal to run the scorer on
   Bittensor GPU subnets (Lium first) beside the AWS lane.
+- [open-questions.md](open-questions.md): open questions for ML review
+  (train-on-test within a season, noise, copying, metric, determinism).
