@@ -317,16 +317,29 @@ def _unsolved_score(work: dict[str, Any], miner_columns: set[str]) -> dict[str, 
 
 
 async def _book_oracle_chat(
-    maker: Any, job: dict[str, Any], *, completed: int, failed: dict[str, int]
+    maker: Any,
+    job: dict[str, Any],
+    *,
+    completed: int,
+    failed: dict[str, int],
+    started_at: datetime | None = None,
 ) -> None:
     """Record chat calls on the grant of ``job``'s oracle lease, as the
     inference proxy would while the oracle harness runs. The lane stubs
-    ``ensure_inference_grant``, so the grant row is written here, on the
-    lease's exact ticket key."""
+    ``ensure_inference_grant``, so the grant row is written here (once), on
+    the lease's exact ticket key. ``started_at`` backdates the calls."""
     deadline = datetime.fromisoformat(job["deadline"])
     now = datetime.now(UTC)
+    started_at = started_at or now
     async with maker() as session, session.begin():
-        grant = InferenceGrant(
+        existing = await session.scalar(
+            select(InferenceGrant).where(
+                InferenceGrant.agent_id == UUID(job["agent_id"]),
+                InferenceGrant.validator_hotkey == _VALIDATOR.ss58_address,
+                InferenceGrant.ticket_deadline == deadline,
+            )
+        )
+        grant = existing or InferenceGrant(
             grant_id=uuid4(),
             agent_id=UUID(job["agent_id"]),
             bench_version=int(job["bench_version"]),
@@ -359,8 +372,9 @@ async def _book_oracle_chat(
             created_at=now,
             updated_at=now,
         )
-        session.add(grant)
-        await session.flush()
+        if existing is None:
+            session.add(grant)
+            await session.flush()
         outcomes = [("completed", None)] * completed + [
             ("failed", code) for code, count in failed.items() for _ in range(count)
         ]
@@ -375,8 +389,8 @@ async def _book_oracle_chat(
                     model="openai/gpt-oss-20b",
                     reserved_tokens=16,
                     terminal_error_code=code,
-                    started_at=now,
-                    completed_at=now,
+                    started_at=started_at,
+                    completed_at=started_at,
                 )
             )
 
@@ -936,6 +950,41 @@ class TestFrontierOracleLeases:
         # A healthy retry on its own grant attests as usual.
         await _book_oracle_chat(session_maker, retry, completed=4, failed={})
         await lane.report_oracle(retry, set(lane.candidates))
+        assert (await lane.frontier(round_index))["state"] == STATE_AUDIT_PENDING
+
+    async def test_only_the_current_attempts_calls_can_refuse_a_run(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A grant is minted per lease, but the refusal must not lean on that:
+        # calls started before this attempt was issued (a reused grant's
+        # earlier run) never count against the run reporting now.
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        async with session_maker() as session:
+            attempt = await session.scalar(
+                select(GeneratorRoundAttempt).where(
+                    GeneratorRoundAttempt.round_index == round_index,
+                    GeneratorRoundAttempt.kind == "oracle",
+                )
+            )
+            assert attempt is not None
+            issued_at = attempt.issued_at
+        await _book_oracle_chat(
+            session_maker,
+            job,
+            completed=0,
+            failed={"provider_context_length_exceeded": 20},
+            started_at=issued_at - timedelta(minutes=10),
+        )
+        await _book_oracle_chat(session_maker, job, completed=4, failed={})
+        # 20 of 24 calls on the grant failed, but none in this attempt.
+        await lane.report_oracle(job, set(lane.candidates))
         assert (await lane.frontier(round_index))["state"] == STATE_AUDIT_PENDING
 
     async def test_an_oracle_with_a_few_failed_calls_still_reports(

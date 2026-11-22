@@ -659,12 +659,15 @@ def oracle_inference_refusal(outage: GrantOutage | None) -> str | None:
 
 
 async def oracle_lease_inference_refusal(
-    session: AsyncSession, ticket: ValidatorTicket
+    session: AsyncSession, ticket: ValidatorTicket, *, since: datetime
 ) -> str | None:
     """:func:`oracle_inference_refusal` for the grant of ``ticket``'s lease.
 
     The grant is resolved on the ``inference_grants_ticket_lease`` key, so it
-    is exactly this run's, never a neighbouring lease's. Read-only."""
+    is exactly this run's, never a neighbouring lease's. Only calls started at
+    or after ``since`` (the attempt's ``issued_at``) count. A grant is minted
+    per lease, and this keeps a reused grant's earlier calls from ever
+    counting against a later run. Read-only."""
     deadline = ticket.deadline
     if deadline.tzinfo is None:
         deadline = deadline.replace(tzinfo=UTC)
@@ -678,7 +681,9 @@ async def oracle_lease_inference_refusal(
     )
     if grant_id is None:
         return None
-    return oracle_inference_refusal(await grant_outage(session, grant_id))
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+    return oracle_inference_refusal(await grant_outage(session, grant_id, since=since))
 
 
 def _columns_of(case_ids: Iterable[str]) -> dict[str, list[str]]:

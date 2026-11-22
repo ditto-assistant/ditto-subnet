@@ -821,7 +821,9 @@ async def submit_generator_round_score(
             # Read before the grant is revoked: an oracle whose model calls
             # were refused upstream answered nothing, and its 0.0 scores
             # would settle the round as if every candidate beat it (SN-496).
-            refusal = await oracle_lease_inference_refusal(session, ticket)
+            refusal = await oracle_lease_inference_refusal(
+                session, ticket, since=attempt.issued_at
+            )
             if refusal is not None:
                 logger.warning(
                     "generator round oracle result refused round=%s agent=%s "
