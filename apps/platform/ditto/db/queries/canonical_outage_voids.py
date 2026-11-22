@@ -114,10 +114,16 @@ class OutageWindow:
     ended_at: datetime
 
 
-async def grant_outage(session: AsyncSession, grant_id: UUID) -> GrantOutage:
-    """Chat-call outcome counts on one grant (PK-prefix read)."""
+async def grant_outage(
+    session: AsyncSession, grant_id: UUID, *, since: datetime | None = None
+) -> GrantOutage:
+    """Chat-call outcome counts on one grant (PK-prefix read).
+
+    ``since`` counts only calls started at or after it: the frontier oracle
+    gate scopes the count to its current attempt (SN-496)."""
     chat = failed = 0
     codes: Counter[str] = Counter()
+    window = () if since is None else (InferenceRequest.started_at >= since,)
     for status, code, count in await session.execute(
         select(
             InferenceRequest.status,
@@ -127,6 +133,7 @@ async def grant_outage(session: AsyncSession, grant_id: UUID) -> GrantOutage:
         .where(
             InferenceRequest.grant_id == grant_id,
             InferenceRequest.request_kind == "chat",
+            *window,
         )
         .group_by(InferenceRequest.status, InferenceRequest.terminal_error_code)
     ):

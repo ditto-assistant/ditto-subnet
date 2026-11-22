@@ -74,6 +74,7 @@ from ditto.api_server.generator_frontier import (
     note_oracle_lease,
     oracle_capable,
     oracle_column_cases,
+    oracle_lease_inference_refusal,
     oracle_round,
     oracle_run_agent,
     oracle_run_cases,
@@ -817,6 +818,22 @@ async def submit_generator_round_score(
             )
             if attempt is None or attempt.kind != "oracle":
                 raise HTTPException(409, "oracle lease is not open")
+            # Read before the grant is revoked: an oracle whose model calls
+            # were refused upstream answered nothing, and its 0.0 scores
+            # would settle the round as if every candidate beat it (SN-496).
+            refusal = await oracle_lease_inference_refusal(
+                session, ticket, since=attempt.issued_at
+            )
+            if refusal is not None:
+                logger.warning(
+                    "generator round oracle result refused round=%s agent=%s "
+                    "validator=%s: %s",
+                    payload.round_index,
+                    agent_id,
+                    payload.validator_hotkey,
+                    refusal,
+                )
+                raise HTTPException(422, refusal)
             try:
                 record_oracle_results(
                     row,
