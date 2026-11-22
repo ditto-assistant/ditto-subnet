@@ -2348,6 +2348,26 @@ def test_an_oracle_grant_serves_the_oracle_model_whatever_the_harness_asks() -> 
     assert upstream["reasoning"] == {"effort": "medium", "exclude": True}
 
 
+def test_every_go_pin_of_the_oracle_model_names_the_platform_one() -> None:
+    """The oracle model is pinned in three places: Platform (grants and
+    reasoning), dittobench-api (the scorer's oracle route) and model-relay
+    (the inference plane's reasoning contract). They must name one model, or
+    an oracle grant is refused by the scorer or loses its reasoning pin."""
+    root = Path(__file__).parents[6]
+    pins = {
+        "services/dittobench-api/internal/llm/llm.go": (
+            r'FrontierOracleModel\s*=\s*"([^"]+)"'
+        ),
+        "services/model-relay/internal/inference/schema.go": (
+            r'frontierOracleModel\s*=\s*"([^"]+)"'
+        ),
+    }
+    for path, pattern in pins.items():
+        match = re.search(pattern, (root / path).read_text())
+        assert match is not None, path
+        assert match.group(1) == FRONTIER_ORACLE_MODEL, path
+
+
 def test_v7_grant_without_a_pinned_model_fails_closed() -> None:
     grant = _FakeGrant(bench_version=7, allowed_models=[])
     with pytest.raises(HTTPException) as excinfo:
