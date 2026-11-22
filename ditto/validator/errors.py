@@ -116,10 +116,11 @@ class LeaseRevokedError(ValidatorError):
 
 
 class SandboxOomError(DittobenchError):
-    """The harness reached its own published memory cap on a healthy host.
+    """The harness reached its own memory cap: a failed agent run.
 
-    Raised only for the scorer's ``harness_oom`` verdict (OOM kill, cgroup peak
-    at the cap, host MemAvailable above the published floor). An artifact-
+    Raised only for the scorer's ``harness_oom`` verdict: an OOM kill proven by
+    the harness cgroup's own ``memory.events`` ``oom``, or a peak at the cap
+    while host MemAvailable stayed above the published floor. An artifact-
     specific terminal outcome, not evidence that the validator's shared
     infrastructure is unhealthy: the worker hands the lease back as
     ``sandbox_oom`` with detail ``harness_oom`` and continues with another

@@ -527,9 +527,10 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
     # as this code with no cap or host evidence. It stays no-fault.
     "sandbox_oom",
     "sandbox_tmpfs_exhausted",
-    # An OOM kill the evidence cannot pin on the harness's own cap: the cgroup
-    # stayed below its limit, or host MemAvailable fell under the published
-    # floor before the kill. docs/RUNTIME-ENVELOPE.md publishes the rule.
+    # An OOM kill the evidence cannot pin on the harness's own cap: its cgroup
+    # never recorded an ``oom``, and its peak stayed below the cap or host
+    # MemAvailable fell under the published floor before the kill. Genuine
+    # validator infrastructure, retried. docs/RUNTIME-ENVELOPE.md publishes it.
     "host_memory_pressure",
     # A SIGKILL (exit 137) with no OOM flag. Nothing proves who sent it, so the
     # attempt is no-fault; Platform counts a repeat on a second validator as
@@ -693,10 +694,12 @@ _AGENT_ATTRIBUTABLE_INFERENCE_CODES = frozenset(
     }
 )
 
-# The one sandbox resource verdict that is the agent's: an OOM kill at the
-# harness's own published cap while the host kept headroom. The scorer sends it
-# as terminal ``sandbox_failure`` / ``retryable: false`` so the wire kind matches
-# the charge; it reaches Platform as ``sandbox_oom`` with this detail.
+# The one sandbox resource verdict that is the agent's, as a failed run and
+# never an infra retry: an OOM kill at the harness's own cap -- proven by its
+# cgroup's memory.events ``oom``, or a peak at the cap while the host kept
+# headroom. The scorer sends it as terminal ``sandbox_failure`` /
+# ``retryable: false`` so the wire kind matches the charge; it reaches Platform
+# as ``sandbox_oom`` with this detail.
 _HARNESS_OOM = "harness_oom"
 
 assert not (_AGENT_ATTRIBUTABLE_INFERENCE_CODES & _SANDBOX_INFRASTRUCTURE_CODES)

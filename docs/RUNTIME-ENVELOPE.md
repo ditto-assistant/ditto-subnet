@@ -31,7 +31,7 @@ stamp is absent.
 
 | Dimension | Limit | Notes |
 |---|---|---|
-| Memory | **8192 MiB** (live) | `--memory`, with `--memory-swap` set equal, so no swap. Files in `/tmp` are tmpfs pages and count against this cap |
+| Memory | **863 MiB** (live) | `--memory`, with `--memory-swap` set equal, so no swap. Files in `/tmp` are tmpfs pages and count against this cap: a full 512 MiB `/tmp` leaves 351 MiB for everything else |
 | CPU | 2 | `--cpus 2` |
 | PIDs | 512 | Fork-bomb bound |
 | `/tmp` | 512 MiB tmpfs, `noexec` | The only writable path. The root filesystem is read-only |
@@ -52,6 +52,13 @@ The scorer applies the envelope's 64 MiB peak tolerance and 1024 MiB host
 floor when it judges an OOM kill. Validators hold back a 1024 MiB host
 reserve (`VALIDATOR_HOST_MEMORY_RESERVE_MIB`) from harness caps.
 
+The memory cap was lowered from 8192 MiB to 863 MiB (SN-488): the highest cap
+at which the smallest validator host in the fleet (7,934 MiB) admits all 8
+configured slots, so every host can run full concurrency. Keep harnesses
+lightweight: an out-of-memory kill at your own cap is a failed run. Platform
+stamps the live value on every lease, so a lease issued before the operator
+switches the live setting still runs at the cap it was issued with.
+
 ## Who pays for a resource failure
 
 The scorer decides from physical evidence alone, before it removes the
@@ -61,8 +68,8 @@ samples taken before the kernel removes a killed cgroup are still available.
 
 | Code | Charged to | Rule |
 |---|---|---|
-| `harness_oom` | **Agent** (attempt consumed, 6 h cooldown) | Three conditions must all hold. (1) The kernel recorded an OOM kill: `OOMKilled`, or `memory.events` `oom_kill > 0`. (2) The harness reached its own cap: `memory.events` `oom > 0`, or `memory.peak` ≥ cap − 64 MiB. (3) The lowest host `MemAvailable` in the samples before the kill stayed above 1024 MiB. Sent as terminal `sandbox_failure`, so the wire kind matches the charge |
-| `host_memory_pressure` | Validator (no fault; slot blocked 10 min) | An OOM kill where condition 2 or 3 fails, or the evidence is missing |
+| `harness_oom` | **Agent**: a failed agent run (attempt consumed, 6 h cooldown), never retried as infrastructure | The kernel recorded an OOM kill (`OOMKilled`, or `memory.events` `oom_kill > 0`) and one of two proofs holds. **Proven:** `memory.events` counted an `oom`, which the kernel records only when the harness's own cgroup reached its own cap. How much memory the host had left does not matter. **Inferred:** `memory.peak` ≥ cap − 64 MiB, and the lowest host `MemAvailable` in the samples before the kill stayed above 1024 MiB. Sent as terminal `sandbox_failure`, so the wire kind matches the charge |
+| `host_memory_pressure` | Validator (no fault; retried; slot blocked 10 min) | An OOM kill with neither proof: the harness's own cgroup never reached its cap, and its peak was below the cap or the host was short of memory (or unobserved) at the kill. This is the host's OOM killer, not the harness's cap |
 | `harness_killed_137` | Validator on the first validator. Agent if a second validator reports the same | Exit 137 (SIGKILL) with no OOM flag. Nothing shows who sent the signal. It never overrides a verdict the scored path already reached |
 | `sandbox_tmpfs_exhausted` | Validator (no fault) | `/tmp` reached its declared size |
 | `inference_allowance_exhausted` | Agent | The harness spent its request or token wall |
@@ -88,18 +95,18 @@ host's only healthy slot: the reservation is sized against
 `min(allowed, healthy) − 1`, so a one-slot host serves ordinary work and keeps
 the canonical quorum at three distinct validators.
 
-With the 8192 MiB cap and the 1024 MiB reserve:
+Running `N` slots takes at least `N × cap + reserve` of host memory. One slot
+needs `cap + 1024`. With the 863 MiB cap and the 1024 MiB reserve:
 
-| Host RAM | Slots |
+| Slots | Host memory needed |
 |---|---|
-| 8 GiB | 0 |
-| 16 GiB | 1 |
-| 32 GiB | 3 |
-| 64 GiB | 7 |
+| 1 | 1,887 MiB |
+| 4 | 4,476 MiB |
+| 8 | 7,928 MiB |
 
-Running `N` slots takes at least `N × cap + reserve` of host memory: 66,560 MiB
-for 8 slots at the 8192 MiB cap. A nominal 64 GiB host reports about 64,085 MiB,
-so it runs 7. One slot needs `cap + 1024` (9,216 MiB at 8192).
+A nominal 8 GiB host reports about 7,934 MiB, so it admits all 8. The operator's
+per-validator slot cap (Backroom slot settings) is a separate limit, and
+dispatch funds the smaller of the two.
 
 The worker logs the narrowing on every change, with the memory it would need
 for one slot (when none fit) and for every configured slot. A host that fits no

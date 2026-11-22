@@ -58,7 +58,7 @@ AGENT_ATTRIBUTABLE_FAILURE_DETAILS = frozenset(
         "inference_allowance_exhausted",
         "inference_request_rejected",
         "model_inference_required",
-        # OOM kill at the harness's own published cap on a host with headroom.
+        # OOM kill at the harness's own memory cap (docs/RUNTIME-ENVELOPE.md).
         "harness_oom",
     }
 )
