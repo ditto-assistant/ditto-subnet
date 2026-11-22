@@ -13,6 +13,8 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server.ath_review_queue_slo_config import (
+    ATH_REVIEW_QUEUE_MAX_AGE_THRESHOLD_ENV,
+    ATH_REVIEW_QUEUE_P95_AGE_THRESHOLD_ENV,
     COPY_REVIEW_QUEUE_MAX_AGE_THRESHOLD_ENV,
     DEFAULT_ATH_THRESHOLDS,
     DEFAULT_CLASS_THRESHOLDS,
@@ -114,6 +116,11 @@ class TestConfig:
     ) -> None:
         # SN-499: every class used to report null, which hid a ten-day copy
         # hold and a 128-day overfit escalation.
+        for name in (
+            ATH_REVIEW_QUEUE_MAX_AGE_THRESHOLD_ENV,
+            ATH_REVIEW_QUEUE_P95_AGE_THRESHOLD_ENV,
+        ):
+            monkeypatch.delenv(name, raising=False)
         for queue_class in ATH_QUEUE_CLASSES:
             for name in class_threshold_env_names(queue_class):
                 monkeypatch.delenv(name, raising=False)
