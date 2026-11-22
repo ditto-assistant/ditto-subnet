@@ -726,7 +726,7 @@ then scored 0.0 without faulting.
   scorer advertises `generator-frontier-oracle-model:<model>`, and the
   validator forwards that as `generator_frontier_oracle_models`.
 - **Platform.** Each round freezes the model into its frontier lane when it
-  scores (the lane's `oracle_model`). An oracle job on a
+  scores (`oracle_model` in the round's frontier view). An oracle job on a
   pinned model is leased only to a validator that advertises the model, on a
   grant minted on that model. Platform's inference `allowed_models` must
   include the model. Its discovery loop then creates the model's aggregate

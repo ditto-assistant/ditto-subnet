@@ -1187,6 +1187,9 @@ class TestFrontierOracleModel:
             await self._frozen_model(session_maker, round_index)
             == FRONTIER_ORACLE_MODEL
         )
+        # The round's frontier view reports it.
+        frontier = await lane.frontier(round_index)
+        assert frontier["oracle_model"] == FRONTIER_ORACLE_MODEL
         # The run reports exactly as before.
         await lane.report_oracle(job, set(lane.candidates))
         assert (await lane.frontier(round_index))["state"] == STATE_AUDIT_PENDING
@@ -1211,6 +1214,7 @@ class TestFrontierOracleModel:
         await lane.lease_oracle()
         assert models == [None]
         assert await self._frozen_model(session_maker, round_index) is None
+        assert (await lane.frontier(round_index))["oracle_model"] is None
 
     async def test_a_settings_change_never_moves_an_open_lane(
         self,
@@ -1234,6 +1238,7 @@ class TestFrontierOracleModel:
         await lane.lease_oracle()
         assert models == [None]
         assert await self._frozen_model(session_maker, round_index) is None
+        assert (await lane.frontier(round_index))["oracle_model"] is None
 
 
 def test_the_oracle_model_needs_a_lane_that_froze_it_and_bench_v9() -> None:

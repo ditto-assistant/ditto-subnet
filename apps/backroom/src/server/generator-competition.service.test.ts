@@ -918,7 +918,8 @@ describe('generator competition MCP tools', () => {
       reason: null, actor: null, ruled_at: null, audit_deadline: '2026-11-10T10:00:00Z',
     }
     const frontier = {
-      round_index: 7, state: 'audit_pending', oracle_agent_id: AGENT, frontier_weight: 1, audit_cases: 2,
+      round_index: 7, state: 'audit_pending', oracle_agent_id: AGENT, oracle_model: 'z-ai/glm-5.3-flash',
+      frontier_weight: 1, audit_cases: 2,
       candidates: ['c1/k0', 'c1/k2', 'c1/k5'], oracle_attempts: 1, oracle_deadline: null,
       oracle: {
         validator_hotkey: '5Validator', run_id: 'run-o', recorded_at: '2026-11-09T10:00:00Z',
@@ -966,7 +967,10 @@ describe('generator competition MCP tools', () => {
         })
       expect(calls[0][1]).toBe('/api/v1/admin/generator-competition/frontier/audits?include_ruled=false&limit=50&offset=0')
       expect(json(await reader.client.callTool({ name: 'get_generator_round_frontier', arguments: { roundIndex: 7 } })))
-        .toMatchObject({ state: 'audit_pending', attested: { c1: ['c1/k2', 'c1/k5'] }, oracle: { passed: 2 } })
+        .toMatchObject({
+          state: 'audit_pending', oracle_model: 'z-ai/glm-5.3-flash',
+          attested: { c1: ['c1/k2', 'c1/k5'] }, oracle: { passed: 2 },
+        })
       // Case content is private benchmark content: artifact scope only.
       const noArtifact = await reader.client.callTool({ name: 'get_generator_frontier_audit', arguments: { roundIndex: 7, columnId: 'c1' } })
       expect(noArtifact.isError).toBe(true)

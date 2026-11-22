@@ -827,6 +827,10 @@ class GeneratorFrontierView(RoundModel):
     round_index: int
     state: FrontierState
     oracle_agent_id: UUID
+    oracle_model: str | None = None
+    """The model the oracle and escalation runs answer on, frozen from the
+    round's ``frontier_oracle_model``; null runs them on the bench contract's
+    harness model."""
     frontier_weight: float
     audit_cases: int
     candidates: list[str]
