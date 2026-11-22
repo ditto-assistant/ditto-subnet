@@ -60,28 +60,28 @@ _SN488_HOSTS = {
 _CONFIGURED_SLOTS = 8
 
 
-def test_published_cap_is_the_sn488_fleet_cap() -> None:
-    assert runtime_envelope().memory_limit_mib == 863
+def test_published_cap_is_the_live_sn488_cap() -> None:
+    """The published envelope matches the live cap Peyton set on 2026-11-22."""
+    assert runtime_envelope().memory_limit_mib == 2048
     assert runtime_envelope().host_memory_reserve_mib == 1024
 
 
-def test_published_cap_admits_every_configured_slot_on_the_current_fleet() -> None:
-    """863 MiB fills all 40 configured slots before any operator slot cap."""
+def test_published_cap_admits_33_of_the_40_advertised_slots() -> None:
+    """8 per validator, 40 advertised by 5 validators, 33 memory-admitted."""
     envelope = runtime_envelope()
     cap = envelope.memory_limit_mib
     admitted = {
         hotkey: min(_CONFIGURED_SLOTS, envelope.memory_admitted_slots(mib, cap))
         for hotkey, mib in _SN488_HOSTS.items()
     }
-    assert admitted == dict.fromkeys(_SN488_HOSTS, 8)
-    assert sum(admitted.values()) == 40
-    # The tightest host has 6 MiB to spare: 8 x 863 + 1024 = 7928 <= 7934.
-    assert envelope.host_memory_required_mib(8, cap) == 7928
-    assert envelope.host_memory_required_mib(1, cap) == 1887
-
-
-def test_863_is_the_highest_cap_that_fills_the_tightest_host() -> None:
-    envelope = runtime_envelope()
-    tightest = min(_SN488_HOSTS.values())
-    assert envelope.memory_admitted_slots(tightest, 863) == 8
-    assert envelope.memory_admitted_slots(tightest, 864) == 7
+    assert admitted == {
+        "5CFtzzb4": 7,
+        "5Cg3DiRf": 3,
+        "5CqJAjSj": 7,
+        "5HEouuDa": 8,
+        "5HT9U1J8": 8,
+    }
+    assert _CONFIGURED_SLOTS * len(_SN488_HOSTS) == 40
+    assert sum(admitted.values()) == 33
+    assert envelope.host_memory_required_mib(8, cap) == 17408
+    assert envelope.host_memory_required_mib(1, cap) == 3072

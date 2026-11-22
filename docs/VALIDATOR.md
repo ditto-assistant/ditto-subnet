@@ -150,7 +150,7 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_DISK_PERCENT_CEILING` | Stop claiming tickets at or above this disk usage (default `95`). `0` disables; otherwise a multiple of 5 in `[50, 100]`. |
 | `VALIDATOR_MEMORY_PERCENT_CEILING` | Same, for memory (default `95`). |
 | `VALIDATOR_CPU_PERCENT_CEILING` | Same, for CPU. Defaults to `0` (disabled) -- a pinned CPU is a working benchmark host, not a failing one. |
-| `VALIDATOR_HOST_MEMORY_RESERVE_MIB` | Host memory held back from harness caps (default `1024`). The worker offers at most `(host RAM - reserve) // live harness cap` benchmark slots, and always at least one when the host has the cap plus 1 GiB. At the published 863 MiB cap, 8 slots (the per-validator maximum) need 7,928 MiB, so memory admits all 8 on any host from a nominal 8 GiB up; the operator's per-validator slot cap still applies. The cap in force is `sandbox_memory_limit_mib` on `GET /api/v1/public/validators`. Platform never lets the generator-round reservation take a host's only healthy slot. See [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md). |
+| `VALIDATOR_HOST_MEMORY_RESERVE_MIB` | Host memory held back from harness caps (default `1024`). The worker offers at most `(host RAM - reserve) // live harness cap` benchmark slots, and always at least one when the host has the cap plus 1 GiB. At the 2048 MiB cap, 8 slots (the per-validator maximum) need 17,408 MiB: a nominal 8 GiB host admits 3, 16 GiB admits 7, and 32 GiB or more admits all 8; the operator's per-validator slot cap still applies. The cap in force is `sandbox_memory_limit_mib` on `GET /api/v1/public/validators`. Platform never lets the generator-round reservation take a host's only healthy slot. See [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md). |
 | `DITTOBENCH_REQUIRE_TICKET_INFERENCE` | Keep `true`; v7/v8 scoring fails closed without a ticket session. |
 | `VALIDATOR_INFERENCE_PROXY_REQUIRED` | Keep `true`; the validator must not claim work without the platform proxy. |
 
@@ -393,7 +393,9 @@ to be visible.
   without charging the miner. Fix the resource issue (usually too many slots for
   the host's RAM; see `VALIDATOR_HOST_MEMORY_RESERVE_MIB`), then ask the Ditto
   team for the audited single-agent retry; never bulk retry or alter accepted
-  scores. Only `harness_oom` is charged to the miner, as a failed agent run.
+  scores. Only `harness_oom` is charged to the miner, as a failed agent run,
+  and only on leases issued from 2026-11-25 12:00 America/Toronto (earlier
+  ones are parked as no-fault `harness_oom_grace`).
   That is an OOM kill proven at the harness's own cgroup cap (`memory.events`
   `oom`), or a peak at its cap while the host kept headroom. The rules are in
   [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md).

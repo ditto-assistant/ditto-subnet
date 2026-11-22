@@ -110,12 +110,13 @@ Coding remains shadow-only and score-ineligible today; see
 [`coding-unified-miner-capability-shadow.md`](coding-unified-miner-capability-shadow.md)
 for the planned compatibility boundary.
 
-Your harness runs inside a fixed resource envelope: an 863 MiB memory cap
+Your harness runs inside a fixed resource envelope: a 2048 MiB memory cap
 (including `/tmp`; the cap in force is `sandbox_memory_limit_mib` on
 `GET /api/v1/public/validators`), 2 CPUs, PID and `/tmp` limits, `/seed` and per-case
-deadlines, 8 overlapping `/run` calls, and the inference walls. An
-out-of-memory kill at your own cap is a failed run: it consumes the attempt
-and starts the cooldown, so keep the harness lightweight.
+deadlines, 8 overlapping `/run` calls, and the inference walls. From
+leases issued at Wed 2026-11-25 12:00 America/Toronto, an out-of-memory kill
+at your own cap is a failed run: it consumes the attempt and starts the
+cooldown. Keep the harness lightweight.
 [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md) lists every limit and the exact OOM
 rule. `ditto practice` runs at the same case concurrency and reports your peak
 memory against the cap.

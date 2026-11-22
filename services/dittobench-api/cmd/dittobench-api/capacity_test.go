@@ -140,7 +140,7 @@ func TestFinishSandboxRunChargesProvenOwnCapOOMWhateverTheHost(t *testing.T) {
 			OOMKilled:                true,
 			ExitCode:                 137,
 			MemoryEvents:             map[string]uint64{"oom": 3, "oom_kill": 1},
-			MemoryLimitBytes:         pointer(uint64(863 << 20)),
+			MemoryLimitBytes:         pointer(uint64(2048 << 20)),
 			HostMemAvailableMinBytes: host,
 		}}
 		s := &server{store: store.New(), sandbox: backend}

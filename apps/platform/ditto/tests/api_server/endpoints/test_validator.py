@@ -47,6 +47,7 @@ from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
     confirmation_progress_signing_token,
 )
+from ditto.api_models.public import public_validation_failure_code
 from ditto.api_models.queue_policy_settings import (
     DeferredSourceReviewSettings,
     PrevGenCarryoverSettings,
@@ -85,7 +86,7 @@ from ditto.api_models.validator_weights_fold import (
     WeightsFold,
     weights_fold_signing_token,
 )
-from ditto.api_server import validator_request_outcomes
+from ditto.api_server import harness_oom_policy, validator_request_outcomes
 from ditto.api_server.config import ValidatorCompatibilityConfig
 from ditto.api_server.dependencies import (
     get_chain_client,
@@ -5931,7 +5932,14 @@ class TestFailJob:
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        # The charge is live for this lease (SN-488 effective time passed).
+        monkeypatch.setattr(
+            harness_oom_policy,
+            "HARNESS_OOM_CHARGE_EFFECTIVE_AT",
+            datetime.now(UTC) - timedelta(days=1),
+        )
         agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
         await _seed_ticket(session_maker, agent_id)
         _install_db(app, session_maker)
@@ -5983,6 +5991,7 @@ class TestFailJob:
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
         reason: str,
         detail: str,
         agent_fault: bool,
@@ -5996,6 +6005,11 @@ class TestFailJob:
         ``infrastructure``: parked, not the agent's, and on the retry-grant
         path an operator uses for genuine infra.
         """
+        monkeypatch.setattr(
+            harness_oom_policy,
+            "HARNESS_OOM_CHARGE_EFFECTIVE_AT",
+            datetime.now(UTC) - timedelta(days=1),
+        )
         agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
         await _seed_ticket(session_maker, agent_id)
         _install_db(app, session_maker)
@@ -6020,6 +6034,84 @@ class TestFailJob:
             assert is_agent_attributable_failure_detail(ticket.failure_detail) is (
                 agent_fault
             )
+
+    async def test_harness_oom_before_the_effective_time_is_no_fault(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """SN-488 notice period: a proven OOM is parked, never charged, early.
+
+        It is stored as ``infrastructure`` under ``harness_oom_grace``, a
+        detail outside every agent-attributable set, so terminal withdrawal,
+        the stuck list and the public failure code all read it as no-fault.
+        """
+        monkeypatch.setattr(
+            harness_oom_policy,
+            "HARNESS_OOM_CHARGE_EFFECTIVE_AT",
+            datetime.now(UTC) + timedelta(days=1),
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id, reason="sandbox_oom", failure_detail="harness_oom"
+            ),
+        )
+        assert failed.status_code == 200, failed.text
+
+        async with session_maker() as s:
+            ticket = await s.get(
+                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.failure_reason == "infrastructure"
+            assert ticket.failure_detail == "harness_oom_grace"
+            assert not is_agent_attributable_failure_detail(ticket.failure_detail)
+            assert public_validation_failure_code(ticket.failure_detail) is None
+            agent = await s.get(Agent, agent_id)
+            assert agent is not None
+            # Not withdrawn as the agent's terminal failure.
+            assert agent.status == AgentStatus.EVALUATING
+
+    async def test_harness_oom_charge_starts_with_a_lease_issued_at_the_effective_time(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        issued_at = datetime.now(UTC) - timedelta(minutes=5)
+        monkeypatch.setattr(
+            harness_oom_policy, "HARNESS_OOM_CHARGE_EFFECTIVE_AT", issued_at
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id, issued_at=issued_at)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id, reason="sandbox_oom", failure_detail="harness_oom"
+            ),
+        )
+        assert failed.status_code == 200, failed.text
+        async with session_maker() as s:
+            ticket = await s.get(
+                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.failure_reason == "sandbox_oom"
+            assert ticket.failure_detail == "harness_oom"
 
     async def test_infrastructure_failure_does_not_earn_an_automatic_grant(
         self,

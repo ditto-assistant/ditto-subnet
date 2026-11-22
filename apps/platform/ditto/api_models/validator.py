@@ -610,9 +610,11 @@ escalating cooldown, so a validator-side outage neither spends the agent's
 genuine attempt budget nor hammers the failing provider; ``scoring_error`` is
 the agent's own failure and consumes an attempt with an immediate reissue.
 ``sandbox_oom`` with ``failure_detail`` ``harness_oom`` is the harness reaching
-its own memory cap, proven or inferred under docs/RUNTIME-ENVELOPE.md:
-it consumes the failed attempt, records a public-safe telemetry signal, and
-applies the normal agent-failure cooldown so another eligible harness runs next.
+its own memory cap, proven or inferred under docs/RUNTIME-ENVELOPE.md.
+On a lease issued from 2026-11-25 12:00 America/Toronto it consumes the failed
+attempt, records a public-safe telemetry signal, and applies the normal
+agent-failure cooldown so another eligible harness runs next; on an earlier
+lease it is parked as no-fault ``infrastructure`` / ``harness_oom_grace``.
 Any other ``sandbox_oom`` (a validator predating the deterministic rule) is
 parked as ``infrastructure``. ``infrastructure``
 maps to the validator's ``ValidatorInfrastructureError`` sweep-ending branch;
