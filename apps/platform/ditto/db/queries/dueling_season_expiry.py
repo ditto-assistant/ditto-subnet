@@ -79,18 +79,40 @@ class SeasonCoverage:
         return None
 
     @property
+    def split_quorum(self) -> bool:
+        """A full quorum of accepted rows that no window holds (SN-497).
+
+        ``scores`` keeps one current row per validator, so a re-score
+        overwrites the row the ledger counted. When only some validators
+        re-score on a newer season (a rotation re-test the platform closed, or
+        a catch-up that did not finish), or a provisional quorum finishes after
+        its first score aged out, the agent keeps a full set of accepted rows
+        spread across seasons that no two-season window holds together. Those
+        rows are still the agent's valid scores, so it is labelled expired and
+        reconsidered for a re-test instead of disappearing as if it never
+        scored.
+        """
+        return (
+            self.last_valid_window is None
+            and len(self.scores) >= SCORING_QUORUM
+            and self.in_window_count < SCORING_QUORUM
+        )
+
+    @property
     def last_valid_scores(self) -> tuple[SeasonScore, ...]:
-        """The rows the ledger counted in :attr:`last_valid_window`."""
+        """The rows the ledger counted in :attr:`last_valid_window`; for a
+        :attr:`split_quorum`, every accepted row (one per validator)."""
         window = self.last_valid_window
         if window is None:
-            return ()
+            return self.scores if self.split_quorum else ()
         return tuple(row for row in self.scores if row.dueling_season_id in window)
 
     @property
     def expired(self) -> bool:
-        """A full quorum once counted, but the live window no longer holds one."""
-        return (
-            self.in_window_count < SCORING_QUORUM and self.last_valid_window is not None
+        """A full quorum once counted (or a :attr:`split_quorum`), but the
+        live window no longer holds one."""
+        return self.in_window_count < SCORING_QUORUM and (
+            self.last_valid_window is not None or self.split_quorum
         )
 
     @property
@@ -112,7 +134,8 @@ class SeasonCoverage:
         """The ledger's median row (lower middle by composite, then hotkey)
         over :attr:`last_valid_scores` only, so the last valid quorum is the
         rows and arithmetic the ledger used while it counted. A stored row
-        from a season outside that window never shifts it."""
+        from a season outside that window never shifts it. A
+        :attr:`split_quorum` takes the same median over all its rows."""
         rows = self.last_valid_scores
         if not rows:
             return None

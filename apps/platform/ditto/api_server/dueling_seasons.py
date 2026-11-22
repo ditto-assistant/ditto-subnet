@@ -755,7 +755,9 @@ OFF_BOARD_SKIP_REASONS = (
 * ``superseded_rerun``: a newer run of the same artifact by the same owner
   stands for that content (SN-485: the latest run, never the best draw);
 * ``already_retested``: it already had its one off-board catch-up at this
-  bench version (an agent the board does not hold expires after that);
+  bench version (an agent the board does not hold expires after that); a
+  catch-up the platform cut short does not count, up to
+  :data:`MAX_OFF_BOARD_CATCHUP_ATTEMPTS` seasons (SN-497);
 * ``unranked``: its last valid quorum was not a full, positive benchmark."""
 
 MAX_RECORDED_OFF_BOARD_SKIPS = 200
@@ -989,6 +991,116 @@ def _quorum_median(scores: Any, seasons: frozenset[UUID]) -> tuple[float, int] |
     return composite, n
 
 
+MAX_OFF_BOARD_CATCHUP_ATTEMPTS = 3
+"""SN-497: seasons an off-board agent may be queued for a catch-up at one
+bench version. Only a catch-up whose every queued re-score ran (or was already
+current) uses up the agent's one catch-up; one the platform closed before a
+validator re-scored it (a lapsed shared lease, the season ending first) left a
+split quorum through no fault of the agent, so a later boundary may try again,
+up to this many seasons in all. Bounds the spend on an agent a validator
+cannot serve."""
+
+
+async def _off_board_catchups_used(
+    session: AsyncSession, *, agent_ids: list[UUID], bench_version: int
+) -> set[UUID]:
+    """The agents whose one off-board catch-up at ``bench_version`` is spent.
+
+    Spent: some season's catch-up was served in full -- every queued re-score
+    was promoted to a lease and not then closed unscored by the platform, or
+    closed only because its score was already current -- or catch-ups were
+    queued in :data:`MAX_OFF_BOARD_CATCHUP_ATTEMPTS` seasons. A re-score still
+    waiting (never promoted, never released) is pending, not served, so it
+    spends nothing. Two audit reads over the given agents only.
+    """
+    from ditto.db.models import ScoreAuditEntry
+    from ditto.db.queries.audit import (
+        EVENT_SCORE_RETEST_QUEUED,
+        EVENT_SCORE_RETEST_RELEASED,
+        EVENT_SCORE_RETEST_REQUESTED,
+    )
+    from ditto.db.queries.score_retests import (
+        CATCH_UP_SOURCE_OFF_BOARD,
+        DUELING_ROTATION_RETEST_BASIS,
+        ROTATION_ALREADY_CURRENT_REASON,
+    )
+
+    if not agent_ids:
+        return set()
+    queued = (
+        (
+            await session.execute(
+                select(
+                    ScoreAuditEntry.agent_id,
+                    ScoreAuditEntry.payload["dueling_season_id"].as_string(),
+                    ScoreAuditEntry.payload["request_id"].as_string(),
+                ).where(
+                    ScoreAuditEntry.event == EVENT_SCORE_RETEST_QUEUED,
+                    ScoreAuditEntry.agent_id.in_(agent_ids),
+                    ScoreAuditEntry.payload["basis"].as_string()
+                    == DUELING_ROTATION_RETEST_BASIS,
+                    ScoreAuditEntry.payload["catch_up_source"].as_string()
+                    == CATCH_UP_SOURCE_OFF_BOARD,
+                    ScoreAuditEntry.payload["bench_version"].as_integer()
+                    == bench_version,
+                )
+            )
+        )
+        .tuples()
+        .all()
+    )
+    if not queued:
+        return set()
+    request_ids = sorted({request_id for _a, _s, request_id in queued if request_id})
+    promoted: set[str] = set()
+    cut_short: set[str] = set()
+    already_current: set[str] = set()
+    if request_ids:
+        for event, request_id, retest_request_id, reason in (
+            await session.execute(
+                select(
+                    ScoreAuditEntry.event,
+                    ScoreAuditEntry.payload["request_id"].as_string(),
+                    ScoreAuditEntry.payload["retest_request_id"].as_string(),
+                    ScoreAuditEntry.payload["reason"].as_string(),
+                ).where(
+                    ScoreAuditEntry.event.in_(
+                        (EVENT_SCORE_RETEST_REQUESTED, EVENT_SCORE_RETEST_RELEASED)
+                    ),
+                    ScoreAuditEntry.agent_id.in_(
+                        sorted({a for a, _s, _r in queued}, key=str)
+                    ),
+                    or_(
+                        ScoreAuditEntry.payload["request_id"]
+                        .as_string()
+                        .in_(request_ids),
+                        ScoreAuditEntry.payload["retest_request_id"]
+                        .as_string()
+                        .in_(request_ids),
+                    ),
+                )
+            )
+        ).tuples():
+            if event == EVENT_SCORE_RETEST_REQUESTED:
+                promoted.add(str(request_id))
+            elif reason == ROTATION_ALREADY_CURRENT_REASON:
+                already_current.add(str(retest_request_id or request_id))
+            else:
+                cut_short.add(str(retest_request_id or request_id))
+    seasons: dict[UUID, dict[str, bool]] = {}
+    for agent_id, season_id, request_id in queued:
+        served = request_id in already_current or (
+            request_id in promoted and request_id not in cut_short
+        )
+        per_agent = seasons.setdefault(agent_id, {})
+        per_agent[str(season_id)] = per_agent.get(str(season_id), True) and served
+    return {
+        agent_id
+        for agent_id, per_season in seasons.items()
+        if any(per_season.values()) or len(per_season) >= MAX_OFF_BOARD_CATCHUP_ATTEMPTS
+    }
+
+
 async def _off_board_candidates(
     session: AsyncSession,
     bench_version: int,
@@ -1010,13 +1122,8 @@ async def _off_board_candidates(
     SN-485), and a last quorum that was not a full, positive benchmark. Best
     last median first. Scalar score columns only.
     """
-    from ditto.db.models import EvaluationPayment, ScoreAuditEntry
-    from ditto.db.queries.audit import EVENT_SCORE_RETEST_QUEUED
+    from ditto.db.models import EvaluationPayment
     from ditto.db.queries.dueling_season_expiry import season_coverage
-    from ditto.db.queries.score_retests import (
-        CATCH_UP_SOURCE_OFF_BOARD,
-        DUELING_ROTATION_RETEST_BASIS,
-    )
     from ditto.db.queries.scores import (
         MIN_ELIGIBLE_CASES,
         attested_emission_owner_roots,
@@ -1062,21 +1169,10 @@ async def _off_board_candidates(
     owed.sort(key=lambda item: (-item[1], str(item[0])))
     retested: set[UUID] = set()
     if owed:
-        retested = set(
-            await session.scalars(
-                select(ScoreAuditEntry.agent_id)
-                .where(
-                    ScoreAuditEntry.event == EVENT_SCORE_RETEST_QUEUED,
-                    ScoreAuditEntry.agent_id.in_([a for a, _c, _e in owed]),
-                    ScoreAuditEntry.payload["basis"].as_string()
-                    == DUELING_ROTATION_RETEST_BASIS,
-                    ScoreAuditEntry.payload["catch_up_source"].as_string()
-                    == CATCH_UP_SOURCE_OFF_BOARD,
-                    ScoreAuditEntry.payload["bench_version"].as_integer()
-                    == bench_version,
-                )
-                .distinct()
-            )
+        retested = await _off_board_catchups_used(
+            session,
+            agent_ids=[a for a, _c, _e in owed],
+            bench_version=bench_version,
         )
     identities: dict[UUID, tuple[str, str]] = {}
     content: dict[UUID, tuple[str, datetime]] = {}
