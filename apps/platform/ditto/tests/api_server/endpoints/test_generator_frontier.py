@@ -23,7 +23,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import ditto.api_server.endpoints.validator_generator_round as lane_mod
-from ditto.api_models.generator import GeneratorCompetitionSettings
+from ditto.api_models.generator import (
+    FRONTIER_ORACLE_MIN_BENCH_VERSION,
+    FRONTIER_ORACLE_MODEL,
+    GeneratorCompetitionSettings,
+)
 from ditto.api_models.generator_round_validator import (
     GeneratorRoundCaseResult,
     GeneratorRoundScoreRequest,
@@ -45,6 +49,7 @@ from ditto.api_server.generator_frontier import (
     apply_frontier,
     frontier_audit_sample,
     oracle_inference_refusal,
+    oracle_run_model,
     record_oracle_results,
     select_escalation,
     settle_reason,
@@ -144,9 +149,32 @@ def test_frontier_off_keeps_the_unchanged_round_signature() -> None:
         ("frontier_audit_cases", 5),
         ("frontier_audit_grace_hours", 48),
         ("frontier_oracle_timeout_hours", 24),
+        ("frontier_oracle_model", FRONTIER_ORACLE_MODEL),
     ):
         changed = on.model_copy(update={field: value})
         assert changed.measurement_params() != on.measurement_params(), field
+    # Unset, the oracle model leaves a policy's signature exactly as it was.
+    assert "frontier_oracle_model" not in on.measurement_params()
+
+
+def test_the_oracle_model_signs_only_rounds_it_takes_effect_on() -> None:
+    # The model reaches a round's signature exactly where oracle_run_model
+    # lets it change the run: bench FRONTIER_ORACLE_MIN_BENCH_VERSION and later.
+    on = GeneratorCompetitionSettings(
+        frontier_weight=1.0, frontier_oracle_agent_id=uuid4()
+    )
+    pinned = on.model_copy(update={"frontier_oracle_model": FRONTIER_ORACLE_MODEL})
+    lane = {"oracle_model": FRONTIER_ORACLE_MODEL}
+    below = FRONTIER_ORACLE_MIN_BENCH_VERSION - 1
+    assert oracle_run_model(lane, bench_version=below) is None
+    assert pinned.measurement_params(bench_version=below) == on.measurement_params(
+        bench_version=below
+    )
+    for version in (FRONTIER_ORACLE_MIN_BENCH_VERSION, 13, 18):
+        assert oracle_run_model(lane, bench_version=version) == FRONTIER_ORACLE_MODEL
+        assert pinned.measurement_params(
+            bench_version=version
+        ) != on.measurement_params(bench_version=version), version
 
 
 # --- lane -------------------------------------------------------------------
@@ -1102,6 +1130,122 @@ class TestFrontierOracleLeases:
                 )
             )
         assert statuses == ["failed", "leased"]
+
+
+class TestFrontierOracleModel:
+    """SN-496: the oracle answers on its own pinned model, not the panel's."""
+
+    @staticmethod
+    def _record_grants(
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> list[str | None]:
+        models: list[str | None] = []
+        stub = lane_mod.ensure_inference_grant
+
+        async def _grant(session: AsyncSession, **kwargs: Any) -> Any:
+            models.append(kwargs.pop("model", None))
+            return await stub(session, **kwargs)
+
+        monkeypatch.setattr(lane_mod, "ensure_inference_grant", _grant)
+        return models
+
+    @staticmethod
+    async def _frozen_model(maker: Any, round_index: int) -> str | None:
+        """The oracle model the round's frontier lane froze when it scored."""
+        async with maker() as session:
+            row = await get_round(session, round_index)
+            assert row is not None
+            return (row.frontier or {}).get("oracle_model")
+
+    async def test_the_oracle_lease_mints_its_grant_on_the_oracle_model(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_oracle_model=FRONTIER_ORACLE_MODEL)
+        round_index = await lane.score_round()
+        models = self._record_grants(monkeypatch)
+        # A validator whose scorer does not pin the oracle model gets no lease.
+        monkeypatch.setattr(lane_mod, "oracle_model_capable", lambda *_a: False)
+        assert await _lease_job(client) is None
+        assert models == []
+        # One that does is leased, on a grant minted on the oracle model.
+        seen: list[str] = []
+
+        def _capable(_heartbeat: Any, model: str) -> bool:
+            seen.append(model)
+            return True
+
+        monkeypatch.setattr(lane_mod, "oracle_model_capable", _capable)
+        job = await lane.lease_oracle()
+        assert seen and set(seen) == {FRONTIER_ORACLE_MODEL}
+        assert models == [FRONTIER_ORACLE_MODEL]
+        assert (
+            await self._frozen_model(session_maker, round_index)
+            == FRONTIER_ORACLE_MODEL
+        )
+        # The run reports exactly as before.
+        await lane.report_oracle(job, set(lane.candidates))
+        assert (await lane.frontier(round_index))["state"] == STATE_AUDIT_PENDING
+
+    async def test_unset_the_oracle_runs_on_the_contract_model(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch)
+        round_index = await lane.score_round()
+        models = self._record_grants(monkeypatch)
+        # No model to advertise: the capability is never consulted.
+        monkeypatch.setattr(
+            lane_mod,
+            "oracle_model_capable",
+            lambda *_a: pytest.fail("consulted without an oracle model"),
+        )
+        await lane.lease_oracle()
+        assert models == [None]
+        assert await self._frozen_model(session_maker, round_index) is None
+
+    async def test_a_settings_change_never_moves_an_open_lane(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The model is frozen into the lane when the round scores, like the
+        # rest of its frontier policy.
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch)
+        round_index = await lane.score_round()
+        await _apply_settings(
+            client,
+            validator_rounds_enabled=True,
+            frontier_oracle_agent_id=str(lane.oracle),
+            frontier_oracle_model=FRONTIER_ORACLE_MODEL,
+        )
+        models = self._record_grants(monkeypatch)
+        await lane.lease_oracle()
+        assert models == [None]
+        assert await self._frozen_model(session_maker, round_index) is None
+
+
+def test_the_oracle_model_needs_a_lane_that_froze_it_and_bench_v9() -> None:
+    lane = {"oracle_model": FRONTIER_ORACLE_MODEL}
+    assert oracle_run_model(lane, bench_version=18) == FRONTIER_ORACLE_MODEL
+    assert oracle_run_model(lane, bench_version=9) == FRONTIER_ORACLE_MODEL
+    # The scorer pins no oracle route below v9.
+    assert oracle_run_model(lane, bench_version=8) is None
+    # A lane that predates the field, or froze it unset.
+    assert oracle_run_model({}, bench_version=18) is None
+    assert oracle_run_model({"oracle_model": None}, bench_version=18) is None
+    assert oracle_run_model(None, bench_version=18) is None
 
 
 class TestFrontierOracleWithARunningRound:

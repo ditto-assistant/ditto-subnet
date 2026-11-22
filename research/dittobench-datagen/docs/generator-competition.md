@@ -706,6 +706,37 @@ Reusing the harness path means the oracle needs no new inference credential,
 sandbox, or grader. A stronger oracle is an operator choice of a different
 reference agent, not a contract change.
 
+### The oracle's model
+
+A witness no stronger than the panel attests little. So the oracle need not
+answer on the bench contract's harness model: the revisioned setting
+`frontier_oracle_model` names the model the oracle and the escalation agent
+answer on. Its only value is `z-ai/glm-5.3-flash`, which has a 1M-token
+context and costs about the same per token as gpt-oss-20b. Unset, the oracle
+runs on the contract model, as before. The setting exists because of SN-496:
+gpt-oss-20b's 131072-token window overflowed on whole rounds, and every run
+then scored 0.0 without faulting.
+
+- **Scorer.** dittobench-api pins the route as `llm.FrontierOracleModel` and
+  `llm.FrontierOracleProfileRevision`. That revision is Platform's aggregate
+  OpenRouter route identity for the model; a test re-derives it. Only a
+  `generator-frontier-oracle-v1` run at bench v9 or later may bind a session
+  on it. Relay preflight accepts it only on such a session, never from relay
+  JSON, so panel, scored and dueling runs stay on the contract model. The
+  scorer advertises `generator-frontier-oracle-model:<model>`, and the
+  validator forwards that as `generator_frontier_oracle_models`.
+- **Platform.** Each round freezes the model into its frontier lane when it
+  scores (the lane's `oracle_model`). An oracle job on a
+  pinned model is leased only to a validator that advertises the model, on a
+  grant minted on that model. Platform's inference `allowed_models` must
+  include the model. Its discovery loop then creates the model's aggregate
+  route; v18 needs no route calibration. The model's reasoning is pinned to
+  the contract shape: medium effort, excluded from the response.
+- **Rollout.** Release the scorer and validator, then add the model to
+  `allowed_models`. Write `frontier_oracle_model` only once validators
+  advertise it. Until then, rounds pinned to it wait for a capable validator
+  and settle without credit at `frontier_oracle_timeout_hours`.
+
 ### Lifecycle (Platform)
 
 The contract above ships first and is inert until Platform applies
@@ -750,8 +781,9 @@ sample of those cases with a stronger subnet-run reference agent
 same dataset mode (`generator-frontier-oracle-v1`), the same bounded
 `OracleContext`, the same validator capability and the same
 `FrontierCases`/`apply_frontier` contract, so no bench or pack version
-changes. "Stronger" means a different reference harness; the inference model
-stays the bench contract's.
+changes. "Stronger" means a different reference harness. Both runs answer on
+the round's frozen `frontier_oracle_model`: the contract model when unset (see
+"The oracle's model").
 
 1. When the oracle reports, the cases it answered and failed (never faulted
    ones) are the escalation pool. A column whose oracle failures exceed
@@ -804,12 +836,14 @@ recorded as an operator action), and a forced settle
 New settings (Platform, revisioned): `frontier_weight` (operator default 1.0),
 `frontier_oracle_agent_id` (unset: no oracle, frontier off),
 `frontier_audit_cases` (default 3), `frontier_audit_grace_hours` (default 24),
-`frontier_oracle_timeout_hours` (default 12), and the escalation tier's
+`frontier_oracle_timeout_hours` (default 12), `frontier_oracle_model` (unset:
+the contract model), and the escalation tier's
 `frontier_escalation_agent_id` (unset: off), `frontier_escalation_solve_threshold`
 (1.0), `frontier_escalation_max_cases` (8), `frontier_escalation_max_cases_per_column`
 (4) and `frontier_escalation_max_failed_fraction` (0.25). `skip_unchanged_rounds`
-compares `frontier_weight` with the other score parameters, and the escalation
-fields only while escalation runs.
+compares `frontier_weight` with the other score parameters,
+`frontier_oracle_model` only while set, and the escalation fields only while
+escalation runs.
 
 ## Copies
 

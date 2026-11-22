@@ -1061,8 +1061,20 @@ describe('generator competition MCP tools', () => {
     expect(parsed).toMatchObject({
       frontier_weight: 1, frontier_oracle_agent_id: null, frontier_audit_cases: 3,
       frontier_audit_grace_hours: 24, frontier_oracle_timeout_hours: 12,
+      frontier_oracle_model: null,
     })
     expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, frontier_weight: 1.5 })).toThrow()
+  })
+
+  it('keeps the frontier oracle model to the one route the scorer pins', () => {
+    const parsed = generatorCompetitionSettingsSchema.parse({
+      ...settings, frontier_oracle_model: 'z-ai/glm-5.3-flash',
+    })
+    // A write must carry it through, or the next revision would reset it.
+    expect(parsed.frontier_oracle_model).toBe('z-ai/glm-5.3-flash')
+    expect(() => generatorCompetitionSettingsSchema.parse({
+      ...settings, frontier_oracle_model: 'openai/gpt-5',
+    })).toThrow()
   })
 
   it('defaults the frontier escalation tier off and bounds its caps', () => {

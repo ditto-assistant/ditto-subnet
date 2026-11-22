@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/challengerun"
+	"github.com/ditto-assistant/dittobench-api/internal/llm"
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
 	"github.com/ditto-assistant/dittobench-api/internal/store"
@@ -45,6 +46,16 @@ func isGeneratorRoundMode(mode string) bool {
 // scorer without the feature is assumed to run the legacy 32-case column.
 func generatorRoundMaxCasesFeature() string {
 	return fmt.Sprintf("generator-round-max-cases-%d", challenge.MaxCases)
+}
+
+// generatorFrontierOracleModelFeaturePrefix names the model this scorer lets
+// a frontier oracle run answer on (llm.FrontierOracleModel). The validator
+// forwards it as generator_frontier_oracle_models; Platform mints an oracle
+// grant on a non-contract model only for a validator that advertises it.
+const generatorFrontierOracleModelFeaturePrefix = "generator-frontier-oracle-model:"
+
+func generatorFrontierOracleModelFeature() string {
+	return generatorFrontierOracleModelFeaturePrefix + llm.FrontierOracleModel
 }
 
 // generatorRoundBenchFeaturePrefix names one bench version this scorer runs a
@@ -94,6 +105,13 @@ func validateGeneratorRoundRequest(req submitRequest, enabled bool) error {
 			return errors.New("oracle_case_ids are only valid in " + generatorFrontierOracleMode)
 		}
 		return nil
+	}
+	if req.InferenceSessionID == "" {
+		// The oracle answers only on its Platform grant's pinned model and
+		// route (claimRunForMode). A sessionless run would answer through the
+		// legacy gateway on the contract model instead, and Platform would
+		// record that as the oracle's evidence (SN-496).
+		return errors.New("a frontier oracle run requires a ticket inference session")
 	}
 	if len(req.OracleCaseIDs) == 0 || len(req.OracleCaseIDs) > challenge.MaxRoundColumns*challenge.MaxCases {
 		return fmt.Errorf("a frontier oracle run needs 1..%d oracle_case_ids", challenge.MaxRoundColumns*challenge.MaxCases)
@@ -219,6 +237,13 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 			return
 		}
 		s.broker.setHarnessBase(sessionID, env["DITTOBENCH_INFERENCE_BASE_URL"])
+	}
+	if oracle && sessionID != "" {
+		if snapshot, snapErr := s.broker.snapshot(sessionID); snapErr == nil && snapshot.FrontierOracleRun {
+			// Platform serves the grant's pinned model whatever the harness
+			// names; tell it the one it actually answers on.
+			env["DITTOBENCH_MODEL"] = llm.FrontierOracleModel
+		}
 	}
 	gateway := env["DITTOBENCH_INFERENCE_BASE_URL"]
 	handle, err = s.sandbox.Run(req.BenchmarkRuntime.sandboxContext(ctx), image, env)

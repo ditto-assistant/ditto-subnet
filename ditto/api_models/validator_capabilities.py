@@ -30,6 +30,19 @@ SupportedBenchVersions = Annotated[
     BeforeValidator(lambda value: tuple(value) if isinstance(value, list) else value),
 ]
 
+# A frontier oracle model id as OpenRouter names it, e.g. ``z-ai/glm-5.3-flash``.
+FrontierOracleModels = Annotated[
+    tuple[
+        Annotated[
+            str,
+            Field(min_length=3, max_length=128, pattern=r"^[a-z0-9][a-z0-9._/:-]*$"),
+        ],
+        ...,
+    ],
+    BeforeValidator(lambda value: tuple(value) if isinstance(value, list) else value),
+    Field(min_length=1, max_length=4),
+]
+
 
 # What the validator's ``/v1/capabilities`` probe actually did, as opposed to
 # what the validator concluded from it. ``ScorerBenchmarkStatus`` is the
@@ -259,6 +272,15 @@ class ScorerBenchmarkCapability(BaseModel):
     generator_frontier_oracle: bool = Field(
         default=False, exclude_if=lambda value: not value
     )
+    # The models the scorer lets a frontier oracle run answer on instead of the
+    # bench contract's harness model, read from its
+    # ``generator-frontier-oracle-model:<model>`` features. Absent unless
+    # advertised, so validators without it sign exactly the bytes they always
+    # did; Platform mints an oracle grant on a non-contract model only for a
+    # validator that forwards that model here.
+    generator_frontier_oracle_models: FrontierOracleModels | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     # The largest round column (cases per pack) the scorer runs, read from its
     # ``generator-round-max-cases-<n>`` feature and capped at what this
     # validator accepts. Absent unless advertised, so validators without it sign
@@ -300,6 +322,11 @@ class ScorerBenchmarkCapability(BaseModel):
         versions = self.supported_bench_versions
         if self.generator_frontier_oracle and not self.generator_rounds:
             raise ValueError("the frontier oracle mode requires the round mode")
+        if (
+            self.generator_frontier_oracle_models is not None
+            and not self.generator_frontier_oracle
+        ):
+            raise ValueError("frontier oracle models require the frontier oracle mode")
         if self.generator_round_bench_versions is not None and (
             not self.generator_rounds
             or not set(self.generator_round_bench_versions) <= set(versions)

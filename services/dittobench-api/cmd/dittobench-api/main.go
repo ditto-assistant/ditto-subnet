@@ -1434,7 +1434,8 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 	seed := pinnedOrFreshSeed(req.Seed)
 	runID := uuid.NewString()
 	if req.InferenceSessionID != "" &&
-		!s.broker.claimRun(req.InferenceSessionID, runID, inferenceTicketIdentity(req), req.BenchVersion) {
+		!s.broker.claimRunForMode(req.InferenceSessionID, runID, inferenceTicketIdentity(req), req.BenchVersion,
+			req.PrivateDatasetMode == generatorFrontierOracleMode) {
 		<-s.runSlots
 		writeError(w, http.StatusConflict, "ticket inference session is unavailable")
 		return

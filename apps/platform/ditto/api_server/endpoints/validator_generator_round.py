@@ -75,9 +75,11 @@ from ditto.api_server.generator_frontier import (
     oracle_capable,
     oracle_column_cases,
     oracle_lease_inference_refusal,
+    oracle_model_capable,
     oracle_round,
     oracle_run_agent,
     oracle_run_cases,
+    oracle_run_model,
     record_oracle_results,
 )
 from ditto.api_server.generator_prescreens import (
@@ -627,10 +629,14 @@ async def _lease_oracle_job(
             # scorer decodes and runs the round's columns, so the largest must
             # fit. Not the candidate total, which spans every column and may
             # legitimately exceed one column's size.
-            capacity = _round_column_capacity(
-                heartbeat, now=now, bench_version=round_bench_version(candidate)
-            )
-            return capacity is not None and oracle_column_cases(candidate) <= capacity
+            version = round_bench_version(candidate)
+            capacity = _round_column_capacity(heartbeat, now=now, bench_version=version)
+            if capacity is None or oracle_column_cases(candidate) > capacity:
+                return False
+            # A round whose oracle answers on its own model (SN-496) needs a
+            # scorer that pins that model's route.
+            model = oracle_run_model(candidate.frontier, bench_version=version)
+            return model is None or oracle_model_capable(heartbeat, model)
 
         # Skips rounds this validator cannot run, so an older incompatible
         # round never hides a younger one it can.
@@ -671,7 +677,10 @@ async def _lease_oracle_job(
         agent = await session.get(Agent, ticket.agent_id)
         assert agent is not None
         grant = await ensure_inference_grant(
-            session, ticket=ticket, config=inference_config
+            session,
+            ticket=ticket,
+            config=inference_config,
+            model=oracle_run_model(frontier, bench_version=bench_version),
         )
         if grant is None:
             raise HTTPException(503, "ticket inference capability is unavailable")

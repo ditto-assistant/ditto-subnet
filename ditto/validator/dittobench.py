@@ -121,6 +121,46 @@ _ROUND_MAX_CASES_FEATURE = re.compile(
 )
 
 
+# ``ScorerBenchmarkCapability.generator_frontier_oracle_models`` holds at most
+# this many models.
+MAX_FRONTIER_ORACLE_MODELS = 4
+_FRONTIER_ORACLE_MODEL_FEATURE = re.compile(
+    r"generator-frontier-oracle-model:([a-z0-9][a-z0-9._/:-]{2,127})"
+)
+
+
+def scorer_frontier_oracle_models(features: object) -> tuple[str, ...] | None:
+    """The models the scorer lets a frontier oracle run answer on.
+
+    The scorer advertises ``generator-frontier-oracle-model:<model>`` for each
+    pinned oracle route it accepts (``llm.FrontierOracleModel``). ``None`` when
+    it advertises none: Platform then runs the oracle on the bench contract's
+    harness model only. More than the capability's limit is a scorer contract
+    error: nothing is forwarded (never a partial list Platform would read as
+    the scorer's whole support), so this validator's oracle runs stay on the
+    contract model, and the overflow is logged.
+    """
+    if not isinstance(features, list):
+        return None
+    models = sorted(
+        {
+            match.group(1)
+            for feature in features
+            if isinstance(feature, str)
+            and (match := _FRONTIER_ORACLE_MODEL_FEATURE.fullmatch(feature))
+        }
+    )
+    if len(models) > MAX_FRONTIER_ORACLE_MODELS:
+        logger.warning(
+            "scorer advertises %d frontier oracle models, more than the %d a "
+            "capability carries; forwarding none",
+            len(models),
+            MAX_FRONTIER_ORACLE_MODELS,
+        )
+        return None
+    return tuple(models) or None
+
+
 def scorer_generator_round_max_cases(features: object) -> int | None:
     """The round column size both the scorer and this validator can run.
 
@@ -1601,6 +1641,12 @@ class DittobenchClient:
                 generator_frontier_oracle=(
                     generator_rounds
                     and GENERATOR_FRONTIER_ORACLE_FEATURE in payload["features"]
+                ),
+                generator_frontier_oracle_models=(
+                    scorer_frontier_oracle_models(payload.get("features"))
+                    if generator_rounds
+                    and GENERATOR_FRONTIER_ORACLE_FEATURE in payload["features"]
+                    else None
                 ),
                 source_free_screened_images=source_free_screened_images,
                 generator_round_max_cases=(

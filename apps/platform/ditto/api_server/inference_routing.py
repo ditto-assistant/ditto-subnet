@@ -22,6 +22,7 @@ import httpx
 from sqlalchemy import select
 
 from ditto.api_models.benchmark_contract import benchmark_contract
+from ditto.api_models.generator import FRONTIER_ORACLE_MODEL
 from ditto.db.models import (
     InferenceGrant,
     InferenceProviderRoute,
@@ -45,6 +46,11 @@ def benchmark_reasoning(model: str) -> dict[str, Any] | None:
         # provider/default change cannot silently alter benchmark semantics,
         # latency, or token accounting. The trusted proxy strips reasoning
         # details from its public response, so exclude them upstream as well.
+        return {"effort": "medium", "exclude": True}
+    if model == FRONTIER_ORACLE_MODEL:
+        # The frontier oracle's model (SN-496) gets the same pinned contract:
+        # medium effort unless a v9+ caller picks one, and reasoning excluded
+        # from the response, so neither provider defaults nor privacy drift.
         return {"effort": "medium", "exclude": True}
     return None
 
@@ -87,6 +93,14 @@ def aggregate_profile_revisions(model: str) -> tuple[str, ...]:
 
 def benchmark_model(bench_version: int) -> str:
     return V7_MODEL if bench_version >= 7 else "qwen/qwen3-32b"
+
+
+def aggregate_route_models() -> frozenset[str]:
+    """Models discovery keeps an aggregate OpenRouter route for: the bench
+    contract's harness model, and the frontier oracle's pinned model
+    (SN-496), whose grants select that route in ``aggregate_throughput``
+    mode."""
+    return frozenset({benchmark_model(7), FRONTIER_ORACLE_MODEL})
 
 
 def _profile_revision(model: str, provider: str, quantization: str | None) -> str:
@@ -514,7 +528,7 @@ class ProviderRouteRefresher:
                     ).all()
                 )
                 seen: set[tuple[str, str]] = set()
-                if model == benchmark_model(7):
+                if model in aggregate_route_models():
                     aggregate_active = any(
                         endpoint.get("status") == 0 for endpoint in deduped.values()
                     )

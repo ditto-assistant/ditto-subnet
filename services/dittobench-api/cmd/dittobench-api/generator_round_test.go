@@ -94,6 +94,7 @@ func TestGeneratorFrontierOracleAdmission(t *testing.T) {
 		PrivateDatasetBytes:   []byte(`{"contract":"x"}`),
 		ExpectedDatasetSHA256: strings.Repeat("a", 64),
 		OracleCaseIDs:         []string{"c0/a", "c1/b"},
+		InferenceSessionID:    "s-oracle",
 	}
 	if err := validatePrivateDatasetRequest(oracle, false, true); err != nil {
 		t.Fatalf("valid oracle request refused: %v", err)
@@ -102,7 +103,10 @@ func TestGeneratorFrontierOracleAdmission(t *testing.T) {
 		t.Fatal("an oracle run needs the round capability")
 	}
 	for name, edit := range map[string]func(*submitRequest){
-		"no cases":      func(r *submitRequest) { r.OracleCaseIDs = nil },
+		"no cases": func(r *submitRequest) { r.OracleCaseIDs = nil },
+		// The oracle answers only on its ticket grant's pinned route; a
+		// sessionless run would answer on the contract model (SN-496).
+		"no session":    func(r *submitRequest) { r.InferenceSessionID = "" },
 		"repeated case": func(r *submitRequest) { r.OracleCaseIDs = []string{"c0/a", "c0/a"} },
 		"empty case":    func(r *submitRequest) { r.OracleCaseIDs = []string{""} },
 		"too many": func(r *submitRequest) {

@@ -148,8 +148,14 @@ async def ensure_inference_grant(
     config: InferenceProxyConfig,
     supported_profiles: tuple[str, ...] | None = None,
     calibration_manifest_sha256: str | None = None,
+    model: str | None = None,
 ) -> InferenceGrant | None:
     """Create or return the one grant bound to this exact live lease.
+
+    ``model`` overrides the bench contract's harness model for this lease
+    only; the frontier oracle lease passes its pinned oracle model (SN-496).
+    It must still be in ``config.allowed_models``, and a grant that already
+    exists for the lease is returned as it is.
 
     Creation is race-free at the database level, not by convention. ``SELECT
     ... FOR UPDATE`` locks rows that exist; when the grant has not been created
@@ -194,7 +200,7 @@ async def ensure_inference_grant(
             ticket=ticket,
             now=datetime.now(UTC),
         )
-        model = benchmark_model(ticket.bench_version)
+        model = model or benchmark_model(ticket.bench_version)
         if model not in config.allowed_models:
             return None
         route_provider: str | None = config.provider

@@ -21,7 +21,8 @@ func (s *server) datasetFeatures() []string {
 		features = append(features, privateDatasetMode)
 	}
 	if s.allowGeneratorRounds {
-		features = append(features, generatorRoundMode, generatorFrontierOracleMode, generatorRoundMaxCasesFeature())
+		features = append(features, generatorRoundMode, generatorFrontierOracleMode, generatorRoundMaxCasesFeature(),
+			generatorFrontierOracleModelFeature())
 		features = append(features, generatorRoundBenchFeatures()...)
 	}
 	if s.allowDuelingSlices {
