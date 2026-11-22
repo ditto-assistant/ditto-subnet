@@ -858,14 +858,18 @@ async def unchanged_round_source(
         panel=seated,
         bench_version=source.bench_version,
         cases_per_column=source.cases_per_column,
-        score_params=source_settings.measurement_params(),
+        score_params=source_settings.measurement_params(
+            bench_version=round_bench_version(source)
+        ),
     )
     after = _round_signature(
         columns=row.columns or (),
         panel=row.panel or (),
         bench_version=row.bench_version,
         cases_per_column=row.cases_per_column,
-        score_params=settings.measurement_params(),
+        score_params=settings.measurement_params(
+            bench_version=round_bench_version(row)
+        ),
     )
     if before != after:
         return None

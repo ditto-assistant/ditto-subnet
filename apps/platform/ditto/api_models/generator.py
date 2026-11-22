@@ -125,6 +125,11 @@ class GeneratorModel(BaseModel):
 # ``llm.FrontierOracleModel``). One today.
 FRONTIER_ORACLE_MODEL = "z-ai/glm-5.3-flash"
 FrontierOracleModel = Literal["z-ai/glm-5.3-flash"]
+# Below this bench version the scorer pins no oracle route, so a round keeps
+# the contract model whatever ``frontier_oracle_model`` says. Generator rounds
+# run at v13 and later today; this keeps the setting's signature and its
+# effect on one gate all the same.
+FRONTIER_ORACLE_MIN_BENCH_VERSION = 9
 
 
 class GeneratorCompetitionSettings(BaseModel):
@@ -414,11 +419,18 @@ class GeneratorCompetitionSettings(BaseModel):
         """Oracle-failed cases are re-checked by the escalation agent."""
         return self.frontier_enabled and self.frontier_escalation_agent_id is not None
 
-    def measurement_params(self) -> dict[str, float | int | str]:
+    def measurement_params(
+        self, *, bench_version: int | None = None
+    ) -> dict[str, float | int | str]:
         """Everything this policy changes about what a round measures: the
         score params, plus the frontier policy while frontier scoring runs.
         With frontier off this is exactly ``score_params()``, so a policy
-        that predates frontier scoring keeps its unchanged-round signature."""
+        that predates frontier scoring keeps its unchanged-round signature.
+
+        ``bench_version`` is the round's. The oracle model counts only where
+        it takes effect (``FRONTIER_ORACLE_MIN_BENCH_VERSION`` and later,
+        the same gate ``generator_frontier.oracle_run_model`` applies), so
+        setting it never changes the signature of a round it cannot change."""
         params: dict[str, float | int | str] = dict(self.score_params())
         if self.frontier_enabled:
             params["frontier_weight"] = self.frontier_weight
@@ -426,9 +438,12 @@ class GeneratorCompetitionSettings(BaseModel):
             params["frontier_audit_cases"] = self.frontier_audit_cases
             params["frontier_audit_grace_hours"] = self.frontier_audit_grace_hours
             params["frontier_oracle_timeout_hours"] = self.frontier_oracle_timeout_hours
-            if self.frontier_oracle_model is not None:
-                # Only while set, so a policy without it keeps its
-                # unchanged-round signature.
+            if self.frontier_oracle_model is not None and (
+                bench_version is None
+                or bench_version >= FRONTIER_ORACLE_MIN_BENCH_VERSION
+            ):
+                # Only while set and in effect, so a policy without it keeps
+                # its unchanged-round signature.
                 params["frontier_oracle_model"] = self.frontier_oracle_model
         if self.frontier_escalation_enabled:
             # Only while escalation runs, so a policy without it keeps its

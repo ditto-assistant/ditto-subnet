@@ -72,7 +72,10 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
-from ditto.api_models.generator import GeneratorCompetitionSettings
+from ditto.api_models.generator import (
+    FRONTIER_ORACLE_MIN_BENCH_VERSION,
+    GeneratorCompetitionSettings,
+)
 from ditto.api_models.generator_round_validator import GeneratorRoundCaseResult
 from ditto.api_models.generator_rounds import (
     GeneratorFrontierAuditView,
@@ -425,7 +428,7 @@ def oracle_run_model(
     bench v9 (where the scorer pins no oracle route), keeps the contract
     model."""
     model = (frontier or {}).get("oracle_model")
-    if not model or bench_version < 9:
+    if not model or bench_version < FRONTIER_ORACLE_MIN_BENCH_VERSION:
         return None
     return str(model)
 

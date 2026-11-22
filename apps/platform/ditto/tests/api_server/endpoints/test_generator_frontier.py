@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import ditto.api_server.endpoints.validator_generator_round as lane_mod
 from ditto.api_models.generator import (
+    FRONTIER_ORACLE_MIN_BENCH_VERSION,
     FRONTIER_ORACLE_MODEL,
     GeneratorCompetitionSettings,
 )
@@ -154,6 +155,26 @@ def test_frontier_off_keeps_the_unchanged_round_signature() -> None:
         assert changed.measurement_params() != on.measurement_params(), field
     # Unset, the oracle model leaves a policy's signature exactly as it was.
     assert "frontier_oracle_model" not in on.measurement_params()
+
+
+def test_the_oracle_model_signs_only_rounds_it_takes_effect_on() -> None:
+    # The model reaches a round's signature exactly where oracle_run_model
+    # lets it change the run: bench FRONTIER_ORACLE_MIN_BENCH_VERSION and later.
+    on = GeneratorCompetitionSettings(
+        frontier_weight=1.0, frontier_oracle_agent_id=uuid4()
+    )
+    pinned = on.model_copy(update={"frontier_oracle_model": FRONTIER_ORACLE_MODEL})
+    lane = {"oracle_model": FRONTIER_ORACLE_MODEL}
+    below = FRONTIER_ORACLE_MIN_BENCH_VERSION - 1
+    assert oracle_run_model(lane, bench_version=below) is None
+    assert pinned.measurement_params(bench_version=below) == on.measurement_params(
+        bench_version=below
+    )
+    for version in (FRONTIER_ORACLE_MIN_BENCH_VERSION, 13, 18):
+        assert oracle_run_model(lane, bench_version=version) == FRONTIER_ORACLE_MODEL
+        assert pinned.measurement_params(
+            bench_version=version
+        ) != on.measurement_params(bench_version=version), version
 
 
 # --- lane -------------------------------------------------------------------
