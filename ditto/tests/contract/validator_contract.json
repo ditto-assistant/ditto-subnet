@@ -8566,6 +8566,25 @@
             "default": false,
             "type": "boolean"
           },
+          "generator_frontier_oracle_models": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 128,
+                  "minLength": 3,
+                  "pattern": "^[a-z0-9][a-z0-9._/:-]*$",
+                  "type": "string"
+                },
+                "maxLength": 4,
+                "minLength": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "generator_round_bench_versions": {
             "anyOf": [
               {

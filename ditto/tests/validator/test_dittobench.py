@@ -554,6 +554,63 @@ async def test_scorer_frontier_oracle_mode_is_forwarded(features, oracle) -> Non
     assert ("generator_frontier_oracle" in observed.model_dump(mode="json")) is oracle
 
 
+_ORACLE_MODEL = "generator-frontier-oracle-model:z-ai/glm-5.3-flash"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "features,models",
+    [
+        # A scorer that predates the feature runs the oracle on the contract
+        # model only.
+        (["generator-round-v1", "generator-frontier-oracle-v1"], None),
+        (
+            ["generator-round-v1", "generator-frontier-oracle-v1", _ORACLE_MODEL],
+            ("z-ai/glm-5.3-flash",),
+        ),
+        # An oracle model without the oracle mode is never forwarded.
+        (["generator-round-v1", _ORACLE_MODEL], None),
+        # Malformed ids are dropped, duplicates collapse.
+        (
+            [
+                "generator-round-v1",
+                "generator-frontier-oracle-v1",
+                _ORACLE_MODEL,
+                _ORACLE_MODEL,
+                "generator-frontier-oracle-model:Bad Model",
+            ],
+            ("z-ai/glm-5.3-flash",),
+        ),
+    ],
+)
+async def test_scorer_frontier_oracle_models_are_forwarded(features, models) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "software_version": "0.22.0",
+                "source_revision": _REVISION,
+                "supported_bench_versions": list(SUPPORTED_BENCH_VERSIONS),
+                "full_run_capacity": 2,
+                "features": features,
+            },
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.generator_frontier_oracle_models == models
+    # Absent from the signed bytes unless advertised.
+    dumped = observed.model_dump(mode="json")
+    assert ("generator_frontier_oracle_models" in dumped) is (models is not None)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "features,advertised,round_versions",
