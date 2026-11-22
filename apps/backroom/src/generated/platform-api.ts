@@ -43533,6 +43533,8 @@ export interface components {
              * @default false
              */
             generator_frontier_oracle: boolean;
+            /** Generator Frontier Oracle Models */
+            generator_frontier_oracle_models?: string[] | null;
             /** Generator Round Bench Versions */
             generator_round_bench_versions?: number[] | null;
             /** Generator Round Max Cases */
