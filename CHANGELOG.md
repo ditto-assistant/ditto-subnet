@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.502.0 (2026-11-22)
+
+### Features
+
+- **scorer,validator,platform,backroom**: Record per-run harness memory peak/P50/P95 for operators
+  (SN-500) ([#3605](https://github.com/ditto-assistant/ditto-subnet/pull/3605),
+  [`9e04aa5`](https://github.com/ditto-assistant/ditto-subnet/commit/9e04aa54fadb869b3c87fe7cb042af1dec8ebc6b))
+
+
 ## v0.501.0 (2026-11-22)
 
 ### Documentation
