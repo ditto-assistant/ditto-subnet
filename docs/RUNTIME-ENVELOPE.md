@@ -31,7 +31,7 @@ stamp is absent.
 
 | Dimension | Limit | Notes |
 |---|---|---|
-| Memory | **863 MiB** (live) | `--memory`, with `--memory-swap` set equal, so no swap. Files in `/tmp` are tmpfs pages and count against this cap: a full 512 MiB `/tmp` leaves 351 MiB for everything else |
+| Memory | **863 MiB** (published) | `--memory`, with `--memory-swap` set equal, so no swap. Files in `/tmp` are tmpfs pages and count against this cap: a full 512 MiB `/tmp` leaves 351 MiB for everything else. The cap in force is `sandbox_memory_limit_mib` on `GET /api/v1/public/validators` |
 | CPU | 2 | `--cpus 2` |
 | PIDs | 512 | Fork-bomb bound |
 | `/tmp` | 512 MiB tmpfs, `noexec` | The only writable path. The root filesystem is read-only |
@@ -52,12 +52,18 @@ The scorer applies the envelope's 64 MiB peak tolerance and 1024 MiB host
 floor when it judges an OOM kill. Validators hold back a 1024 MiB host
 reserve (`VALIDATOR_HOST_MEMORY_RESERVE_MIB`) from harness caps.
 
-The memory cap was lowered from 8192 MiB to 863 MiB (SN-488): the highest cap
-at which the smallest validator host in the fleet (7,934 MiB) admits all 8
-configured slots, so every host can run full concurrency. Keep harnesses
-lightweight: an out-of-memory kill at your own cap is a failed run. Platform
-stamps the live value on every lease, so a lease issued before the operator
-switches the live setting still runs at the cap it was issued with.
+The published memory cap was lowered from 8192 MiB to 863 MiB (SN-488). It is
+the highest cap at which the smallest validator host (7,934 MiB) still has the
+memory for all 8 of its slots. Eight is the most any one validator runs, so
+the fleet can run at most 8 times the number of validators. Memory is one limit; the
+operator's per-validator slot cap (below) is another, and a validator runs the
+smaller of the two. Keep harnesses lightweight: an out-of-memory kill at your
+own cap is a failed run.
+
+The operator switches the live setting separately, after a release reaches the
+fleet; until then, leases are stamped with the previous 8192 MiB. Platform
+stamps the live value on every lease, so a lease issued before a change keeps
+the cap it was issued with.
 
 ## Who pays for a resource failure
 
@@ -104,9 +110,9 @@ needs `cap + 1024`. With the 863 MiB cap and the 1024 MiB reserve:
 | 4 | 4,476 MiB |
 | 8 | 7,928 MiB |
 
-A nominal 8 GiB host reports about 7,934 MiB, so it admits all 8. The operator's
-per-validator slot cap (Backroom slot settings) is a separate limit, and
-dispatch funds the smaller of the two.
+A nominal 8 GiB host reports about 7,934 MiB, so memory admits all 8 of its
+slots. The operator's per-validator slot cap (Backroom slot settings) is a
+separate limit, and dispatch funds the smaller of the two per validator.
 
 The worker logs the narrowing on every change, with the memory it would need
 for one slot (when none fit) and for every configured slot. A host that fits no
