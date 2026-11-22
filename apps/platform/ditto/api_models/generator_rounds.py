@@ -768,6 +768,16 @@ class GeneratorFrontierOracleView(RoundModel):
     """Per-case ``{case_id, score, fault}`` exactly as the validator signed."""
 
 
+class GeneratorFrontierModelRunView(RoundModel):
+    """The inference model an oracle lease was really granted."""
+
+    model: str
+    fallback: bool
+    """True when the frozen frontier model had no grant (no admitted route,
+    or delisted) and the lease fell back to the bench model."""
+    leased_at: datetime
+
+
 class GeneratorFrontierEscalationView(RoundModel):
     """The escalation tier's re-check of the cases the oracle failed
     (``frontier_escalation_agent_id``)."""
@@ -799,6 +809,15 @@ class GeneratorFrontierEscalationView(RoundModel):
     like oracle passes."""
     results: list[dict] = Field(default_factory=list)
     """Per-case ``{case_id, score, fault}`` exactly as the validator signed."""
+    step: int = 0
+    """The step's place in the ``frontier_escalation_models`` ladder (0 is
+    the first). A later step re-checks only the cases the one before it
+    answered and failed."""
+    model: str | None = None
+    """The step's frozen ladder model; null runs it on the bench model."""
+    model_run: GeneratorFrontierModelRunView | None = None
+    """The model the step's newest lease really pinned, with ``model`` set;
+    null on the bench model or before the first lease."""
 
 
 class GeneratorFrontierAuditView(RoundModel):
@@ -836,9 +855,21 @@ class GeneratorFrontierView(RoundModel):
     """When the round settles with no attestations if the oracle never
     reports (while ``oracle_pending``)."""
     oracle: GeneratorFrontierOracleView | None
+    oracle_model: str | None = None
+    """The round's frozen ``frontier_oracle_model``; null runs the oracle on
+    the bench model."""
+    oracle_model_run: GeneratorFrontierModelRunView | None = None
+    """The model the newest oracle lease's grant really pinned, with
+    ``oracle_model`` set; null on the bench model or before the first
+    lease."""
     escalation: GeneratorFrontierEscalationView | None = None
     """The escalation tier, when the round's policy ran one after the
     oracle reported; null with escalation off."""
+    escalation_steps: list[GeneratorFrontierEscalationView] = Field(
+        default_factory=list
+    )
+    """Finished earlier ladder steps, oldest first; ``escalation`` is the
+    newest step. Empty without a ladder."""
     attested: dict[str, list[str]]
     audits: list[GeneratorFrontierAuditView]
     applied: dict[str, list[str]] | None = None

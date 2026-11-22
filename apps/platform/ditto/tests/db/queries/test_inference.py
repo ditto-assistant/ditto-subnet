@@ -23,6 +23,7 @@ from ditto.db.models import (
     InferenceRoutingPolicy,
     ValidatorTicket,
 )
+from ditto.db.queries import inference as inference_queries
 from ditto.db.queries.inference import (
     CHAT_MODE,
     NO_CHAT_MODE,
@@ -1623,3 +1624,206 @@ async def test_lease_model_usage_excludes_embedding_spend(
 
     assert usage is not None
     assert usage.total_tokens == 75
+
+
+_ORACLE_MODEL = "openai/gpt-oss-120b"
+
+
+_NO_ROUTE_MODEL = "openai/gpt-5.6-luna"
+
+
+async def _seed_oracle_route(session: AsyncSession, now: datetime) -> None:
+    session.add(
+        InferenceRoutingPolicy(
+            model=_ORACLE_MODEL,
+            enabled=True,
+            speed_weight=0.65,
+            cost_weight=0.25,
+            exploration_weight=0.10,
+            exploration_ticket_budget=3,
+            min_tool_accuracy=0.55,
+            min_composite=0.15,
+            min_calibration_samples=20,
+            max_error_rate=0.25,
+            max_timeout_rate=0.15,
+            cooldown_seconds=30,
+            ewma_alpha=0.20,
+            updated_at=now,
+        )
+    )
+    session.add(
+        InferenceProviderRoute(
+            model=_ORACLE_MODEL,
+            provider="oracle-provider",
+            profile_revision="openrouter-route-oracle-v1",
+            status="healthy",
+            calibration_status="eligible",
+            prompt_price_per_token=0.0000001,
+            completion_price_per_token=0.0000005,
+            ewma_tokens_per_second=150,
+            ewma_latency_ms=900,
+            ewma_error_rate=0,
+            ewma_timeout_rate=0,
+            calibration_tool_accuracy=0.65,
+            calibration_composite=0.20,
+            calibration_sample_count=60,
+            calibration_manifest_sha256="ab" * 32,
+            sample_count=20,
+            discovered_at=now,
+        )
+    )
+
+
+async def _oracle_ticket(
+    session: AsyncSession, now: datetime, name: str
+) -> ValidatorTicket:
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey=f"miner-{name}",
+        name=name,
+        sha256="ef" * 32,
+        status=AgentStatus.EVALUATING,
+        created_at=now,
+    )
+    row = ValidatorTicket(
+        agent_id=agent.agent_id,
+        validator_hotkey=f"validator-{name}",
+        slot_id="slot-0",
+        status=TicketStatus.ISSUED,
+        issued_at=now,
+        deadline=now + timedelta(minutes=20),
+        bench_version=_BENCH_VERSION,
+        attempt_count=1,
+    )
+    session.add_all([agent, row])
+    await session.flush()
+    return row
+
+
+def _frontier_config() -> InferenceProxyConfig:
+    return replace(_config(), frontier_oracle_models=(_ORACLE_MODEL, _NO_ROUTE_MODEL))
+
+
+@pytest.mark.asyncio
+async def test_a_frontier_model_is_granted_only_when_asked_and_listed(
+    session: AsyncSession,
+) -> None:
+    """``model`` overrides the bench model for a frontier oracle ticket only
+    while the operator lists it and it has a route; without it the grant is
+    the bench model's, exactly as before. The frontier list is apart from the
+    agent allow list: a v7+ grant pins its own model."""
+    now = datetime.now(UTC)
+    allowed = replace(_config(), frontier_oracle_models=())
+    listed = _frontier_config()
+    assert _ORACLE_MODEL not in listed.allowed_models
+    async with session.begin():
+        await _seed_calibrated_route(session, now)
+        await _seed_oracle_route(session, now)
+
+        panel = await _oracle_ticket(session, now, "panel")
+        grant = await ensure_inference_grant(session, ticket=panel, config=listed)
+        assert grant is not None
+        assert grant.allowed_models == [_CHAT_MODEL]
+        assert grant.route_provider == "calibrated-provider"
+
+        unlisted = await _oracle_ticket(session, now, "unlisted")
+        assert (
+            await ensure_inference_grant(
+                session, ticket=unlisted, config=allowed, model=_ORACLE_MODEL
+            )
+            is None
+        )
+        # Listed, but no calibrated route admitted yet: no grant, so the
+        # oracle lease falls back to the bench model.
+        uncalibrated = await _oracle_ticket(session, now, "uncalibrated")
+        assert (
+            await ensure_inference_grant(
+                session, ticket=uncalibrated, config=listed, model=_NO_ROUTE_MODEL
+            )
+            is None
+        )
+
+        oracle = await _oracle_ticket(session, now, "oracle")
+        grant = await ensure_inference_grant(
+            session, ticket=oracle, config=listed, model=_ORACLE_MODEL
+        )
+        assert grant is not None
+        assert grant.allowed_models == [_ORACLE_MODEL]
+        assert grant.route_provider == "oracle-provider"
+        assert grant.route_profile == "openrouter-route-oracle-v1"
+        # Asking again for the same model returns the same lease grant.
+        again = await ensure_inference_grant(
+            session, ticket=oracle, config=listed, model=_ORACLE_MODEL
+        )
+        assert again is grant
+
+
+@pytest.mark.asyncio
+async def test_a_lease_grant_on_another_model_is_not_handed_to_an_override(
+    session: AsyncSession,
+) -> None:
+    """A lease that already holds a bench-pinned grant gives a frontier
+    request no grant, so the caller falls back, rather than the bench grant
+    passed off as the frontier model's. The bench request still gets it."""
+    now = datetime.now(UTC)
+    config = _frontier_config()
+    async with session.begin():
+        await _seed_calibrated_route(session, now)
+        await _seed_oracle_route(session, now)
+        ticket = await _oracle_ticket(session, now, "pinned")
+        bench = await ensure_inference_grant(session, ticket=ticket, config=config)
+        assert bench is not None
+        assert bench.allowed_models == [_CHAT_MODEL]
+
+        assert (
+            await ensure_inference_grant(
+                session, ticket=ticket, config=config, model=_ORACLE_MODEL
+            )
+            is None
+        )
+        assert (
+            await ensure_inference_grant(session, ticket=ticket, config=config) is bench
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_concurrent_winner_on_another_model_is_not_adopted_for_an_override(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The losing side of an insert race adopts the winner's row only when it
+    pins the requested model; a bench-pinned winner gives a frontier request
+    no grant, the same as an existing grant does."""
+    now = datetime.now(UTC)
+    config = _frontier_config()
+    real_revoke = inference_queries.revoke_ticket_inference
+    raced = False
+
+    async def revoke_then_lose_race(
+        db: AsyncSession, *, ticket: ValidatorTicket, now: datetime
+    ) -> None:
+        nonlocal raced
+        await real_revoke(db, ticket=ticket, now=now)
+        if not raced:
+            raced = True
+            # Another caller creates the bench grant between this caller's
+            # lease lookup and its insert.
+            winner = await ensure_inference_grant(db, ticket=ticket, config=config)
+            assert winner is not None
+
+    monkeypatch.setattr(
+        inference_queries, "revoke_ticket_inference", revoke_then_lose_race
+    )
+    async with session.begin():
+        await _seed_calibrated_route(session, now)
+        await _seed_oracle_route(session, now)
+        ticket = await _oracle_ticket(session, now, "raced")
+        assert (
+            await ensure_inference_grant(
+                session, ticket=ticket, config=config, model=_ORACLE_MODEL
+            )
+            is None
+        )
+        assert raced
+        adopted = await ensure_inference_grant(session, ticket=ticket, config=config)
+        assert adopted is not None
+        assert adopted.allowed_models == [_CHAT_MODEL]

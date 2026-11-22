@@ -52,6 +52,14 @@ MAX_CASES_PER_SEED = 80
 # fold mid-rotation.
 MIN_DUELING_SEASON_EPOCHS = 2
 SOURCE_SIGNATURE_DOMAIN = "ditto-generator-v1"
+FrontierModel = Annotated[
+    str,
+    Field(
+        min_length=3, max_length=128, pattern=r"^[a-z0-9][a-z0-9._-]*/[A-Za-z0-9._:-]+$"
+    ),
+]
+"""An OpenRouter model id (``vendor/model``) for a frontier oracle ticket."""
+MAX_FRONTIER_ESCALATION_STEPS = 4
 
 GeneratorMode = Literal["off", "shadow", "enforce"]
 SubmissionStatus = Literal["active", "superseded", "rejected"]
@@ -292,6 +300,17 @@ class GeneratorCompetitionSettings(BaseModel):
     frontier_oracle_timeout_hours: Annotated[int, Field(ge=1, le=168)] = 12
     """Hours a scored round waits for its oracle run before it settles with
     no attestations."""
+    frontier_oracle_model: FrontierModel | None = None
+    """The inference model the frontier oracle's ticket is granted, instead of
+    the bench model. Only the oracle ticket uses it: panel tickets always get
+    the bench model, and escalation tickets get
+    ``frontier_escalation_models``. Must be one of the Platform's
+    operator-listed ``DITTO_FRONTIER_ORACLE_MODELS`` (checked on write and
+    again at lease) and needs a calibrated route like any other model; while
+    it has none the lease falls back to the bench model and the round's
+    frontier document records the fallback. Unset (the default, and every
+    revision written before this field existed) runs the oracle on the bench
+    model."""
     frontier_escalation_agent_id: Annotated[UUID | None, Field(strict=False)] = None
     """A second, stronger subnet-run reference agent that re-checks the cases
     the frontier oracle failed (:mod:`ditto.api_server.generator_frontier`,
@@ -318,6 +337,17 @@ class GeneratorCompetitionSettings(BaseModel):
     (non-duplicate) cases is not escalated at all: a column that mostly
     beats the oracle looks broken, not hard, and flooding a pack with
     unsolvable cases must not buy escalation."""
+    frontier_escalation_models: Annotated[
+        list[FrontierModel], Field(max_length=MAX_FRONTIER_ESCALATION_STEPS)
+    ] = Field(default_factory=list)
+    """The escalation ladder: one escalation run per entry, in order, each on
+    the model listed. The first step re-checks the capped sample of
+    oracle-failed cases; each later step re-checks only the cases the step
+    before it answered and failed. A pass on any step attests the case.
+    Models come from the same operator list as ``frontier_oracle_model``,
+    with the same bench-model fallback. Empty (the default, and every
+    revision written before this field existed) runs one escalation step on
+    the bench model."""
 
     prescreen_enabled: bool = False
     """Pre-screen never-scored generators before they take a challenger
@@ -360,6 +390,10 @@ class GeneratorCompetitionSettings(BaseModel):
                 raise ValueError(
                     "frontier_escalation_agent_id must not be a reference agent"
                 )
+        if len(set(self.frontier_escalation_models)) != len(
+            self.frontier_escalation_models
+        ):
+            raise ValueError("frontier_escalation_models must be unique")
         return self
 
     def dueling_season_refusal(self) -> str | None:
@@ -410,6 +444,10 @@ class GeneratorCompetitionSettings(BaseModel):
             params["frontier_audit_cases"] = self.frontier_audit_cases
             params["frontier_audit_grace_hours"] = self.frontier_audit_grace_hours
             params["frontier_oracle_timeout_hours"] = self.frontier_oracle_timeout_hours
+            if self.frontier_oracle_model is not None:
+                # Only while set, so a policy on the bench model (null) keeps
+                # the signature it had before the field existed.
+                params["frontier_oracle_model"] = self.frontier_oracle_model
         if self.frontier_escalation_enabled:
             # Only while escalation runs, so a policy without it keeps its
             # unchanged-round signature.
@@ -426,7 +464,17 @@ class GeneratorCompetitionSettings(BaseModel):
             params["frontier_escalation_max_failed_fraction"] = (
                 self.frontier_escalation_max_failed_fraction
             )
+            if self.frontier_escalation_models:
+                # Only while set, like frontier_oracle_model.
+                params["frontier_escalation_models"] = ",".join(
+                    self.frontier_escalation_models
+                )
         return params
+
+    def frontier_models(self) -> tuple[str, ...]:
+        """Every non-bench model this policy grants a frontier ticket."""
+        models = (self.frontier_oracle_model, *self.frontier_escalation_models)
+        return tuple(dict.fromkeys(m for m in models if m is not None))
 
 
 class GeneratorSettingsRevision(GeneratorModel):

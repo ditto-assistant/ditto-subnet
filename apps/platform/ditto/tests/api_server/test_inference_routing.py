@@ -391,6 +391,7 @@ async def test_aggregate_discovery_tracks_active_model_endpoints(
 
     config = SimpleNamespace(
         allowed_models=(model,),
+        frontier_oracle_models=(),
         discovery_url_template="https://openrouter.test/{model}",
         route_speed_weight=0.65,
         route_cost_weight=0.25,
@@ -423,3 +424,170 @@ async def test_aggregate_discovery_tracks_active_model_endpoints(
                     )
                     assert route is not None
                     assert route.status == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("listed", [True, False])
+async def test_discovery_gives_a_listed_frontier_model_its_aggregate_route(
+    session_maker: async_sessionmaker[AsyncSession], listed: bool
+) -> None:
+    model = "openai/gpt-oss-120b"
+
+    def respond(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "endpoints": [
+                        {
+                            "provider_name": "discovered-provider",
+                            "quantization": "fp8",
+                            "status": 0,
+                        }
+                    ]
+                }
+            },
+        )
+
+    config = SimpleNamespace(
+        allowed_models=(model,),
+        frontier_oracle_models=(model,) if listed else (),
+        discovery_url_template="https://openrouter.test/{model}",
+        route_speed_weight=0.65,
+        route_cost_weight=0.25,
+        route_exploration_weight=0.10,
+        route_exploration_ticket_budget=3,
+        route_min_tool_accuracy=0.55,
+        route_min_composite=0.15,
+        route_min_calibration_samples=60,
+        route_max_error_rate=0.25,
+        route_max_timeout_rate=0.15,
+        route_cooldown_seconds=30,
+        route_ewma_alpha=0.20,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        await ProviderRouteRefresher(
+            config=config, session_maker=session_maker, client=client
+        ).refresh()
+    async with session_maker() as session:
+        route = await session.get(
+            InferenceProviderRoute,
+            (model, AGGREGATE_PROVIDER, aggregate_profile_revision(model)),
+        )
+        # Listed, the route exists but is not eligible until an operator
+        # calibrates it; unlisted, discovery keeps only provider rows.
+        assert (route is not None) == listed
+        if route is not None:
+            assert route.calibration_status != "eligible"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["status", "body", "transport"])
+async def test_a_failing_frontier_model_is_skipped_not_fatal(
+    session_maker: async_sessionmaker[AsyncSession], failure: str
+) -> None:
+    """A frontier-only model whose discovery fails is logged and skipped;
+    the bench model's routes still refresh."""
+    bench = "openai/gpt-oss-20b"
+    frontier = "openai/gpt-oss-120b"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if frontier in str(request.url):
+            if failure == "status":
+                return httpx.Response(404, json={"error": "unknown model"})
+            if failure == "body":
+                return httpx.Response(200, content=b"not json")
+            raise httpx.ConnectError("down", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "endpoints": [
+                        {
+                            "provider_name": "discovered-provider",
+                            "quantization": "fp8",
+                            "status": 0,
+                        }
+                    ]
+                }
+            },
+        )
+
+    config = SimpleNamespace(
+        allowed_models=(bench,),
+        frontier_oracle_models=(frontier,),
+        discovery_url_template="https://openrouter.test/{model}",
+        route_speed_weight=0.65,
+        route_cost_weight=0.25,
+        route_exploration_weight=0.10,
+        route_exploration_ticket_budget=3,
+        route_min_tool_accuracy=0.55,
+        route_min_composite=0.15,
+        route_min_calibration_samples=60,
+        route_max_error_rate=0.25,
+        route_max_timeout_rate=0.15,
+        route_cooldown_seconds=30,
+        route_ewma_alpha=0.20,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        await ProviderRouteRefresher(
+            config=config, session_maker=session_maker, client=client
+        ).refresh()
+    async with session_maker() as session:
+        assert await session.get(InferenceRoutingPolicy, bench) is not None
+        assert await session.get(InferenceRoutingPolicy, frontier) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [None, [], "endpoints"])
+async def test_a_frontier_response_without_a_data_object_skips_only_that_model(
+    session_maker: async_sessionmaker[AsyncSession], data: object
+) -> None:
+    """A frontier discovery body whose ``data`` is not an object is logged and
+    skipped; the frontier model after it is still discovered."""
+    bench = "openai/gpt-oss-20b"
+    broken = "openai/gpt-5.6-luna"
+    frontier = "openai/gpt-oss-120b"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if broken in str(request.url):
+            return httpx.Response(200, json={"data": data})
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "endpoints": [
+                        {
+                            "provider_name": "discovered-provider",
+                            "quantization": "fp8",
+                            "status": 0,
+                        }
+                    ]
+                }
+            },
+        )
+
+    config = SimpleNamespace(
+        allowed_models=(bench,),
+        frontier_oracle_models=(broken, frontier),
+        discovery_url_template="https://openrouter.test/{model}",
+        route_speed_weight=0.65,
+        route_cost_weight=0.25,
+        route_exploration_weight=0.10,
+        route_exploration_ticket_budget=3,
+        route_min_tool_accuracy=0.55,
+        route_min_composite=0.15,
+        route_min_calibration_samples=60,
+        route_max_error_rate=0.25,
+        route_max_timeout_rate=0.15,
+        route_cooldown_seconds=30,
+        route_ewma_alpha=0.20,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        await ProviderRouteRefresher(
+            config=config, session_maker=session_maker, client=client
+        ).refresh()
+    async with session_maker() as session:
+        assert await session.get(InferenceRoutingPolicy, bench) is not None
+        assert await session.get(InferenceRoutingPolicy, broken) is None
+        assert await session.get(InferenceRoutingPolicy, frontier) is not None

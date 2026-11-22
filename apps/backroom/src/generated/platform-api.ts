@@ -27600,6 +27600,8 @@ export interface components {
              * @default 0.25
              */
             frontier_escalation_max_failed_fraction: number;
+            /** Frontier Escalation Models */
+            frontier_escalation_models?: string[];
             /**
              * Frontier Escalation Solve Threshold
              * @default 1
@@ -27607,6 +27609,8 @@ export interface components {
             frontier_escalation_solve_threshold: number;
             /** Frontier Oracle Agent Id */
             frontier_oracle_agent_id?: string | null;
+            /** Frontier Oracle Model */
+            frontier_oracle_model?: string | null;
             /**
              * Frontier Oracle Timeout Hours
              * @default 12
@@ -27895,6 +27899,9 @@ export interface components {
             attempts: number;
             /** Deadline */
             deadline?: string | null;
+            /** Model */
+            model?: string | null;
+            model_run?: components["schemas"]["GeneratorFrontierModelRunView"] | null;
             /** Oracle Failed */
             oracle_failed: number;
             /** Outcome */
@@ -27917,6 +27924,11 @@ export interface components {
             };
             /** Solve Threshold */
             solve_threshold: number;
+            /**
+             * Step
+             * @default 0
+             */
+            step: number;
             /** Validator Hotkey */
             validator_hotkey?: string | null;
         };
@@ -27932,6 +27944,21 @@ export interface components {
             timestamp: string;
             /** Wave */
             wave: number;
+        };
+        /**
+         * GeneratorFrontierModelRunView
+         * @description The inference model an oracle lease was really granted.
+         */
+        GeneratorFrontierModelRunView: {
+            /** Fallback */
+            fallback: boolean;
+            /**
+             * Leased At
+             * Format: date-time
+             */
+            leased_at: string;
+            /** Model */
+            model: string;
         };
         /**
          * GeneratorFrontierOracleView
@@ -28006,6 +28033,8 @@ export interface components {
              */
             created_at: string;
             escalation?: components["schemas"]["GeneratorFrontierEscalationView"] | null;
+            /** Escalation Steps */
+            escalation_steps?: components["schemas"]["GeneratorFrontierEscalationView"][];
             /** Frontier Weight */
             frontier_weight: number;
             oracle: components["schemas"]["GeneratorFrontierOracleView"] | null;
@@ -28018,6 +28047,9 @@ export interface components {
             oracle_attempts: number;
             /** Oracle Deadline */
             oracle_deadline: string | null;
+            /** Oracle Model */
+            oracle_model?: string | null;
+            oracle_model_run?: components["schemas"]["GeneratorFrontierModelRunView"] | null;
             /** Round Index */
             round_index: number;
             /** Settle Reason */

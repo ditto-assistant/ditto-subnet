@@ -148,8 +148,16 @@ async def ensure_inference_grant(
     config: InferenceProxyConfig,
     supported_profiles: tuple[str, ...] | None = None,
     calibration_manifest_sha256: str | None = None,
+    model: str | None = None,
 ) -> InferenceGrant | None:
     """Create or return the one grant bound to this exact live lease.
+
+    ``model`` overrides the bench model for a frontier oracle
+    ticket (``frontier_oracle_model``); it must be in the operator's
+    ``frontier_oracle_models`` list and the ticket on Bench v7+ (where the
+    grant pins its model), or no grant is made; the caller then falls back to
+    the bench model. None, every other ticket, grants the bench model. A lease
+    whose grant already pins a different model gets no grant either.
 
     Creation is race-free at the database level, not by convention. ``SELECT
     ... FOR UPDATE`` locks rows that exist; when the grant has not been created
@@ -181,6 +189,7 @@ async def ensure_inference_grant(
         .with_for_update()
         .execution_options(populate_existing=True)
     )
+    requested_model = model
     grant = await session.scalar(lease)
     if grant is None:
         # A validator process that reclaims a continual retest receives a fresh
@@ -194,8 +203,11 @@ async def ensure_inference_grant(
             ticket=ticket,
             now=datetime.now(UTC),
         )
-        model = benchmark_model(ticket.bench_version)
-        if model not in config.allowed_models:
+        if model is None:
+            model = benchmark_model(ticket.bench_version)
+            if model not in config.allowed_models:
+                return None
+        elif ticket.bench_version < 7 or model not in config.frontier_oracle_models:
             return None
         route_provider: str | None = config.provider
         route_profile: str | None = f"legacy-config-{config.provider}"
@@ -264,7 +276,16 @@ async def ensure_inference_grant(
         except IntegrityError:
             # Another caller created this lease's grant first. Its row is the
             # one grant for this ticket; adopt it instead of inserting a second.
-            return await session.scalar(lease)
+            grant = await session.scalar(lease)
+    if (
+        grant is not None
+        and requested_model is not None
+        and list(grant.allowed_models) != [requested_model]
+    ):
+        # The lease already holds a grant pinned to another model. Handing it
+        # out would run and record the wrong model; no grant sends the caller
+        # down its documented fallback instead.
+        return None
     return grant
 
 
