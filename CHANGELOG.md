@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.502.1 (2026-11-22)
+
+### Bug Fixes
+
+- **platform**: Keep season re-tests on lapsed shared rows; label split quorums (SN-497)
+  ([#3606](https://github.com/ditto-assistant/ditto-subnet/pull/3606),
+  [`fd97ba0`](https://github.com/ditto-assistant/ditto-subnet/commit/fd97ba0e01d71103aae6328b05858ae58848f7b7))
+
+
 ## v0.502.0 (2026-11-22)
 
 ### Features
