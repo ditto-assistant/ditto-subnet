@@ -771,6 +771,74 @@ The escalation agent must differ from the oracle and from every reference
 agent, so a panel agent never re-rolls its own failed attempt into an
 attestation.
 
+### Disputes: a human witness paid by a deposit (Platform, off by default)
+
+Escalation is still a model on the same bounded context. A valid case beyond
+every subnet model (a two-hop case whose link the models miss) still fails
+the panel, the oracle and the escalation agent, and scores like a broken
+one. The audit is the only witness that is not a model, and it can only void
+attestations. Disputes let the generator's owner bring such a case to that
+human witness, and pay for the review time it asks for
+(`frontier_disputes_enabled`, off by default). Platform-only: an upheld
+dispute is one more entry in the round's `FrontierCases`, applied by the same
+`apply_frontier` post-pass, so no score formula, bench or pack version
+changes.
+
+1. **Report.** Once the oracle has reported and the round is revealed, the
+   column owner reads which of its cases the oracle answered and failed, with
+   their scores (`POST /generator/rounds/{round}/frontier/report`, signed by
+   the hotkey with
+   `ditto-generator-frontier-report-v1:{hotkey}:{round}:{ts}:{nonce}`).
+   Before the reveal the report names no case at all. Attested cases (oracle
+   or escalation passes, upheld disputes) are not listed, and the oracle
+   keeps no answer text. The miner rebuilds its pack from the revealed seed
+   to read the cases.
+2. **Dispute.** After the reveal and inside `frontier_dispute_window_hours`
+   (default 6, cut at the audit grace deadline) the owner may dispute one
+   oracle-failed case per request
+   (`POST /generator/rounds/{round}/frontier/disputes`): the round case id,
+   1-8 `evidence_pair_ids` (the hop notes, each a pair the case's user holds
+   at its `run_after_wave`), a 20-1200 character reasoning, and a deposit of
+   at least `frontier_dispute_min_tao` (default 0.05 TAO). The deposit is a
+   finalized `Balances.transfer_keep_alive` from the hotkey's coldkey to the
+   generator upload fee's receiving address, verified exactly like that fee
+   (block hash and number, extrinsic, success, destination, amount, signer)
+   and recorded so one transfer pays for one thing across every payment lane.
+   The hotkey signs
+   `ditto-generator-frontier-dispute-v1:{hotkey}:{round}:{case}:{proof}:{ts}:{nonce}`,
+   where `proof` is the sha256 of the evidence, reasoning and deposit, so a
+   signature never carries over to edited evidence or another transfer.
+3. **Refused** without a chain read: a faulted case (the scorer's failure,
+   not the oracle's answer), a passed or attested case, a case already
+   disputed, a deposit below the minimum, another hotkey's column, the public
+   default column, a column whose audit failed, a column whose oracle failures
+   exceed `frontier_escalation_max_failed_fraction` (the escalation flood
+   guard), and anything past `frontier_dispute_max_per_column` (default 4) or
+   `frontier_dispute_max_per_round` (default 8). The deposit already prices
+   spam, but the caps bound the reviewer time one round can ask for, whatever
+   one miner is willing to pay.
+4. **Review.** Operators rule disputes in Backroom, largest deposit first,
+   then earliest filed: the case as written, the cited pairs and which of them
+   the case declares as evidence, the reasoning, the panel and oracle scores.
+   - **Upheld:** the case joins the round's attestations, bound to its
+     fingerprint, and settles exactly like an oracle pass (a failed column
+     audit still voids it). The whole deposit is owed back to the paying
+     coldkey. Platform holds no key that can send TAO, so the refund is an
+     operator payout row (pending until an operator records the transfer).
+   - **Rejected:** the case stays unsolved and the deposit is kept. The
+     reviewer's reason is required and is shown to the miner on its report.
+     No other penalty: the case already pays the squared unsolved penalty.
+5. **Settle.** The lane does not settle while the window is open with a
+   disputable case left, or while a dispute waits for a ruling, up to the
+   audit grace. A dispute still unruled then lapses: it credits nothing, and
+   its deposit is refunded, since operator silence must not cost the miner.
+   Settled rounds never reopen. With the lane on, a round whose miner column
+   has a disputable oracle-failed case therefore settles (and pays its
+   frontier credit) later than before: after the dispute window, or up to
+   `frontier_audit_grace_hours` after the oracle report when the reveal comes
+   late or a dispute waits for a ruling. A round with nothing disputable
+   settles as before.
+
 The oracle job and the audit window run after scoring and never hold a round
 open. A round whose oracle job does not complete within
 `frontier_oracle_timeout_hours` settles with no attestations.
@@ -788,8 +856,14 @@ audits, applied credit, pre-frontier column scores), the audit queue
 (`POST` there, confirmation `RULE FRONTIER AUDIT {round} {column} VALID|INVALID`,
 recorded as an operator action), and a forced settle
 (`POST .../rounds/{round}/frontier/settle`, confirmation
-`SETTLE GENERATOR FRONTIER {round}`). Public round views carry each column's
-`frontier` count and the round's `frontier_state`.
+`SETTLE GENERATOR FRONTIER {round}`), the dispute queue
+(`GET .../frontier/disputes`), a dispute with its case
+(`GET .../rounds/{round}/frontier/disputes/{case}`), its ruling (`POST` there,
+confirmation `RULE FRONTIER DISPUTE {round} {case} UPHELD|REJECTED`), the
+refund payouts (`GET .../frontier/dispute-refunds`) and the record of a paid
+refund (`POST .../frontier/dispute-refunds/{dispute}/paid`, confirmation
+`RECORD FRONTIER DISPUTE REFUND {dispute}`). Public round views carry each
+column's `frontier` count and the round's `frontier_state`.
 
 New settings (Platform, revisioned): `frontier_weight` (operator default 1.0),
 `frontier_oracle_agent_id` (unset: no oracle, frontier off),
@@ -797,9 +871,12 @@ New settings (Platform, revisioned): `frontier_weight` (operator default 1.0),
 `frontier_oracle_timeout_hours` (default 12), and the escalation tier's
 `frontier_escalation_agent_id` (unset: off), `frontier_escalation_solve_threshold`
 (1.0), `frontier_escalation_max_cases` (8), `frontier_escalation_max_cases_per_column`
-(4) and `frontier_escalation_max_failed_fraction` (0.25). `skip_unchanged_rounds`
-compares `frontier_weight` with the other score parameters, and the escalation
-fields only while escalation runs.
+(4) and `frontier_escalation_max_failed_fraction` (0.25), and the dispute
+lane's `frontier_disputes_enabled` (false), `frontier_dispute_window_hours` (6),
+`frontier_dispute_max_per_column` (4), `frontier_dispute_max_per_round` (8)
+and `frontier_dispute_min_tao` (0.05). `skip_unchanged_rounds` compares
+`frontier_weight` with the other score parameters, and the escalation and
+dispute fields only while those lanes run.
 
 ## Copies
 

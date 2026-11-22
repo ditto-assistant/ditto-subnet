@@ -48,6 +48,27 @@ escalated case is audited and credited exactly like an oracle pass. An
 escalation that never reports (timeout or attempt cap) only adds nothing:
 the oracle's own attestations still go to audit.
 
+**Disputes** (``frontier_disputes_enabled``, off by default). Escalation is
+still a model on the same bounded context, so a valid case beyond every
+subnet model stays unsolved. With disputes on, the column's owner reads
+which of its cases the oracle answered and failed (:func:`frontier_report`),
+and may dispute one (never a faulted case) as valid: signed by its hotkey,
+carrying the hop notes (``evidence_pair_ids``) and a short reasoning, and
+paid by a TAO deposit of at least ``frontier_dispute_min_tao`` to the
+generator upload fee's address, verified on chain like that fee. A larger
+deposit ranks the dispute higher in review. Disputes open once the oracle has
+reported and the round is revealed (the miner cannot see its cases before),
+for ``frontier_dispute_window_hours``, capped per column and per round, and
+never from a column whose oracle failures exceed
+``frontier_escalation_max_failed_fraction``. An operator rules each dispute in
+Backroom: upheld, the case joins the round's attestations and settles exactly
+like an oracle pass, and the whole deposit is owed back as an operator payout
+(Platform holds no key that could send it); rejected, it stays unsolved, the
+deposit is kept and the reviewer's reason is shown to the miner. The lane
+does not settle while the window is open with a disputable case left, or
+while a dispute waits, up to the audit grace; a dispute still unruled then
+lapses, credits nothing and is refunded.
+
 Until a round settles it pays its unattested score, so frontier credit never
 reaches the ledger before its audit. :func:`apply_frontier` and
 :func:`frontier_audit_sample` port the Go contract and replay its golden
@@ -68,7 +89,7 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
@@ -77,14 +98,21 @@ from ditto.api_models.generator_round_validator import GeneratorRoundCaseResult
 from ditto.api_models.generator_rounds import (
     GeneratorFrontierAuditView,
     GeneratorFrontierCaseView,
+    GeneratorFrontierDisputeDetail,
+    GeneratorFrontierDisputePolicyView,
+    GeneratorFrontierDisputeView,
     GeneratorFrontierEscalationView,
     GeneratorFrontierMemoryPair,
+    GeneratorFrontierOracleCaseResult,
     GeneratorFrontierOracleView,
+    GeneratorFrontierRefundView,
+    GeneratorFrontierReport,
     GeneratorFrontierView,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator_capabilities import ValidatorCapabilities
 from ditto.db.models import (
+    GeneratorFrontierDispute,
     GeneratorRound,
     GeneratorRoundAttempt,
     GeneratorRoundCaseVerdict,
@@ -112,6 +140,15 @@ STATE_SETTLED = "settled"
 PHASE_ORACLE = "oracle"
 PHASE_ESCALATION = "escalation"
 
+DISPUTE_PENDING = "pending"
+DISPUTE_UPHELD = "upheld"
+DISPUTE_REJECTED = "rejected"
+DISPUTE_EXPIRED = "expired"
+
+REFUND_NONE = "none"
+REFUND_PENDING = "pending"
+REFUND_PAID = "paid"
+
 AUDIT_PENDING = "pending"
 AUDIT_PASSED = "passed"
 AUDIT_FAILED = "failed"
@@ -136,6 +173,14 @@ def _open_frontier(state: str | None = None) -> Any:
 
 class FrontierRejected(ValueError):
     """A frontier write that does not match the round's frontier state."""
+
+
+class FrontierDisputeRefused(FrontierRejected):
+    """A miner dispute Platform refuses, with the HTTP status that fits it."""
+
+    def __init__(self, message: str, *, status_code: int = 409) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def _iso(value: datetime) -> str:
@@ -367,6 +412,19 @@ def begin_frontier(
             else None
         ),
         "escalation": None,
+        # Frozen too; None takes no disputes.
+        "dispute_policy": (
+            {
+                "window_hours": settings.frontier_dispute_window_hours,
+                "max_per_column": settings.frontier_dispute_max_per_column,
+                "max_per_round": settings.frontier_dispute_max_per_round,
+                "min_rao": tao_to_rao(settings.frontier_dispute_min_tao),
+                "max_failed_fraction": settings.frontier_escalation_max_failed_fraction,
+            }
+            if settings.frontier_disputes_active
+            else None
+        ),
+        "disputes": {},
     }
     return True
 
@@ -872,7 +930,9 @@ def settle_reason(
     if state != STATE_AUDIT_PENDING:
         return None
     audits = (frontier.get("audits") or {}).values()
-    if all(audit["status"] != AUDIT_PENDING for audit in audits):
+    if all(audit["status"] != AUDIT_PENDING for audit in audits) and not disputes_hold(
+        row, now=now
+    ):
         return "audits ruled" if frontier.get("audits") else "no audit required"
     opened = _parse(frontier.get("audit_opened_at")) or now
     grace = timedelta(hours=int(frontier.get("audit_grace_hours") or 24))
@@ -966,8 +1026,23 @@ async def settle_frontier(
                 sub.round_score = float(after["score"])
                 sub.updated_at = now
     row.score = score
+    disputes = {k: dict(v) for k, v in (frontier.get("disputes") or {}).items()}
+    for dispute in disputes.values():
+        if dispute["status"] == DISPUTE_PENDING:
+            # An unruled dispute credits nothing: only a ruling attests. The
+            # miner is not charged for operator silence: its deposit is owed
+            # back as for an upheld dispute.
+            dispute.update(
+                {
+                    "status": DISPUTE_EXPIRED,
+                    "reason": "unruled at settle",
+                    "refund_rao": dispute_refund_rao(dispute),
+                }
+            )
+            await owe_refund(session, dispute)
     frontier.update(
         {
+            "disputes": disputes,
             "state": STATE_SETTLED,
             "applied": applied,
             "base_columns": base_columns,
@@ -1048,6 +1123,340 @@ async def advance_frontier_rounds(
     return notes
 
 
+# --- disputes -----------------------------------------------------------------
+
+
+def _oracle_failed(frontier: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The oracle's result per case it answered and failed (never faulted)."""
+    threshold = float(frontier.get("solve_threshold") or 0.5)
+    return {
+        r["case_id"]: r
+        for r in (frontier.get("oracle") or {}).get("results", ())
+        if not r["fault"] and float(r["score"]) < threshold
+    }
+
+
+def dispute_window(row: GeneratorRound) -> tuple[datetime, datetime] | None:
+    """When the round takes disputes: from the later of the oracle report and
+    the round's reveal, for the policy's window, cut at the audit grace
+    deadline. None until both happened, or with disputes off."""
+    frontier = row.frontier or {}
+    policy = frontier.get("dispute_policy")
+    opened = _parse(frontier.get("audit_opened_at"))
+    if not policy or opened is None or row.revealed_at is None:
+        return None
+    start = max(opened, row.revealed_at)
+    end = start + timedelta(hours=int(policy["window_hours"]))
+    deadline = _audit_deadline(frontier)
+    return start, min(end, deadline) if deadline is not None else end
+
+
+def _lane_dispute_blocker(
+    row: GeneratorRound, frontier: dict[str, Any], *, now: datetime
+) -> str | None:
+    if not frontier.get("dispute_policy"):
+        return "the round's frontier policy takes no disputes"
+    state = frontier.get("state")
+    if state == STATE_SETTLED:
+        return "the round's frontier lane is settled"
+    if state != STATE_AUDIT_PENDING:
+        return "the frontier oracle has not reported on this round yet"
+    if row.revealed_at is None:
+        return "the round is not revealed yet"
+    window = dispute_window(row)
+    if window is None or now < window[0]:
+        return "disputes are not open yet"
+    if now >= window[1]:
+        return f"the dispute window closed at {_iso(window[1])}"
+    return None
+
+
+def _column_dispute_blocker(
+    row: GeneratorRound, frontier: dict[str, Any], column_id: str
+) -> str | None:
+    policy = frontier.get("dispute_policy") or {}
+    meta = next((c for c in row.columns or () if c["column_id"] == column_id), None)
+    if meta is None or meta.get("public_default"):
+        return f"column {column_id} takes no disputes"
+    audit = (frontier.get("audits") or {}).get(column_id) or {}
+    if audit.get("status") == AUDIT_FAILED:
+        return f"column {column_id} failed its frontier audit"
+    size = _column_sizes(row).get(column_id, 0)
+    if size <= 0:
+        return f"column {column_id} has no scored cases"
+    failed = sum(1 for c in _oracle_failed(frontier) if c.split("/", 1)[0] == column_id)
+    share = failed / size
+    limit = float(policy.get("max_failed_fraction") or 0.0)
+    if share > limit:
+        # The escalation flood guard: a column that mostly beats the oracle
+        # looks broken, not hard, and buys no review time.
+        return f"oracle failed {failed}/{size} cases ({share:.0%} > {limit:.0%})"
+    disputes = (frontier.get("disputes") or {}).values()
+    if sum(1 for c in disputes if c["column_id"] == column_id) >= int(
+        policy.get("max_per_column") or 0
+    ):
+        return f"column {column_id} used its {policy.get('max_per_column')} disputes"
+    if len(frontier.get("disputes") or {}) >= int(policy.get("max_per_round") or 0):
+        return f"the round used its {policy.get('max_per_round')} disputes"
+    return None
+
+
+def _case_dispute_blocker(frontier: dict[str, Any], case_id: str) -> str | None:
+    if case_id not in set(frontier.get("candidates") or ()):
+        return f"case {case_id} is not an unsolved miner-column case of the round"
+    if case_id in (frontier.get("disputes") or {}):
+        return f"case {case_id} is already disputed"
+    attested = {c for ids in (frontier.get("attested") or {}).values() for c in ids}
+    if case_id in attested:
+        return f"case {case_id} is already attested"
+    if case_id not in _oracle_failed(frontier):
+        # A faulted case is the scorer's failure, not the oracle's answer.
+        return f"the frontier oracle did not answer and fail case {case_id}"
+    return None
+
+
+def _open_dispute_cases(
+    row: GeneratorRound, frontier: dict[str, Any]
+) -> dict[str, list[str]]:
+    """Cases a dispute could still be filed on, per column, ignoring timing."""
+    out: dict[str, list[str]] = {}
+    failed = _oracle_failed(frontier)
+    candidates = [c for c in frontier.get("candidates") or () if c in failed]
+    for column_id, case_ids in _columns_of(candidates).items():
+        if _column_dispute_blocker(row, frontier, column_id) is not None:
+            continue
+        open_ids = [c for c in case_ids if _case_dispute_blocker(frontier, c) is None]
+        if open_ids:
+            out[column_id] = open_ids
+    return out
+
+
+def disputable_cases(row: GeneratorRound, *, now: datetime) -> dict[str, list[str]]:
+    """The round case ids a dispute may be filed on now, per column."""
+    frontier = row.frontier or {}
+    if _lane_dispute_blocker(row, frontier, now=now) is not None:
+        return {}
+    return _open_dispute_cases(row, frontier)
+
+
+def disputes_hold(row: GeneratorRound, *, now: datetime) -> bool:
+    """The lane waits for disputes: one is pending, or the window has not
+    closed and a disputable case is left. The audit grace still bounds it."""
+    frontier = row.frontier or {}
+    if (
+        not frontier.get("dispute_policy")
+        or frontier.get("state") != STATE_AUDIT_PENDING
+    ):
+        return False
+    if any(
+        c["status"] == DISPUTE_PENDING
+        for c in (frontier.get("disputes") or {}).values()
+    ):
+        return True
+    window = dispute_window(row)
+    if window is not None and now >= window[1]:
+        return False
+    return bool(_open_dispute_cases(row, frontier))
+
+
+def _case_memory(
+    dataset: bytes, column_id: str, case_id: str
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """A round case as written and the pairs its user holds at its
+    ``run_after_wave``, from the stored round dataset."""
+    document = json.loads(dataset)
+    pack = next(
+        (
+            column["pack"]
+            for column in document.get("columns", ())
+            if column["column_id"] == column_id
+        ),
+        None,
+    )
+    if pack is None:
+        raise FrontierRejected(f"column {column_id} is not in the round dataset")
+    local = case_id.split("/", 1)[-1]
+    case = next((c for c in pack.get("cases", ()) if c["id"] == local), None)
+    if case is None:
+        raise FrontierRejected(f"case {case_id} is not in its pack")
+    run_after = int(case.get("run_after_wave") or 0)
+    visible = [
+        pair
+        for pair in _pairs_by_user(pack).get(case.get("user_id") or "", ())
+        if pair["wave"] <= run_after
+    ]
+    return case, visible
+
+
+RAO_PER_TAO = 1_000_000_000
+
+
+def tao_to_rao(tao: float) -> int:
+    return round(tao * RAO_PER_TAO)
+
+
+def check_dispute(
+    row: GeneratorRound,
+    dataset: bytes,
+    *,
+    hotkey: str,
+    case_id: str,
+    evidence_pair_ids: Sequence[str],
+    amount_rao: int,
+    now: datetime,
+) -> None:
+    """Refuse a dispute the lane cannot take, before its deposit is read
+    from chain. Every refusal is a :class:`FrontierDisputeRefused` naming its
+    HTTP status; :func:`file_dispute` repeats the check under the round lock."""
+    frontier = row.frontier or {}
+    if row.status != "scored":
+        raise FrontierDisputeRefused("the round is not scored")
+    if blocker := _lane_dispute_blocker(row, frontier, now=now):
+        raise FrontierDisputeRefused(blocker)
+    column_id = case_id.split("/", 1)[0]
+    meta = next((c for c in row.columns or () if c["column_id"] == column_id), None)
+    if meta is None or meta.get("public_default") or meta.get("miner_hotkey") != hotkey:
+        raise FrontierDisputeRefused(
+            "only the column's own miner hotkey may dispute its cases", status_code=403
+        )
+    if blocker := _case_dispute_blocker(frontier, case_id):
+        raise FrontierDisputeRefused(blocker)
+    if blocker := _column_dispute_blocker(row, frontier, column_id):
+        raise FrontierDisputeRefused(blocker)
+    _case, visible = _case_memory(dataset, column_id, case_id)
+    held = {pair["pair_id"] for pair in visible}
+    missing = [pair_id for pair_id in evidence_pair_ids if pair_id not in held]
+    if missing:
+        raise FrontierDisputeRefused(
+            f"evidence pairs {missing} are not memory the case's user holds at "
+            "its run_after_wave",
+            status_code=422,
+        )
+    minimum = int((frontier.get("dispute_policy") or {}).get("min_rao") or 0)
+    if amount_rao < minimum:
+        raise FrontierDisputeRefused(
+            f"a dispute deposit is at least {minimum} rao "
+            f"({minimum / RAO_PER_TAO:g} TAO); got {amount_rao} rao",
+            status_code=402,
+        )
+
+
+def file_dispute(
+    row: GeneratorRound,
+    dataset: bytes,
+    *,
+    dispute_id: UUID,
+    hotkey: str,
+    case_id: str,
+    evidence_pair_ids: Sequence[str],
+    reasoning: str,
+    amount_rao: int,
+    signature: str,
+    now: datetime,
+) -> dict[str, Any]:
+    """Record a column owner's dispute on one oracle-failed case.
+
+    The caller has verified the hotkey's signature and the deposit, and holds
+    the round lock; the lane checks run again here, since the round may have
+    moved while the deposit was read from chain."""
+    check_dispute(
+        row,
+        dataset,
+        hotkey=hotkey,
+        case_id=case_id,
+        evidence_pair_ids=evidence_pair_ids,
+        amount_rao=amount_rao,
+        now=now,
+    )
+    frontier = dict(row.frontier or {})
+    dispute = {
+        "dispute_id": str(dispute_id),
+        "column_id": case_id.split("/", 1)[0],
+        "case_id": case_id,
+        "miner_hotkey": hotkey,
+        "evidence_pair_ids": list(evidence_pair_ids),
+        "reasoning": reasoning,
+        "amount_rao": amount_rao,
+        "signature": signature,
+        "status": DISPUTE_PENDING,
+        "filed_at": _iso(now),
+        "reason": None,
+        "actor": None,
+        "ruled_at": None,
+        "refund_rao": None,
+    }
+    frontier["disputes"] = {**(frontier.get("disputes") or {}), case_id: dispute}
+    row.frontier = frontier
+    return dispute
+
+
+def dispute_refund_rao(dispute: dict[str, Any]) -> int | None:
+    """What an upheld or lapsed dispute owes back: every rao it paid, the
+    priority part included. A miner who was right pays nothing."""
+    owed = int(dispute.get("amount_rao") or 0)
+    return owed if owed > 0 else None
+
+
+async def owe_refund(session: AsyncSession, dispute: dict[str, Any]) -> None:
+    """Record the refund a dispute owes as an operator payout row."""
+    if not dispute.get("refund_rao") or not dispute.get("dispute_id"):
+        return
+    row = await session.scalar(
+        select(GeneratorFrontierDispute)
+        .where(GeneratorFrontierDispute.dispute_id == UUID(dispute["dispute_id"]))
+        .with_for_update()
+    )
+    if row is None or row.refund_status != REFUND_NONE:
+        return
+    row.refund_rao = int(dispute["refund_rao"])
+    row.refund_status = REFUND_PENDING
+
+
+def rule_dispute(
+    row: GeneratorRound,
+    *,
+    case_id: str,
+    upheld: bool,
+    reason: str,
+    actor: str,
+    now: datetime,
+) -> dict[str, Any]:
+    """Record an operator's ruling on one dispute. An upheld dispute attests the
+    case, bound to its fingerprint, exactly as an oracle pass does, so the
+    settle applies it through :func:`apply_frontier`."""
+    frontier = dict(row.frontier or {})
+    if frontier.get("state") != STATE_AUDIT_PENDING:
+        raise FrontierRejected(
+            f"round {row.round_index} takes no dispute rulings "
+            f"(state {frontier.get('state')!r})"
+        )
+    disputes = {k: dict(v) for k, v in (frontier.get("disputes") or {}).items()}
+    dispute = disputes.get(case_id)
+    if dispute is None:
+        raise FrontierRejected(f"case {case_id} has no frontier dispute")
+    if dispute["status"] != DISPUTE_PENDING:
+        raise FrontierRejected(f"case {case_id} dispute is already {dispute['status']}")
+    dispute.update(
+        {
+            "status": DISPUTE_UPHELD if upheld else DISPUTE_REJECTED,
+            "reason": reason,
+            "actor": actor,
+            "ruled_at": _iso(now),
+        }
+    )
+    disputes[case_id] = dispute
+    frontier["disputes"] = disputes
+    if upheld:
+        dispute["refund_rao"] = dispute_refund_rao(dispute)
+        frontier["attested"] = _attest(frontier, [case_id])
+        frontier["attested_fingerprints"] = {
+            **(frontier.get("attested_fingerprints") or {}),
+            case_id: _case_fingerprints(row)[case_id],
+        }
+    row.frontier = frontier
+    return dispute
+
+
 # --- views ------------------------------------------------------------------
 
 # Visible-memory pairs an audit detail lists per case without a search.
@@ -1090,6 +1499,221 @@ def audit_views(row: GeneratorRound) -> list[GeneratorFrontierAuditView]:
             )
         )
     return out
+
+
+def _dispute_view(
+    row: GeneratorRound, frontier: dict[str, Any], dispute: dict[str, Any]
+) -> GeneratorFrontierDisputeView:
+    meta: dict[str, Any] = next(
+        (c for c in row.columns or () if c["column_id"] == dispute["column_id"]), {}
+    )
+    oracle = {
+        r["case_id"]: r for r in (frontier.get("oracle") or {}).get("results", ())
+    }.get(dispute["case_id"])
+    pending = dispute["status"] == DISPUTE_PENDING
+    return GeneratorFrontierDisputeView(
+        dispute_id=UUID(dispute["dispute_id"]) if dispute.get("dispute_id") else None,
+        round_index=row.round_index,
+        column_id=dispute["column_id"],
+        case_id=dispute["case_id"],
+        submission_id=(
+            UUID(meta["submission_id"]) if meta.get("submission_id") else None
+        ),
+        miner_hotkey=dispute["miner_hotkey"],
+        status=dispute["status"],
+        evidence_pair_ids=list(dispute["evidence_pair_ids"]),
+        reasoning=dispute["reasoning"],
+        amount_rao=int(dispute.get("amount_rao") or 0),
+        filed_at=datetime.fromisoformat(dispute["filed_at"]),
+        oracle_score=float(oracle["score"]) if oracle else None,
+        reason=dispute.get("reason"),
+        actor=dispute.get("actor"),
+        ruled_at=_parse(dispute.get("ruled_at")),
+        rule_deadline=_audit_deadline(frontier) if pending else None,
+        refund_rao=dispute.get("refund_rao"),
+    )
+
+
+def dispute_views(row: GeneratorRound) -> list[GeneratorFrontierDisputeView]:
+    frontier = row.frontier or {}
+    disputes = sorted(
+        (frontier.get("disputes") or {}).values(),
+        key=lambda c: (c["filed_at"], c["case_id"]),
+    )
+    return [_dispute_view(row, frontier, dispute) for dispute in disputes]
+
+
+def _dispute_policy_view(
+    row: GeneratorRound,
+) -> GeneratorFrontierDisputePolicyView | None:
+    policy = (row.frontier or {}).get("dispute_policy")
+    if not policy:
+        return None
+    window = dispute_window(row)
+    return GeneratorFrontierDisputePolicyView(
+        window_hours=int(policy["window_hours"]),
+        max_per_column=int(policy["max_per_column"]),
+        max_per_round=int(policy["max_per_round"]),
+        max_failed_fraction=float(policy["max_failed_fraction"]),
+        min_rao=int(policy.get("min_rao") or 0),
+        window_opens_at=window[0] if window else None,
+        window_closes_at=window[1] if window else None,
+    )
+
+
+async def pending_disputes(
+    session: AsyncSession,
+    *,
+    include_ruled: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[GeneratorFrontierDisputeView], int]:
+    """One page of frontier disputes awaiting a ruling, and the total, in
+    review order: the largest deposit first, then the earliest filed. Only
+    rounds with an open frontier lane are read."""
+    stmt = (
+        select(GeneratorRound)
+        .options(*_SCAN_DEFERRED)
+        .where(GeneratorRound.status == "scored")
+        .where(
+            _open_frontier() if include_ruled else _open_frontier(STATE_AUDIT_PENDING)
+        )
+        .order_by(GeneratorRound.round_index)
+    )
+    out: list[GeneratorFrontierDisputeView] = []
+    for row in await session.scalars(stmt):
+        out.extend(
+            dispute
+            for dispute in dispute_views(row)
+            if include_ruled or dispute.status == DISPUTE_PENDING
+        )
+    out.sort(key=lambda d: (-d.amount_rao, d.filed_at, d.round_index, d.case_id))
+    return out[offset : offset + limit], len(out)
+
+
+def dispute_detail(
+    row: GeneratorRound, dataset: bytes, *, case_id: str
+) -> GeneratorFrontierDisputeDetail:
+    """A dispute with its case and the pairs it cites, from the round dataset."""
+    frontier = row.frontier or {}
+    dispute = (frontier.get("disputes") or {}).get(case_id)
+    if dispute is None:
+        raise FrontierRejected(f"case {case_id} has no frontier dispute")
+    column_id = dispute["column_id"]
+    (case,) = audit_case_views(row, dataset, column_id=column_id, case_ids=[case_id])
+    written, visible = _case_memory(dataset, column_id, case_id)
+    by_id = {pair["pair_id"]: pair for pair in visible}
+    cited_ids = list(dispute["evidence_pair_ids"])
+    declared = set(written.get("evidence_pair_ids") or ())
+    return GeneratorFrontierDisputeDetail(
+        dispute=_dispute_view(row, frontier, dispute),
+        case=case,
+        cited=[_pair_view(by_id[p]) for p in cited_ids if p in by_id],
+        cited_declared=[p for p in cited_ids if p in declared],
+    )
+
+
+def frontier_report(
+    row: GeneratorRound, *, hotkey: str, now: datetime
+) -> GeneratorFrontierReport:
+    """What the oracle did on ``hotkey``'s columns, what it may dispute now,
+    and its disputes so far with each ruling's reason. The oracle-failed
+    cases are listed only once the round is revealed."""
+    frontier = row.frontier or {}
+    policy = frontier.get("dispute_policy") or {}
+    window = dispute_window(row)
+    owned = [
+        c["column_id"]
+        for c in row.columns or ()
+        if not c.get("public_default") and c.get("miner_hotkey") == hotkey
+    ]
+    # Nothing about the cases before the reveal, ids included; attested
+    # cases (oracle or escalation passes) are no longer failures.
+    attested = {c for ids in (frontier.get("attested") or {}).values() for c in ids}
+    failed = (
+        {k: v for k, v in _oracle_failed(frontier).items() if k not in attested}
+        if row.revealed_at is not None
+        else {}
+    )
+    disputable = disputable_cases(row, now=now)
+    blocker = _lane_dispute_blocker(row, frontier, now=now)
+    if blocker is None and not owned:
+        blocker = "the hotkey holds no miner column on this round"
+    if blocker is None:
+        blocker = next(
+            (b for c in owned if (b := _column_dispute_blocker(row, frontier, c))),
+            None,
+        )
+    mine = [c for column_id in owned for c in disputable.get(column_id, ())]
+    if blocker is None and not mine:
+        blocker = "no case on the hotkey's column is disputable"
+    return GeneratorFrontierReport(
+        round_index=row.round_index,
+        hotkey=hotkey,
+        state=frontier["state"],
+        oracle_failed=[
+            GeneratorFrontierOracleCaseResult(
+                case_id=case_id, score=float(failed[case_id]["score"])
+            )
+            for case_id in frontier.get("candidates") or ()
+            if case_id in failed and case_id.split("/", 1)[0] in owned
+        ],
+        disputes_enabled=bool(policy),
+        min_deposit_rao=int(policy["min_rao"]) if policy else None,
+        window_opens_at=window[0] if window else None,
+        window_closes_at=window[1] if window else None,
+        disputable=mine,
+        blocker=None if mine else blocker,
+        disputes=[c for c in dispute_views(row) if c.miner_hotkey == hotkey],
+    )
+
+
+def refund_view(row: GeneratorFrontierDispute) -> GeneratorFrontierRefundView:
+    return GeneratorFrontierRefundView(
+        dispute_id=row.dispute_id,
+        round_index=row.round_index,
+        case_id=row.case_id,
+        miner_hotkey=row.miner_hotkey,
+        miner_coldkey=row.miner_coldkey,
+        amount_rao=row.amount_rao,
+        refund_rao=row.refund_rao,
+        refund_status=row.refund_status,  # type: ignore[arg-type]
+        payment_block_hash=row.block_hash,
+        payment_extrinsic_index=row.extrinsic_index,
+        refund_block_hash=row.refund_block_hash,
+        refund_extrinsic_index=row.refund_extrinsic_index,
+        refund_paid_at=row.refund_paid_at,
+        refund_actor=row.refund_actor,
+        created_at=row.created_at,
+    )
+
+
+async def list_refunds(
+    session: AsyncSession,
+    *,
+    status: str | None = REFUND_PENDING,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[GeneratorFrontierRefundView], int]:
+    """One page of dispute deposits, oldest first, filtered by refund
+    status (``None`` lists every deposit), and the total."""
+    where = (
+        [GeneratorFrontierDispute.refund_status == status] if status is not None else []
+    )
+    total = int(
+        await session.scalar(
+            select(func.count()).select_from(GeneratorFrontierDispute).where(*where)
+        )
+        or 0
+    )
+    rows = await session.scalars(
+        select(GeneratorFrontierDispute)
+        .where(*where)
+        .order_by(GeneratorFrontierDispute.created_at, GeneratorFrontierDispute.case_id)
+        .limit(limit)
+        .offset(offset)
+    )
+    return [refund_view(row) for row in rows], total
 
 
 def _column_scores(columns: Iterable[dict[str, Any]]) -> dict[str, float]:
@@ -1169,6 +1793,8 @@ def frontier_view(row: GeneratorRound) -> GeneratorFrontierView | None:
         created_at=created,
         settled_at=_parse(frontier.get("settled_at")),
         settle_reason=frontier.get("settle_reason"),
+        dispute_policy=_dispute_policy_view(row),
+        disputes=dispute_views(row),
     )
 
 

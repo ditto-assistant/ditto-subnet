@@ -72,6 +72,8 @@ export const WRITE_TOOL_NAMES = new Set([
   'release_generator_round_lease',
   'rule_generator_frontier_audit',
   'settle_generator_round_frontier',
+  'rule_generator_frontier_dispute',
+  'record_generator_frontier_dispute_refund',
   'register_default_generator',
   'create_default_generator_upload',
   'set_model_context_settings',
@@ -190,6 +192,8 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   // A frontier audit serves sampled cases, gold answers and the user's
   // visible memory from a scored round's private dataset.
   ['get_generator_frontier_audit', BACKROOM_ARTIFACT_SCOPE],
+  // A dispute serves its case, gold answer and the user's visible memory.
+  ['get_generator_frontier_dispute', BACKROOM_ARTIFACT_SCOPE],
   ['get_v13_official_control_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_failure_diagnostic', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_verification_readiness', BACKROOM_ARTIFACT_SCOPE],

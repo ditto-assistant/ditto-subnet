@@ -36,6 +36,7 @@ from ditto.db.errors import IntegrityError as DbIntegrityError
 from ditto.db.models import (
     Agent,
     EvaluationPayment,
+    GeneratorFrontierDispute,
     GeneratorSubmissionPayment,
     ReadmissionPayment,
 )
@@ -57,6 +58,7 @@ if TYPE_CHECKING:
 _PAYMENT_REPLAY_CONSTRAINT = "evaluation_payments_pkey"
 _GENERATOR_PAYMENT_REPLAY_CONSTRAINT = "generator_submission_payments_pkey"
 _READMISSION_PAYMENT_REPLAY_CONSTRAINT = "readmission_payments_pkey"
+_DISPUTE_PAYMENT_REPLAY_CONSTRAINT = "generator_frontier_disputes_pkey"
 _READMISSION_ADMITTED_ONCE_CONSTRAINT = "readmission_payments_admitted_once"
 
 CREDIT_ORIGIN_READMISSION = "readmission"
@@ -226,6 +228,18 @@ async def get_generator_payment_for_proof(
     )
 
 
+async def get_dispute_payment_for_proof(
+    session: AsyncSession, *, block_hash: str, extrinsic_index: int
+) -> GeneratorFrontierDispute | None:
+    """Return the frontier dispute a proof already paid the deposit of."""
+    return await session.scalar(
+        select(GeneratorFrontierDispute).where(
+            GeneratorFrontierDispute.block_hash == block_hash.lower(),
+            GeneratorFrontierDispute.extrinsic_index == extrinsic_index,
+        )
+    )
+
+
 async def get_readmission_payment_for_proof(
     session: AsyncSession,
     *,
@@ -323,6 +337,17 @@ async def insert_evaluation_payment(
             session,
             block_hash=verified.block_hash,
             extrinsic_index=verified.extrinsic_index,
+        )
+        funded_dispute = await get_dispute_payment_for_proof(
+            session,
+            block_hash=verified.block_hash,
+            extrinsic_index=verified.extrinsic_index,
+        )
+    if funded_dispute:
+        raise PaymentReplayedError(
+            f"payment proof (block_hash={verified.block_hash}, "
+            f"extrinsic_index={verified.extrinsic_index}) already paid a "
+            "frontier dispute deposit"
         )
     if funded_generator:
         raise PaymentReplayedError(
@@ -429,10 +454,16 @@ async def insert_generator_payment(
             block_hash=verified.block_hash,
             extrinsic_index=verified.extrinsic_index,
         )
+        dispute_lane = await get_dispute_payment_for_proof(
+            session,
+            block_hash=verified.block_hash,
+            extrinsic_index=verified.extrinsic_index,
+        )
     if (
         agent_lane is not None
         or generator_lane is not None
         or readmission_lane is not None
+        or dispute_lane is not None
     ):
         raise PaymentReplayedError(
             f"payment proof (block_hash={verified.block_hash}, "
@@ -525,6 +556,11 @@ async def insert_readmission_payment(
                 extrinsic_index=verified.extrinsic_index,
             ),
             await get_readmission_payment_for_proof(
+                session,
+                block_hash=verified.block_hash,
+                extrinsic_index=verified.extrinsic_index,
+            ),
+            await get_dispute_payment_for_proof(
                 session,
                 block_hash=verified.block_hash,
                 extrinsic_index=verified.extrinsic_index,
@@ -701,5 +737,82 @@ async def spend_credit_on_readmission(
             ) from e
         raise DbIntegrityError(
             f"readmission_payments credit spend violated constraint: {e.orig}"
+        ) from e
+    return row
+
+
+async def insert_dispute_payment(
+    session: AsyncSession,
+    *,
+    verified: VerifiedPayment,
+    dispute_id: UUID,
+    round_index: int,
+    case_id: str,
+    block_number: int,
+) -> GeneratorFrontierDispute:
+    """Bind a verified deposit to the frontier dispute it pays for.
+
+    Runs inside the caller's dispute transaction under the shared proof
+    lock, and refuses a proof any payment lane already recorded, so one
+    transfer never pays a dispute and an upload (or two disputes).
+
+    Raises:
+        PaymentReplayedError: the proof already paid for something.
+    """
+    with session.no_autoflush:
+        await lock_payment_proof(
+            session,
+            block_hash=verified.block_hash,
+            extrinsic_index=verified.extrinsic_index,
+        )
+        lanes = (
+            await get_evaluation_payment_for_proof(
+                session,
+                block_hash=verified.block_hash,
+                extrinsic_index=verified.extrinsic_index,
+            ),
+            await get_generator_payment_for_proof(
+                session,
+                block_hash=verified.block_hash,
+                extrinsic_index=verified.extrinsic_index,
+            ),
+            await get_readmission_payment_for_proof(
+                session,
+                block_hash=verified.block_hash,
+                extrinsic_index=verified.extrinsic_index,
+            ),
+            await get_dispute_payment_for_proof(
+                session,
+                block_hash=verified.block_hash,
+                extrinsic_index=verified.extrinsic_index,
+            ),
+        )
+    if any(lane is not None for lane in lanes):
+        raise PaymentReplayedError(
+            f"payment proof (block_hash={verified.block_hash}, "
+            f"extrinsic_index={verified.extrinsic_index}) already used"
+        )
+    row = GeneratorFrontierDispute(
+        dispute_id=dispute_id,
+        round_index=round_index,
+        case_id=case_id,
+        miner_hotkey=verified.miner_hotkey,
+        miner_coldkey=verified.miner_coldkey,
+        block_hash=verified.block_hash.lower(),
+        block_number=block_number,
+        extrinsic_index=verified.extrinsic_index,
+        amount_rao=verified.amount_rao,
+        tao_usd_rate=verified.tao_usd_rate,
+        dest_address=verified.dest_address,
+        paid_at=verified.block_timestamp,
+    )
+    session.add(row)
+    try:
+        await session.flush()
+    except SAIntegrityError as e:
+        if _unique_violation_name(e) == _DISPUTE_PAYMENT_REPLAY_CONSTRAINT:
+            raise PaymentReplayedError("payment proof already used") from e
+        raise DbIntegrityError(
+            f"generator_frontier_disputes insert violated constraint: {e.orig}"
         ) from e
     return row
