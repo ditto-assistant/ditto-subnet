@@ -27663,6 +27663,8 @@ export interface components {
             frontier_escalation_solve_threshold: number;
             /** Frontier Oracle Agent Id */
             frontier_oracle_agent_id?: string | null;
+            /** Frontier Oracle Model */
+            frontier_oracle_model?: "z-ai/glm-5.3-flash" | null;
             /**
              * Frontier Oracle Timeout Hours
              * @default 12

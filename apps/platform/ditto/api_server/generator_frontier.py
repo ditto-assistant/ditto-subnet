@@ -361,6 +361,8 @@ def begin_frontier(
         "audit_cases": settings.frontier_audit_cases,
         "audit_grace_hours": settings.frontier_audit_grace_hours,
         "oracle_timeout_hours": settings.frontier_oracle_timeout_hours,
+        # None runs the oracle on the bench contract's harness model.
+        "oracle_model": settings.frontier_oracle_model,
         "solve_threshold": settings.solve_threshold,
         "candidates": candidates,
         "created_at": _iso(now),
@@ -412,6 +414,37 @@ def oracle_run_cases(frontier: dict[str, Any]) -> list[str]:
     if in_escalation(frontier):
         return list(frontier["escalation"]["selected"])
     return list(frontier.get("candidates") or ())
+
+
+def oracle_run_model(
+    frontier: dict[str, Any] | None, *, bench_version: int
+) -> str | None:
+    """The model the lane's open run (oracle or escalation) answers on: the
+    round's frozen ``frontier_oracle_model``, or None for the bench
+    contract's harness model. A lane that predates the field, or a round below
+    bench v9 (where the scorer pins no oracle route), keeps the contract
+    model."""
+    model = (frontier or {}).get("oracle_model")
+    if not model or bench_version < 9:
+        return None
+    return str(model)
+
+
+def oracle_model_capable(heartbeat: ValidatorHeartbeat | None, model: str) -> bool:
+    """The validator's scorer lets an oracle run answer on ``model``
+    (its ``generator-frontier-oracle-model:<model>`` feature)."""
+    if heartbeat is None:
+        return False
+    try:
+        capabilities = ValidatorCapabilities.model_validate(heartbeat.capabilities)
+    except ValidationError:
+        return False
+    scorer = capabilities.scorer_benchmarks
+    return bool(
+        scorer is not None
+        and scorer.generator_frontier_oracle_models is not None
+        and model in scorer.generator_frontier_oracle_models
+    )
 
 
 def oracle_capable(heartbeat: ValidatorHeartbeat | None) -> bool:

@@ -570,6 +570,24 @@ _ORACLE_MODEL = "generator-frontier-oracle-model:z-ai/glm-5.3-flash"
         ),
         # An oracle model without the oracle mode is never forwarded.
         (["generator-round-v1", _ORACLE_MODEL], None),
+        # The capability's limit is carried whole.
+        (
+            [
+                "generator-round-v1",
+                "generator-frontier-oracle-v1",
+                *(f"generator-frontier-oracle-model:z-ai/m{i}" for i in range(4)),
+            ],
+            tuple(f"z-ai/m{i}" for i in range(4)),
+        ),
+        # Past it nothing is forwarded, never a partial list.
+        (
+            [
+                "generator-round-v1",
+                "generator-frontier-oracle-v1",
+                *(f"generator-frontier-oracle-model:z-ai/m{i}" for i in range(5)),
+            ],
+            None,
+        ),
         # Malformed ids are dropped, duplicates collapse.
         (
             [

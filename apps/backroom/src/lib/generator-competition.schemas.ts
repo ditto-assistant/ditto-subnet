@@ -138,6 +138,12 @@ export const generatorCompetitionSettingsSchema = z.object({
   frontier_audit_cases: z.number().int().min(0).max(16).default(3),
   frontier_audit_grace_hours: z.number().int().min(1).max(336).default(24),
   frontier_oracle_timeout_hours: z.number().int().min(1).max(168).default(12),
+  // The model the frontier oracle (and the escalation agent) answers on
+  // instead of the bench contract's harness model: exactly the route the
+  // scorer pins. Null (the default, and the reading of a revision that
+  // predates it) keeps the contract model. Set, an oracle job leases only to
+  // validators whose scorer advertises the model (SN-496).
+  frontier_oracle_model: z.enum(['z-ai/glm-5.3-flash']).nullable().default(null),
   // Frontier escalation (ships off: inference spend): a stronger reference
   // agent re-checks a capped, secret-seed sample of the cases the oracle
   // failed (at most frontier_escalation_max_cases per round and

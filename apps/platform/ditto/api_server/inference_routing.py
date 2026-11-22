@@ -22,6 +22,7 @@ import httpx
 from sqlalchemy import select
 
 from ditto.api_models.benchmark_contract import benchmark_contract
+from ditto.api_models.generator import FRONTIER_ORACLE_MODEL
 from ditto.db.models import (
     InferenceGrant,
     InferenceProviderRoute,
@@ -45,6 +46,11 @@ def benchmark_reasoning(model: str) -> dict[str, Any] | None:
         # provider/default change cannot silently alter benchmark semantics,
         # latency, or token accounting. The trusted proxy strips reasoning
         # details from its public response, so exclude them upstream as well.
+        return {"effort": "medium", "exclude": True}
+    if model == FRONTIER_ORACLE_MODEL:
+        # The frontier oracle's model (SN-496) gets the same pinned contract:
+        # medium effort unless a v9+ caller picks one, and reasoning excluded
+        # from the response, so neither provider defaults nor privacy drift.
         return {"effort": "medium", "exclude": True}
     return None
 

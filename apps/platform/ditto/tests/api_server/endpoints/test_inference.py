@@ -16,6 +16,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import HTTPException
 
+from ditto.api_models.generator import FRONTIER_ORACLE_MODEL
 from ditto.api_models.inference import (
     InferenceExchangeRequest,
     InferenceExchangeResponse,
@@ -2323,6 +2324,28 @@ def test_v7_model_mismatch_is_recorded_as_an_evasion_signal(monkeypatch) -> None
     assert "model mismatch" in rendered
     assert "qwen/qwen3-32b" in rendered
     assert "openai/gpt-oss-20b" in rendered
+
+
+def test_an_oracle_grant_serves_the_oracle_model_whatever_the_harness_asks() -> None:
+    """SN-496: an oracle lease's grant is minted on FRONTIER_ORACLE_MODEL, and
+    the proxy serves that model, with the pinned reasoning contract, even when
+    the harness names the bench contract's model."""
+    grant = _FakeGrant(bench_version=18, allowed_models=[FRONTIER_ORACLE_MODEL])
+    served = _locked_grant_model(
+        grant, requested="openai/gpt-oss-20b", config=_FakeConfig()
+    )
+    assert served == FRONTIER_ORACLE_MODEL
+    upstream = _locked_upstream_payload(
+        {
+            "model": "openai/gpt-oss-20b",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+        model=served,
+        max_tokens=256,
+        bench_version=18,
+    )
+    assert upstream["model"] == FRONTIER_ORACLE_MODEL
+    assert upstream["reasoning"] == {"effort": "medium", "exclude": True}
 
 
 def test_v7_grant_without_a_pinned_model_fails_closed() -> None:
