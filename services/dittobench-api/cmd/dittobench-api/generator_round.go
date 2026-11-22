@@ -106,6 +106,13 @@ func validateGeneratorRoundRequest(req submitRequest, enabled bool) error {
 		}
 		return nil
 	}
+	if req.InferenceSessionID == "" {
+		// The oracle answers only on its Platform grant's pinned model and
+		// route (claimRunForMode). A sessionless run would answer through the
+		// legacy gateway on the contract model instead, and Platform would
+		// record that as the oracle's evidence (SN-496).
+		return errors.New("a frontier oracle run requires a ticket inference session")
+	}
 	if len(req.OracleCaseIDs) == 0 || len(req.OracleCaseIDs) > challenge.MaxRoundColumns*challenge.MaxCases {
 		return fmt.Errorf("a frontier oracle run needs 1..%d oracle_case_ids", challenge.MaxRoundColumns*challenge.MaxCases)
 	}
