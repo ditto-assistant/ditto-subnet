@@ -124,6 +124,7 @@ from ditto.db.models import (
     ConfirmationBundleTicket,
     ConfirmationScore,
     ContinualRetestSettingsRevision,
+    HarnessMemoryObservation,
     InferenceGrant,
     InferenceProviderRoute,
     InferenceRoutingPolicy,
@@ -373,6 +374,16 @@ def test_scorer_benchmark_capability_is_conservative_unless_fresh_verified() -> 
 
 def _sign(message: str) -> str:
     return _KEYPAIR.sign(message.encode()).hex()
+
+
+_HARNESS_MEMORY = {
+    "peak_bytes": 1900 << 20,
+    "p50_bytes": 600 << 20,
+    "p95_bytes": 1700 << 20,
+    "samples": 812,
+    "sampled_seconds": 1624.0,
+    "limit_bytes": 2048 << 20,
+}
 
 
 def _score_payload(
@@ -6112,6 +6123,94 @@ class TestFailJob:
             assert ticket is not None
             assert ticket.failure_reason == "sandbox_oom"
             assert ticket.failure_detail == "harness_oom"
+
+    async def test_failed_run_records_its_harness_memory_with_the_stored_reason(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """SN-500: a failed hand-back's memory is kept with the stored verdict."""
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        payload = _job_fail_payload(
+            agent_id, reason="infrastructure", failure_detail="host_memory_pressure"
+        )
+        payload["harness_memory"] = _HARNESS_MEMORY
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail", headers=_AUTH_HEADER, json=payload
+        )
+        assert failed.status_code == 200, failed.text
+
+        async with session_maker() as s:
+            rows = (await s.scalars(select(HarnessMemoryObservation))).all()
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.agent_id == agent_id
+            assert row.outcome == "failed"
+            assert row.failure_reason == "infrastructure"
+            assert row.failure_detail == "host_memory_pressure"
+            assert (row.peak_bytes, row.p50_bytes, row.p95_bytes) == (
+                1900 << 20,
+                600 << 20,
+                1700 << 20,
+            )
+            assert row.limit_bytes == 2048 << 20
+
+    async def test_scored_run_records_its_harness_memory_and_never_publishes_it(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        body = _score_payload(agent_id)
+        # Unsigned telemetry beside the signed report.
+        body["harness_memory"] = _HARNESS_MEMORY
+
+        scored = await client.post(
+            f"/api/v1/validator/agent/{agent_id}/score", json=body
+        )
+        assert scored.status_code == 200, scored.text
+
+        async with session_maker() as s:
+            row = (await s.scalars(select(HarnessMemoryObservation))).one()
+            assert row.outcome == "scored"
+            assert row.failure_reason is None
+            assert row.p95_bytes == 1700 << 20
+        # Operator-only: no public read carries it.
+        for path in (
+            f"/api/v1/public/agent/{agent_id}/pipeline",
+            f"/api/v1/public/agent/{agent_id}/scores",
+        ):
+            public = await client.get(path)
+            assert "harness_memory" not in public.text
+            assert "p95_bytes" not in public.text
+
+    async def test_a_report_without_harness_memory_records_nothing(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(agent_id, reason="scoring_error"),
+        )
+        assert failed.status_code == 200, failed.text
+        async with session_maker() as s:
+            assert (await s.scalars(select(HarnessMemoryObservation))).all() == []
 
     async def test_infrastructure_failure_does_not_earn_an_automatic_grant(
         self,

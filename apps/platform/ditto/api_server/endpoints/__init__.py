@@ -71,6 +71,9 @@ from ditto.api_server.endpoints.admin_generator_competition import (
 from ditto.api_server.endpoints.admin_generator_rounds import (
     router as admin_generator_rounds_router,
 )
+from ditto.api_server.endpoints.admin_harness_memory import (
+    router as admin_harness_memory_router,
+)
 from ditto.api_server.endpoints.admin_hotkey_bans import (
     router as admin_hotkey_bans_router,
 )
@@ -310,6 +313,7 @@ __all__ = [
     "admin_confirmation_score_voids_router",
     "admin_provider_outages_router",
     "admin_validation_retry_router",
+    "admin_harness_memory_router",
     "admin_validator_capacity_router",
     "admin_validator_request_outcomes_router",
     "admin_validator_slot_settings_router",

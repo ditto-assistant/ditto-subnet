@@ -16430,3 +16430,63 @@ class ModelContextScorerHeartbeat(Base):
             name="model_context_scorer_heartbeats_bounds",
         ),
     )
+
+
+class HarnessMemoryObservation(Base):
+    """One scored or failed run's harness memory, as the scorer measured it.
+
+    SN-500 step 1: operator observability only. ``peak_bytes`` is the
+    cgroup's ``memory.peak``; ``p50_bytes`` / ``p95_bytes`` are time-weighted
+    percentiles of ``memory.current``. Reported unsigned by the validator with
+    the score or the failed-ticket hand-back; one row per lease, upserted, so a
+    replayed report never double-counts. Never published, and drives no policy.
+    The migration ``2026_11_22_add_harness_memory_observations`` owns it.
+    """
+
+    __tablename__ = "harness_memory_observations"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    lease_issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    peak_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    p50_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    p95_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    samples: Mapped[int] = mapped_column(Integer, nullable=False)
+    sampled_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    limit_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="harness_memory_observations_agent_fkey",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "bench_version",
+            "validator_hotkey",
+            "lease_issued_at",
+            name="harness_memory_observations_lease_key",
+        ),
+        CheckConstraint(
+            "outcome IN ('scored', 'failed')",
+            name="outcome",
+        ),
+        CheckConstraint(
+            "peak_bytes >= 0 AND p50_bytes >= 0 AND p95_bytes >= 0 "
+            "AND samples >= 0 AND sampled_seconds >= 0",
+            name="nonnegative",
+        ),
+        Index("harness_memory_observations_agent_idx", "agent_id", "recorded_at"),
+    )

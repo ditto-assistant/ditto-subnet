@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ditto.api_models.validator import HarnessMemoryTelemetry
+
 
 class ValidatorError(Exception):
     """Base class for validator-worker failures."""
@@ -44,6 +46,9 @@ class DittobenchError(ValidatorError):
         super().__init__(*args)
         self.code = code
         self.container_log_tail = container_log_tail
+        # SN-500: the run's harness memory, when the scorer measured it. Set
+        # after the raise by the client, which knows the run it came from.
+        self.harness_memory: HarnessMemoryTelemetry | None = None
 
 
 class ValidatorInfrastructureError(DittobenchError):
@@ -255,6 +260,12 @@ and loses the whole hand-back, turning a diagnosis into a silent expiry.
 Duplicated rather than imported to keep this module dependency-free, exactly as
 :data:`FAILURE_DETAIL_MAX_LENGTH` is. The wire model is the enforcing side.
 """
+
+
+def harness_memory_of(error: BaseException) -> HarnessMemoryTelemetry | None:
+    """The failed run's harness memory, or ``None`` when none was measured."""
+    memory = getattr(error, "harness_memory", None)
+    return memory if isinstance(memory, HarnessMemoryTelemetry) else None
 
 
 def container_log_tail(error: BaseException) -> str | None:

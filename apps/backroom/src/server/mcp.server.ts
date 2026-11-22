@@ -475,6 +475,8 @@ import {
   fetchValidatorFleetObservability,
   fetchValidatorCapacity,
   fetchValidatorRequestOutcomes,
+  fetchHarnessMemoryList,
+  fetchAgentHarnessMemory,
   fetchValidatorWeightDiagnostics,
   fetchLedgerEpochSnapshots,
   fetchValidatorAssignments,
@@ -1016,6 +1018,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read per-slot state and unusable reason, serviceable/claimed slots, queue age, relay load.',
   get_validator_request_outcomes:
     'Per-validator/slot job-poll outcomes (204 gates, 428/426/409) and allocator fence holder.',
+  list_harness_memory:
+    'Operator-only harness memory per agent: peak, P50/P95 medians, OOM runs.',
+  get_agent_harness_memory:
+    'One agent\'s harness memory rollup and per-run peak/P50/P95.',
   get_miner_owner_footprint:
     'Read payment links; common-control signal, not ownership. Verify chain.',
   get_upload_payment_proof:
@@ -3658,6 +3664,36 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async ({ validatorHotkey }) => result(await fetchValidatorRequestOutcomes(validatorHotkey)),
+  )
+
+  registerTool(
+    'list_harness_memory',
+    {
+      title: 'List harness memory',
+      description:
+        'Read per-agent harness memory (SN-500), heaviest P95 first. Each run reports the harness cgroup memory.peak and time-weighted P50/P95 of memory.current; rows roll up per agent version: runs, scored_runs, failed_runs, oom_runs (harness_oom or harness_oom_grace), peak_bytes_max, p50/p95 medians, p95_bytes_max, limit_bytes_max; page with offset while has_more. Coverage starts with the release that added the telemetry; an absent agent was not measured. Operator-only: never shown to miners and feeds no scoring. Requires backroom:read and changes nothing.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(200).default(50),
+        offset: z.number().int().min(0).max(100_000).default(0),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ limit, offset }) => result(await fetchHarnessMemoryList(limit, offset)),
+  )
+
+  registerTool(
+    'get_agent_harness_memory',
+    {
+      title: 'Get agent harness memory',
+      description:
+        'Read one agent version\'s harness memory (SN-500): the rollup (null when no run reported memory) and its newest runs, each with validator_hotkey, bench_version, lease_issued_at, outcome, failure reason/detail, peak/P50/P95 bytes, samples, sampled_seconds and limit_bytes. P50/P95 are time-weighted over memory.current at 1 MiB resolution; peak is the kernel high-water mark. Operator-only: never shown to miners. Requires backroom:read and changes nothing.',
+      inputSchema: {
+        agentId: z.string().uuid(),
+        limit: z.number().int().min(1).max(200).default(50),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ agentId, limit }) => result(await fetchAgentHarnessMemory(agentId, limit)),
   )
 
   registerTool(

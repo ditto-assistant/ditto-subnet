@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 from uuid import UUID, uuid4
 
 import httpx
+from pydantic import ValidationError
 
 from ditto.api_models.benchmark_progress import (
     MAX_BENCHMARK_CHECKS,
@@ -42,6 +43,7 @@ from ditto.api_models.generator_round_validator import (
 from ditto.api_models.validator import (
     ArtifactResponse,
     BenchmarkRuntimeSettings,
+    HarnessMemoryTelemetry,
     JobResponse,
     ScoreReport,
 )
@@ -920,6 +922,9 @@ class DittobenchClient:
         # so one mutable slot is insufficient. Keep a small insertion-ordered
         # cache; publication consumes the selected entry.
         self._transcripts: dict[str, bytes] = {}
+        # SN-500: each run's harness memory, keyed by run id like transcripts,
+        # because concurrent slots share this client.
+        self._harness_memory: dict[str, HarnessMemoryTelemetry] = {}
         # Backward-compatible diagnostic view of the most recent run.
         self.last_transcript: bytes | None = None
         self.full_run_capacity = (
@@ -944,6 +949,33 @@ class DittobenchClient:
     def take_transcript(self, run_id: str) -> bytes | None:
         """Consume the verified transcript belonging to exactly ``run_id``."""
         return self._transcripts.pop(run_id, None)
+
+    def take_harness_memory(self, run_id: str) -> HarnessMemoryTelemetry | None:
+        """Consume the harness memory the scorer measured for ``run_id``."""
+        return self._harness_memory.pop(run_id, None)
+
+    def _remember_harness_memory(self, run_id: str, job: dict) -> None:
+        """Keep a terminal run's harness memory, ignoring a malformed block."""
+        raw = job.get("harness_memory")
+        if not isinstance(raw, dict):
+            return
+        try:
+            memory = HarnessMemoryTelemetry.model_validate(raw)
+        except ValidationError:
+            logger.warning("run %s harness memory block was malformed", run_id)
+            return
+        # The scorer's percentiles are ordered and clamped to the peak by
+        # construction; a block that is not is dropped here rather than
+        # rejected at the Platform wire, where it would fail the score it
+        # rides with.
+        if memory.p50_bytes > memory.p95_bytes or (
+            memory.peak_bytes > 0 and memory.p95_bytes > memory.peak_bytes
+        ):
+            logger.warning("run %s harness memory percentiles are inconsistent", run_id)
+            return
+        self._harness_memory[run_id] = memory
+        while len(self._harness_memory) > 64:
+            self._harness_memory.pop(next(iter(self._harness_memory)))
 
     def _control_headers(self) -> dict[str, str]:
         """Authorize this validator on the scorer's control plane.
@@ -1778,15 +1810,13 @@ class DittobenchClient:
             benchmark_runtime=benchmark_runtime,
             dueling_slice=dueling_slice,
         )
-        report = await self._poll(
+        return await self._poll_attaching_memory(
             run_id,
             progress_callback=progress_callback,
             expected_bench_version=bench_version,
             ticket_deadline=ticket_deadline,
+            dueling_slice=dueling_slice,
         )
-        if dueling_slice is not None:
-            verify_dueling_report(report, dueling_slice, bench_version=bench_version)
-        return report
 
     async def run_generator_round(
         self,
@@ -2086,6 +2116,40 @@ class DittobenchClient:
         )
         return str(run_id)
 
+    async def _poll_attaching_memory(
+        self,
+        run_id: str,
+        *,
+        progress_callback: ProgressCallback | None = None,
+        expected_bench_version: int,
+        ticket_deadline: datetime | None = None,
+        dueling_slice: DuelingSlice | None = None,
+    ) -> ScoreReport:
+        """:meth:`_poll` plus dueling verification, with a failed run's
+        harness memory on its error.
+
+        SN-500: the worker that reports a failure never sees the run id, so
+        the memory measured for that run rides on the raised error. That
+        includes a done run whose report then fails dueling verification. A
+        scored run's memory stays keyed by run id for
+        :meth:`take_harness_memory`.
+        """
+        try:
+            report = await self._poll(
+                run_id,
+                progress_callback=progress_callback,
+                expected_bench_version=expected_bench_version,
+                ticket_deadline=ticket_deadline,
+            )
+            if dueling_slice is not None:
+                verify_dueling_report(
+                    report, dueling_slice, bench_version=expected_bench_version
+                )
+            return report
+        except DittobenchError as failed:
+            failed.harness_memory = self._harness_memory.pop(run_id, None)
+            raise
+
     async def _poll(
         self,
         run_id: str,
@@ -2206,6 +2270,10 @@ class DittobenchClient:
                             "dittobench progress callback failed; scoring continues"
                         )
                 status = data.get("status")
+                if status in (_DONE, _FAILED) and not raw:
+                    # Raw polls are generator rounds: no consumer takes their
+                    # memory, so caching it would only evict a scored run's.
+                    self._remember_harness_memory(run_id, data)
                 if status == _DONE:
                     rep = data.get("report")
                     details = rep.get("details") if isinstance(rep, dict) else None

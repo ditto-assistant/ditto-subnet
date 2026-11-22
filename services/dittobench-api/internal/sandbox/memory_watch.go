@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,41 @@ type memoryWatch struct {
 	frozen   bool
 	done     chan struct{}
 	stopOnce sync.Once
+	// usage is a time-weighted histogram of memory.current in MiB buckets:
+	// seconds spent at each level (SN-500). Each sample is weighted by the
+	// time that actually passed until the next one, so the faster sampling
+	// near the cap cannot skew P50/P95 upward. Bounded by the cap, so it
+	// never decimates.
+	usage        map[uint64]float64
+	usageSamples int
+	usageSeconds float64
+	// pending is the newest sample, not yet credited. It is weighted when the
+	// next sample lands, or, as the last one, by the time until the freeze or
+	// profile read, capped at its planned interval: time that did not elapse
+	// is never credited.
+	pending *pendingUsage
+	// now is a test clock; nil means time.Now.
+	now func() time.Time
+}
+
+type pendingUsage struct {
+	bucket  uint64
+	at      time.Time
+	planned time.Duration
+}
+
+// mibBytes is one MiB in bytes, the histogram's bucket width.
+const mibBytes = 1 << 20
+
+// MemoryProfile summarises one harness run's cgroup memory (SN-500): the
+// kernel's high-water mark and time-weighted percentiles of memory.current.
+type MemoryProfile struct {
+	PeakBytes      uint64
+	P50Bytes       uint64
+	P95Bytes       uint64
+	Samples        int
+	SampledSeconds float64
+	LimitBytes     uint64
 }
 
 func (d *LocalDocker) readHostMemAvailable() (uint64, bool) {
@@ -88,6 +124,7 @@ cat /sys/fs/cgroup/memory.current 2>/dev/null || true
 			if limitBytes > 0 && sample.MemoryPeakBytes != nil && *sample.MemoryPeakBytes*100 >= limitBytes*85 {
 				interval /= 4
 			}
+			w.recordUsage(sample.MemoryCurrentBytes, interval)
 		} else if state, inspectErr := d.dockerOutput(ctx, "inspect", "--format", "{{.State.Running}}", containerID); inspectErr != nil ||
 			strings.TrimSpace(string(state)) != "true" {
 			// Stopped (or gone): freeze before any post-kill host reading lands.
@@ -126,6 +163,111 @@ func (w *memoryWatch) recordCgroup(sample RuntimeDiagnostics) {
 	}
 }
 
+func (w *memoryWatch) clock() time.Time {
+	if w.now != nil {
+		return w.now()
+	}
+	return time.Now()
+}
+
+// recordUsage adds one memory.current reading. It is weighted by the time
+// until the next reading; planned bounds that weight if it is the last.
+func (w *memoryWatch) recordUsage(current *uint64, planned time.Duration) {
+	if current == nil || planned <= 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.frozen {
+		return
+	}
+	now := w.clock()
+	if w.pending != nil {
+		// A following sample landed: the previous level held for all of it.
+		w.creditLocked(w.pending.bucket, max(now.Sub(w.pending.at), 0).Seconds())
+	}
+	w.pending = &pendingUsage{bucket: *current / mibBytes, at: now, planned: planned}
+	w.usageSamples++
+}
+
+func (w *memoryWatch) creditLocked(bucket uint64, seconds float64) {
+	if w.usage == nil {
+		w.usage = make(map[uint64]float64)
+	}
+	w.usage[bucket] += seconds
+	w.usageSeconds += seconds
+}
+
+// pendingSecondsLocked is the last sample's weight so far: the time since it
+// was taken, never more than its planned interval.
+func (w *memoryWatch) pendingSecondsLocked(now time.Time) float64 {
+	if w.pending == nil {
+		return 0
+	}
+	return min(max(now.Sub(w.pending.at), 0), w.pending.planned).Seconds()
+}
+
+// profile is the run's memory summary, or nil when nothing was sampled.
+func (w *memoryWatch) profile(limitBytes uint64) *MemoryProfile {
+	if w == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.usageSamples == 0 && w.peak == nil {
+		return nil
+	}
+	// Read without mutating: a live sampler keeps crediting after this.
+	usage, seconds := w.usage, w.usageSeconds
+	if w.pending != nil {
+		credit := w.pendingSecondsLocked(w.clock())
+		usage = make(map[uint64]float64, len(w.usage)+1)
+		for bucket, weight := range w.usage {
+			usage[bucket] = weight
+		}
+		usage[w.pending.bucket] += credit
+		seconds += credit
+	}
+	profile := &MemoryProfile{
+		Samples:        w.usageSamples,
+		SampledSeconds: seconds,
+		LimitBytes:     limitBytes,
+	}
+	if w.peak != nil {
+		profile.PeakBytes = *w.peak
+	}
+	if len(usage) > 0 {
+		buckets := make([]uint64, 0, len(usage))
+		for bucket := range usage {
+			buckets = append(buckets, bucket)
+		}
+		sort.Slice(buckets, func(i, j int) bool { return buckets[i] < buckets[j] })
+		profile.P50Bytes = weightedQuantile(buckets, usage, seconds, 0.50)
+		profile.P95Bytes = weightedQuantile(buckets, usage, seconds, 0.95)
+	}
+	// memory.peak is the kernel's exact high-water mark; a percentile rounded
+	// up to its bucket edge must not report more than it.
+	if profile.PeakBytes > 0 {
+		profile.P50Bytes = min(profile.P50Bytes, profile.PeakBytes)
+		profile.P95Bytes = min(profile.P95Bytes, profile.PeakBytes)
+	}
+	return profile
+}
+
+// weightedQuantile is the smallest bucket whose cumulative weight reaches q of
+// the total, reported at the bucket's upper edge so it never understates use.
+func weightedQuantile(sorted []uint64, weights map[uint64]float64, total float64, q float64) uint64 {
+	target := q * total
+	cumulative := 0.0
+	for _, bucket := range sorted {
+		cumulative += weights[bucket]
+		if cumulative >= target {
+			return (bucket + 1) * mibBytes
+		}
+	}
+	return (sorted[len(sorted)-1] + 1) * mibBytes
+}
+
 func (w *memoryWatch) sampleHost(read func() (uint64, bool)) {
 	if w == nil {
 		return
@@ -147,6 +289,11 @@ func (w *memoryWatch) sampleHost(read func() (uint64, bool)) {
 
 func (w *memoryWatch) freeze() {
 	w.mu.Lock()
+	if !w.frozen && w.pending != nil {
+		// The container stopped during the wait: credit only what elapsed.
+		w.creditLocked(w.pending.bucket, w.pendingSecondsLocked(w.clock()))
+		w.pending = nil
+	}
 	w.frozen = true
 	w.mu.Unlock()
 }

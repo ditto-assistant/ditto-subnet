@@ -1,6 +1,8 @@
 package store
 
 import (
+	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
@@ -204,4 +206,41 @@ func TestConcurrentAccess(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestHarnessMemoryRidesTheRunRecord(t *testing.T) {
+	s := New()
+	s.Create("run-mem", "sandbox", StatusRunning, 1, 114)
+	s.SetHarnessMemory("run-mem", nil)
+	if job, _ := s.Get("run-mem"); job.HarnessMemory != nil {
+		t.Fatal("nil summary was stored")
+	}
+	s.SetHarnessMemory("run-mem", &HarnessMemory{PeakBytes: 3, P50Bytes: 1, P95Bytes: 2, Samples: 4, SampledSeconds: 8, LimitBytes: 9})
+	job, _ := s.Get("run-mem")
+	raw, err := json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"harness_memory":{"peak_bytes":3,"p50_bytes":1,"p95_bytes":2,"samples":4,"sampled_seconds":8,"limit_bytes":9}`) {
+		t.Fatalf("wire = %s", raw)
+	}
+}
+
+// A cancelled run keeps its cancellation verdict, but the memory measured
+// before the cancel still lands: Update itself has no cancelled guard (only
+// the status/verdict setters do), and SetHarnessMemory writes nothing else.
+func TestHarnessMemoryLandsOnACancelledRunWithoutReviving(t *testing.T) {
+	s := New()
+	s.Create("run-cancelled", "sandbox", StatusRunning, 1, 114)
+	if _, _, transitioned := s.CancelIfActive("run-cancelled", "run cancelled by client"); !transitioned {
+		t.Fatal("cancel did not transition")
+	}
+	s.SetHarnessMemory("run-cancelled", &HarnessMemory{PeakBytes: 7, P50Bytes: 3, P95Bytes: 6, Samples: 2, SampledSeconds: 4})
+	job, _ := s.Get("run-cancelled")
+	if job.Status != StatusFailed || job.Error != "run cancelled by client" || job.Failure != nil || job.Report != nil {
+		t.Fatalf("memory write changed the cancelled verdict: %+v", job)
+	}
+	if job.HarnessMemory == nil || job.HarnessMemory.P95Bytes != 6 {
+		t.Fatalf("cancelled run lost its memory: %+v", job.HarnessMemory)
+	}
 }

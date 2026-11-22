@@ -834,6 +834,8 @@ describe('Backroom MCP tools', () => {
         'list_validator_assignments',
         'get_validator_capacity',
         'get_validator_request_outcomes',
+        'list_harness_memory',
+        'get_agent_harness_memory',
         'list_confirmation_bundles',
         'set_burn_settings',
         'set_track_share_settings',
@@ -1219,7 +1221,10 @@ describe('Backroom MCP tools', () => {
     // summaries, detail in tool help) add 7,405 bytes, 2,432 of them the
     // whole-policy settings write with its base allowlist: measured 254,268
     // bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(254_800)
+    // The two SN-500 harness memory reads (paged list and per-agent; one-line
+    // summaries, detail in tool help) add 1,228 bytes: measured 255,496
+    // bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(256_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

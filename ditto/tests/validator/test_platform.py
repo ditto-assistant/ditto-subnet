@@ -25,6 +25,7 @@ from ditto.api_models.validator import (
     FAILURE_DETAIL_MAX_LENGTH,
     LEGACY_FAILURE_DETAIL_MAX_LENGTH,
     FailJobRequest,
+    HarnessMemoryTelemetry,
     JobRequest,
     JobResponse,
     LedgerEntry,
@@ -1933,3 +1934,82 @@ async def test_get_artifact_refusal_is_not_retried_or_infrastructure(
 
     assert not isinstance(raised.value, PlatformInfrastructureError)
     assert attempts == 1
+
+
+_TELEMETRY = HarnessMemoryTelemetry(
+    peak_bytes=1900 << 20,
+    p50_bytes=600 << 20,
+    p95_bytes=1700 << 20,
+    samples=812,
+    sampled_seconds=1624.0,
+    limit_bytes=2048 << 20,
+)
+
+
+@pytest.mark.parametrize("telemetry", [_TELEMETRY, None])
+async def test_submit_score_carries_harness_memory_only_when_measured(
+    telemetry: HarnessMemoryTelemetry | None,
+) -> None:
+    """SN-500: unsigned telemetry beside the report, absent when unmeasured."""
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"agent_id": str(agent_id), "status": "evaluating", "accepted": True},
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await PlatformClient(cast(Any, config), http, keypair).submit_score(
+            agent_id,
+            signature="ab" * 64,
+            report=_score_report(),
+            ticket_deadline=datetime.now(UTC) + timedelta(hours=1),
+            harness_memory=telemetry,
+        )
+
+    if telemetry is None:
+        assert "harness_memory" not in bodies[0]
+    else:
+        assert bodies[0]["harness_memory"]["p95_bytes"] == 1700 << 20
+
+
+async def test_report_ticket_failed_carries_harness_memory() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    job = JobResponse(
+        agent_id=agent_id,
+        miner_hotkey="5MinerA" + "x" * 41,
+        sha256="ab" * 32,
+        deadline=datetime(2026, 7, 14, 12, 30, tzinfo=UTC),
+        seed=1,
+        dataset_sha256="cd" * 32,
+        run_size="full",
+    )
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"agent_id": str(agent_id), "reopened": True})
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await PlatformClient(cast(Any, config), http, keypair).report_ticket_failed(
+            job, "sandbox_oom", "harness_oom", harness_memory=_TELEMETRY
+        )
+        await PlatformClient(cast(Any, config), http, keypair).report_ticket_failed(
+            job, "scoring_error"
+        )
+
+    assert bodies[0]["harness_memory"]["peak_bytes"] == 1900 << 20
+    assert "harness_memory" not in bodies[1]

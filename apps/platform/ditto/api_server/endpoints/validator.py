@@ -338,6 +338,7 @@ from ditto.db.queries.confirmation_scores import (
     fold_eligible_seeds_by_agent,
 )
 from ditto.db.queries.desired_era_backlog import desired_era_work_outstanding
+from ditto.db.queries.harness_memory import record_harness_memory
 from ditto.db.queries.heartbeats import (
     HeartbeatProgressRegressionError,
     _validate_same_lease_progress,
@@ -7032,6 +7033,20 @@ async def fail_job(
                 ticket.attempt_count if payload.container_log_tail is not None else None
             )
             ticket.failed_at = now
+            if payload.harness_memory is not None:
+                # SN-500 operator telemetry, recorded with the stored (post-
+                # classification) reason; a savepoint, never fails the report.
+                await record_harness_memory(
+                    session,
+                    agent_id=ticket.agent_id,
+                    bench_version=ticket.bench_version,
+                    validator_hotkey=payload.validator_hotkey,
+                    lease_issued_at=ticket.issued_at,
+                    outcome="failed",
+                    telemetry=payload.harness_memory,
+                    failure_reason=ticket.failure_reason,
+                    failure_detail=ticket.failure_detail,
+                )
             if ticket.failure_reason == "infrastructure" or platform_revoked:
                 # Keep the historical cooldown timestamp as evidence/UI context;
                 # it cannot make the exhausted ticket claimable.
@@ -7811,6 +7826,17 @@ async def submit_score(
             dueling_season_id=dueling_season_id,
             dueling=dueling,
         )
+        if payload.harness_memory is not None:
+            # SN-500 operator telemetry; a savepoint, never fails the score.
+            await record_harness_memory(
+                session,
+                agent_id=agent_id,
+                bench_version=ticket.bench_version,
+                validator_hotkey=payload.validator_hotkey,
+                lease_issued_at=ticket.issued_at,
+                outcome="scored",
+                telemetry=payload.harness_memory,
+            )
         # Phase B2: a season-seeded rotation re-score is also that duel
         # seed's confirmation record (no-op for every canonical ticket), with
         # the run's audited cost evidence as a single-seed retest records it.

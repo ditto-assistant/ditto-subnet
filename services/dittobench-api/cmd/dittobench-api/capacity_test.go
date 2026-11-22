@@ -105,6 +105,11 @@ func TestFinishSandboxRunClassifiesOOMBeforeStop(t *testing.T) {
 		job.Failure.Kind != "validator_infrastructure" || !job.Failure.Retryable {
 		t.Fatalf("infrastructure classifier missing: %+v", job.Failure)
 	}
+	// SN-500: a handle whose sampler never ran reports no memory rather than
+	// zeros an operator would read as a light harness.
+	if job.HarnessMemory != nil {
+		t.Fatalf("unsampled run reported harness memory: %+v", job.HarnessMemory)
+	}
 }
 
 // The wire kind matches the charge: an OOM at the harness's own cap on a host

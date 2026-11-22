@@ -51,6 +51,7 @@ from ditto.validator.errors import (
     ValidatorInfrastructureError,
     container_log_tail,
     failure_detail,
+    harness_memory_of,
 )
 from ditto.validator.signing import score_signing_message
 from ditto_screening_protocol.dueling import is_dueling_bench_version
@@ -3444,3 +3445,164 @@ def test_every_scorer_infrastructure_code_is_classified_by_the_validator() -> No
         f"scorer validator_infrastructure codes the validator would charge to "
         f"the miner as scoring_error: {sorted(unclassified)}"
     )
+
+
+_HARNESS_MEMORY_BLOCK = {
+    "peak_bytes": 1900 << 20,
+    "p50_bytes": 600 << 20,
+    "p95_bytes": 1700 << 20,
+    "samples": 812,
+    "sampled_seconds": 1624.0,
+    "limit_bytes": 2048 << 20,
+}
+
+
+@pytest.mark.asyncio
+async def test_scored_run_keeps_its_harness_memory_by_run_id() -> None:
+    """SN-500: a done run's memory is held for exactly its own run id."""
+    payload = _done_job()
+    payload["harness_memory"] = dict(_HARNESS_MEMORY_BLOCK)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        await client._poll_attaching_memory("run-1", expected_bench_version=8)
+        assert client.take_harness_memory("run-other") is None
+        memory = client.take_harness_memory("run-1")
+        assert memory is not None and memory.p95_bytes == 1700 << 20
+        # Consumed once.
+        assert client.take_harness_memory("run-1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "error_type"),
+    [
+        (
+            {"kind": "sandbox_failure", "code": "harness_oom", "retryable": False},
+            SandboxOomError,
+        ),
+        (
+            {
+                "kind": "validator_infrastructure",
+                "code": "host_memory_pressure",
+                "retryable": True,
+            },
+            ValidatorInfrastructureError,
+        ),
+    ],
+)
+async def test_failed_run_carries_its_harness_memory_on_the_error(
+    failure: dict[str, object], error_type: type[Exception]
+) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": "private",
+                "failure": failure,
+                "harness_memory": dict(_HARNESS_MEMORY_BLOCK),
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        with pytest.raises(error_type) as caught:
+            await client._poll_attaching_memory("run-1", expected_bench_version=8)
+    memory = harness_memory_of(caught.value)
+    assert memory is not None and memory.peak_bytes == 1900 << 20
+    assert client.take_harness_memory("run-1") is None
+
+
+@pytest.mark.asyncio
+async def test_generator_round_polls_never_cache_harness_memory() -> None:
+    """Raw polls have no consumer, so their memory must not crowd the cache."""
+    payload = _done_job()
+    payload["harness_memory"] = dict(_HARNESS_MEMORY_BLOCK)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        await client._poll_run(
+            "run-1",
+            progress_callback=None,
+            expected_bench_version=8,
+            ticket_deadline=None,
+            raw=True,
+        )
+        assert client.take_harness_memory("run-1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "inverted",
+    [
+        {"p50_bytes": 800 << 20, "p95_bytes": 600 << 20},
+        {"p95_bytes": 1950 << 20, "peak_bytes": 1900 << 20},
+    ],
+)
+async def test_inconsistent_harness_memory_is_dropped_not_forwarded(
+    inverted: dict[str, int],
+) -> None:
+    payload = _done_job()
+    payload["harness_memory"] = {**_HARNESS_MEMORY_BLOCK, **inverted}
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        await client._poll_attaching_memory("run-1", expected_bench_version=8)
+        assert client.take_harness_memory("run-1") is None
+
+
+@pytest.mark.asyncio
+async def test_refused_dueling_report_still_carries_its_harness_memory() -> None:
+    """A done run whose report fails dueling verification was still measured."""
+    payload = _done_job()  # its report has no details.dueling block
+    payload["harness_memory"] = dict(_HARNESS_MEMORY_BLOCK)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    dueling = DuelingSlice(
+        slice_bytes=b"slice",
+        expected_slice_sha256="a" * 64,
+        owner_key="coldkey:a",
+        season_id="s16-0001",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        with pytest.raises(ValidatorInfrastructureError) as refused:
+            await client._poll_attaching_memory(
+                "run-1", expected_bench_version=8, dueling_slice=dueling
+            )
+    assert refused.value.code == "dueling_report_invalid"
+    memory = harness_memory_of(refused.value)
+    assert memory is not None and memory.p95_bytes == 1700 << 20
+    assert client.take_harness_memory("run-1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "block", [None, "not-an-object", {"peak_bytes": -1}, {"p50_bytes": 1}]
+)
+async def test_missing_or_malformed_harness_memory_is_simply_absent(
+    block: object,
+) -> None:
+    payload = _done_job()
+    if block is not None:
+        payload["harness_memory"] = block
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        await client._poll_attaching_memory("run-1", expected_bench_version=8)
+        assert client.take_harness_memory("run-1") is None

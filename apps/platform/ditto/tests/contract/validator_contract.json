@@ -675,6 +675,58 @@
     "type": "object"
   },
   "FailJobRequest": {
+    "$defs": {
+      "HarnessMemoryTelemetry": {
+        "properties": {
+          "limit_bytes": {
+            "anyOf": [
+              {
+                "maximum": 1099511627776,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "p50_bytes": {
+            "maximum": 1099511627776,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "p95_bytes": {
+            "maximum": 1099511627776,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "peak_bytes": {
+            "maximum": 1099511627776,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sampled_seconds": {
+            "maximum": 604800,
+            "minimum": 0,
+            "type": "number"
+          },
+          "samples": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "peak_bytes",
+          "p50_bytes",
+          "p95_bytes",
+          "samples",
+          "sampled_seconds"
+        ],
+        "type": "object"
+      }
+    },
     "properties": {
       "agent_id": {
         "format": "uuid",
@@ -697,6 +749,17 @@
           {
             "maxLength": 4096,
             "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "harness_memory": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/HarnessMemoryTelemetry"
           },
           {
             "type": "null"
@@ -7688,6 +7751,56 @@
         ],
         "type": "object"
       },
+      "HarnessMemoryTelemetry": {
+        "properties": {
+          "limit_bytes": {
+            "anyOf": [
+              {
+                "maximum": 1099511627776,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "p50_bytes": {
+            "maximum": 1099511627776,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "p95_bytes": {
+            "maximum": 1099511627776,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "peak_bytes": {
+            "maximum": 1099511627776,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sampled_seconds": {
+            "maximum": 604800,
+            "minimum": 0,
+            "type": "number"
+          },
+          "samples": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "peak_bytes",
+          "p50_bytes",
+          "p95_bytes",
+          "samples",
+          "sampled_seconds"
+        ],
+        "type": "object"
+      },
       "InferenceCostEvidence": {
         "properties": {
           "attributed": {
@@ -7968,6 +8081,17 @@
       }
     },
     "properties": {
+      "harness_memory": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/HarnessMemoryTelemetry"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "report": {
         "$ref": "#/$defs/ScoreReport"
       },

@@ -2786,6 +2786,8 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			runID, pricedCost.Result, pricedCost.Posture, pricedCost.CostNanoUSD, pricedCost.NormalizedCostNanoUSD,
 			pricedCost.RatioBPS, pricedCost.FactorBPS, pricedCost.AppliedFactorBPS)
 	}
+	// Before Finish, so the validator never reads a done run without it.
+	s.store.SetHarnessMemory(runID, harnessMemory(handle))
 	s.store.Finish(runID, report)
 	log.Printf("run %s done: bench_version=%d composite=%.3f tool_mean=%.3f memory_mean=%.3f observed=%d capped=%d",
 		runID, req.BenchVersion, report.Composite, report.ToolMean, report.MemoryMean, observedTool, cappedTool)
@@ -2886,6 +2888,22 @@ func validateBenchVersionResult(requested, artifactVersion int, details *protoco
 	return nil
 }
 
+// harnessMemory converts the sandbox's memory profile for the run record.
+func harnessMemory(handle *sandbox.Handle) *store.HarnessMemory {
+	profile := handle.MemoryProfile()
+	if profile == nil {
+		return nil
+	}
+	return &store.HarnessMemory{
+		PeakBytes:      profile.PeakBytes,
+		P50Bytes:       profile.P50Bytes,
+		P95Bytes:       profile.P95Bytes,
+		Samples:        profile.Samples,
+		SampledSeconds: profile.SampledSeconds,
+		LimitBytes:     profile.LimitBytes,
+	}
+}
+
 // finishSandboxRun runs deferred, after the scored path has returned. Its job is
 // to attach post-mortem sandbox diagnostics to a failed run and stop the
 // container -- NOT to decide whose fault the failure was. The scored path is the
@@ -2915,6 +2933,8 @@ func validateBenchVersionResult(requested, artifactVersion int, details *protoco
 func (s *server) finishSandboxRun(runID string, handle *sandbox.Handle) {
 	job, ok := s.store.Get(runID)
 	if ok && job.Status == store.StatusFailed {
+		// Read before Stop below freezes the sampler (SN-500).
+		s.store.SetHarnessMemory(runID, harnessMemory(handle))
 		diagnostics := s.sandbox.Diagnostics(context.Background(), handle)
 		// Read the container's own output BEFORE the Stop below removes it.
 		// `docker logs` cannot read a removed container, so every prior failed
