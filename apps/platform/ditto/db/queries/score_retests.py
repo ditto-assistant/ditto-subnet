@@ -78,8 +78,21 @@ The accepted score and its exact run are the authority, so they may run
 before quorum (evaluating or ATH-held agents), may re-lease a row a continual
 retest left ``expired``, and a failed replacement restores the consumed ticket
 and closes instead of stranding the lifecycle."""
+EXPIRED_ROW_RELEASE_BASES = REPAIR_RETEST_BASES | {DUELING_ROTATION_RETEST_BASIS}
+"""Queued bases that may re-lease a shared ticket row another lane's lapsed
+lease left ``expired`` (SN-497). The continual retest lane leases the same
+``(agent, version, validator)`` row as the accepted score; when that lease
+lapses the row reads ``expired`` although the accepted score and its run are
+untouched. Closing a season rotation re-test there left that validator's row
+in an older season while the others moved on, splitting a valid quorum across
+non-adjacent seasons so no two-season window held it. A rotation re-test
+waits out the row's ``retry_after`` cooldown instead of closing."""
 MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS = 1
 _FINALIZED_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE)
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _agent_retestable(agent: Agent | None, entry: ScoreAuditEntry) -> bool:
@@ -633,7 +646,7 @@ async def activate_next_score_retest(
             continue
         elif ticket.status != TicketStatus.SCORED and not (
             ticket.status == TicketStatus.EXPIRED
-            and entry.payload.get("basis") in REPAIR_RETEST_BASES
+            and entry.payload.get("basis") in EXPIRED_ROW_RELEASE_BASES
         ):
             stale_reason = "accepted score ticket is no longer reusable"
         elif score is None or score.run_id != entry.payload.get("run_id"):
@@ -646,6 +659,17 @@ async def activate_next_score_retest(
             await _close_unserviceable(
                 session, entry=entry, now=now, reason=stale_reason
             )
+            continue
+        assert ticket is not None
+        if (
+            ticket.status == TicketStatus.EXPIRED
+            and entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS
+            and ticket.retry_after is not None
+            and _utc(ticket.retry_after) > now
+        ):
+            # SN-497: another lane's lease on this shared row just lapsed.
+            # Keep the rotation re-test queued through that lease's cooldown;
+            # the season boundary closes it if the season ends first.
             continue
         if (
             entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS
@@ -725,8 +749,13 @@ async def _rotation_retest_stale_reason(
     if season is None or str(season.id) != entry.payload.get("dueling_season_id"):
         return "the dueling season it was queued for is no longer open"
     if score.dueling_season_id == season.id:
-        return "the score is already from the open dueling season"
+        return ROTATION_ALREADY_CURRENT_REASON
     return None
+
+
+ROTATION_ALREADY_CURRENT_REASON = "the score is already from the open dueling season"
+"""The one automatic close of a rotation re-test that is not a missed
+re-score: the validator's accepted score is already from the open season."""
 
 
 CATCH_UP_SOURCE_BOARD = "board"
@@ -913,6 +942,8 @@ __all__ = [
     "EVENT_SCORE_INVALIDATED",
     "REPLACEMENT_TICKET_TTL",
     "REPAIR_RETEST_BASES",
+    "EXPIRED_ROW_RELEASE_BASES",
+    "ROTATION_ALREADY_CURRENT_REASON",
     "MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS",
     "OUTAGE_VOID_RETEST_BASIS",
     "V9_CONTRACT_RETEST_BASIS",

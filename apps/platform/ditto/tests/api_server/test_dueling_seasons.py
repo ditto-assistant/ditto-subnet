@@ -57,6 +57,7 @@ from ditto.db.models import (
     GeneratorRoundCaseVerdict,
     GeneratorSubmission,
     Score,
+    ScoreAuditEntry,
     ValidatorTicket,
 )
 from ditto.db.queries.artifact_release_settings import ArtifactReleasePolicy
@@ -1536,6 +1537,104 @@ class TestDuelingSeasonRotation:
         assert view["cohort_scores_in_season"] == 1
         assert view["cohort_quorum_in_season"] == 0
 
+    async def test_a_lapsed_continual_lease_does_not_close_the_rotation(
+        self,
+        app: FastAPI,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """SN-497 (logan v17): the continual lane leases the same row as the
+        accepted score. Its lapsed lease leaves the row ``expired``; the
+        queued rotation re-test used to close there ("accepted score ticket
+        is no longer reusable"), stranding that validator's row in an older
+        season and splitting the quorum. It now waits out the cooldown and
+        then runs on the open season."""
+        _install(app, session_maker)
+        default = await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        _expired, provisional, current = await _season_sequence(session_maker, default)
+        agent_id = await _seed_agent(session_maker, 1)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            for validator in ("5RotV1", "5RotV2", "5RotV3"):
+                session.add(_v16_score(agent_id, validator, provisional, composite=0.8))
+                lapsed = validator == "5RotV1"
+                session.add(
+                    ValidatorTicket(
+                        agent_id=agent_id,
+                        validator_hotkey=validator,
+                        bench_version=16,
+                        slot_id="slot-0",
+                        status=TicketStatus.EXPIRED if lapsed else TicketStatus.SCORED,
+                        purpose=(
+                            TicketPurpose.CONTINUAL_RETEST
+                            if lapsed
+                            else TicketPurpose.CANONICAL_QUORUM
+                        ),
+                        purpose_revision=2 if lapsed else 1,
+                        issued_at=now - timedelta(hours=3),
+                        deadline=now - timedelta(minutes=5),
+                        retry_after=now + timedelta(minutes=10) if lapsed else None,
+                        attempt_count=2 if lapsed else 1,
+                        manual_retry_grants=0,
+                        infra_retry_grants=0,
+                        dueling_season_id=provisional,
+                        slice_sha256="ab" * 32,
+                    )
+                )
+
+        async def _cohort(*_args: Any) -> tuple[list[UUID], str]:
+            return [agent_id], "continual_cohort"
+
+        monkeypatch.setattr(dueling_mod, "_rotation_cohort", _cohort)
+        async with session_maker() as session, session.begin():
+            season = await session.get(DuelingSeason, current)
+            assert season is not None
+            rotation = await dueling_mod.queue_rotation_retests(
+                session, season, now=now
+            )
+        assert rotation["queued"] == 3
+
+        async def _promote(at: datetime) -> ValidatorTicket | None:
+            async with session_maker() as session, session.begin():
+                return await activate_next_score_retest(
+                    session,
+                    validator_hotkey="5RotV1",
+                    now=at,
+                    supports_version=lambda version: version == 16,
+                    required_basis=DUELING_ROTATION_RETEST_BASIS,
+                    allow_parallel_ordinary=True,
+                    allow_parallel_contract_retests=True,
+                )
+
+        async def _released() -> list[str]:
+            async with session_maker() as session:
+                return [
+                    str(entry.payload.get("reason"))
+                    for entry in await session.scalars(
+                        select(ScoreAuditEntry).where(
+                            ScoreAuditEntry.agent_id == agent_id,
+                            ScoreAuditEntry.validator_hotkey == "5RotV1",
+                            ScoreAuditEntry.event == "score_retest_released",
+                        )
+                    )
+                ]
+
+        # Inside the lapsed lease's cooldown: still queued, never closed.
+        assert await _promote(now) is None
+        assert await _released() == []
+        # After it: the rotation takes the row onto the open season's slice.
+        ticket = await _promote(now + timedelta(minutes=11))
+        assert ticket is not None and ticket.status == TicketStatus.ISSUED
+        assert ticket.purpose == TicketPurpose.CANONICAL_QUORUM
+        assert ticket.dueling_season_id is None and ticket.slice_sha256 is None
+        assert await _released() == []
+
     async def test_reign_anchors_restart_per_season(
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
@@ -2769,6 +2868,92 @@ class TestSeasonCatchup:
         assert [c.agent_id for c in off_board] == [current]
         assert dict(skipped)[expiring] == "already_retested"
         assert dict(skipped)[expired] == "already_retested"
+
+    async def test_a_catchup_the_platform_cut_short_is_not_spent(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """SN-497: an off-board catch-up only spends the agent's one catch-up
+        when every queued re-score ran. One the platform closed before a
+        validator re-scored it left a split quorum through no fault of the
+        agent, so a later boundary may try again, at most
+        MAX_OFF_BOARD_CATCHUP_ATTEMPTS seasons in all."""
+        from ditto.db.queries.audit import append_audit_entry
+        from ditto.db.queries.score_retests import (
+            CATCH_UP_SOURCE_OFF_BOARD,
+            ROTATION_ALREADY_CURRENT_REASON,
+            rotation_request_id,
+        )
+
+        full, cut, current_only, exhausted, never = [
+            await _seed_agent(session_maker, 60 + i) for i in range(5)
+        ]
+        now = datetime.now(UTC)
+        seasons = [uuid4() for _ in range(dueling_mod.MAX_OFF_BOARD_CATCHUP_ATTEMPTS)]
+
+        async def _catchup(
+            session: AsyncSession,
+            agent_id: UUID,
+            season_id: UUID,
+            *,
+            close: dict[str, str] | None = None,
+        ) -> None:
+            for validator in _CATCHUP_VALIDATORS:
+                request_id = str(rotation_request_id(season_id, agent_id, validator))
+                await append_audit_entry(
+                    session,
+                    agent_id=agent_id,
+                    validator_hotkey=validator,
+                    event="score_retest_queued",
+                    payload={
+                        "request_id": request_id,
+                        "basis": DUELING_ROTATION_RETEST_BASIS,
+                        "bench_version": 16,
+                        "dueling_season_id": str(season_id),
+                        "catch_up": True,
+                        "catch_up_source": CATCH_UP_SOURCE_OFF_BOARD,
+                    },
+                    recorded_at=now,
+                )
+                reason = (close or {}).get(validator)
+                if reason is not None:
+                    await append_audit_entry(
+                        session,
+                        agent_id=agent_id,
+                        validator_hotkey=validator,
+                        event="score_retest_released",
+                        payload={
+                            "request_id": request_id,
+                            "retest_request_id": request_id,
+                            "reason": reason,
+                            "automatic": True,
+                        },
+                        recorded_at=now,
+                    )
+
+        lapsed = {"5CatV1": "accepted score ticket is no longer reusable"}
+        async with session_maker() as session, session.begin():
+            await _catchup(session, full, seasons[0])
+            await _catchup(session, cut, seasons[0], close=lapsed)
+            await _catchup(
+                session,
+                current_only,
+                seasons[0],
+                close={"5CatV2": ROTATION_ALREADY_CURRENT_REASON},
+            )
+            for season_id in seasons:
+                await _catchup(session, exhausted, season_id, close=lapsed)
+        async with session_maker() as session:
+            used = await dueling_mod._off_board_catchups_used(
+                session,
+                agent_ids=[full, cut, current_only, exhausted, never],
+                bench_version=16,
+            )
+            # Another bench version's catch-up is not this one's.
+            other = await dueling_mod._off_board_catchups_used(
+                session, agent_ids=[full], bench_version=17
+            )
+        assert used == {full, current_only, exhausted}
+        assert other == set()
 
     async def test_an_older_rerun_of_one_artifact_is_not_the_one_retested(
         self,

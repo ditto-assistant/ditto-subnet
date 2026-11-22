@@ -509,8 +509,10 @@ class TestSeasonCoverage:
                     dueling={"columns": []},
                 )
             )
-            # "spread": one row in each of three seasons, so no window ever
-            # held its quorum and it has no last valid score at all.
+            # "spread": one row in each of three seasons, so no window holds
+            # its quorum. SN-497: ``scores`` keeps one row per validator, so
+            # this is what a partial re-score leaves behind; it is a split
+            # quorum, not an agent that never scored.
             for validator, season in zip(_VALIDATORS, ids[:3], strict=True):
                 await session.execute(
                     update(Score)
@@ -528,12 +530,75 @@ class TestSeasonCoverage:
             assert stale.median is not None
             # All four rows would pick 0.80; the counted three pick 0.85.
             assert stale.median.composite == pytest.approx(0.85)
-            assert not coverage[spread].expired
-            assert coverage[spread].median is None
+            split = coverage[spread]
+            assert split.last_valid_window is None
+            assert split.split_quorum and split.expired
+            assert not stale.split_quorum
+            assert split.median is not None
+            assert split.median.composite == pytest.approx(0.9)
             rows = await expired_season_ledger_rows(session, bench_version=_VERSION)
             assert [(row.agent_id, row.composite) for row, _ in rows] == [
-                (agent_id, pytest.approx(0.85))
+                (spread, pytest.approx(0.9)),
+                (agent_id, pytest.approx(0.85)),
             ]
+            assert all(row.eligible is False for row, _ in rows)
+
+    async def test_a_split_quorum_is_labelled_not_dropped(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """SN-497 (logan v17): two validators re-scored on a newer season, the
+        third's rotation re-test was closed, so its row stayed two seasons
+        back. No window holds three rows, yet all three are valid: the agent
+        reads as expired with a last valid score, not as never scored."""
+        maker = session_maker
+        await _activate_era(maker, _VERSION)
+        default = await _generator(
+            maker,
+            hotkey=_hotkey("//ExpiryDefault5"),
+            owner="public-default",
+            salt="expiry-default-5",
+            public_default=True,
+        )
+        ids = []
+        for index in (70, 71, 72, 73):
+            ids.append(await _open_season(maker, default, season_index=index))
+            if index != 73:
+                async with maker() as session, session.begin():
+                    row = await session.get(DuelingSeason, ids[-1])
+                    assert row is not None
+                    row.status = "closed"
+        agent_id = await _agent(
+            maker, hotkey=_DIANA, name="split", season_id=ids[2], composite=0.67
+        )
+        # Too few rows is still not a quorum: two scores never expire.
+        short = await _agent(
+            maker, hotkey=_RIVAL, name="short", season_id=ids[0], composite=0.9
+        )
+        async with maker() as session, session.begin():
+            await session.execute(
+                update(Score)
+                .where(
+                    Score.agent_id == agent_id, Score.validator_hotkey == _VALIDATORS[0]
+                )
+                .values(dueling_season_id=ids[0], composite=0.82)
+            )
+            await session.execute(
+                Score.__table__.delete().where(
+                    Score.agent_id == short, Score.validator_hotkey == _VALIDATORS[0]
+                )
+            )
+        async with maker() as session:
+            coverage = await season_coverage(session, bench_version=_VERSION)
+            split = coverage[agent_id]
+            # {72, 73} is live: two of its rows count, one does not.
+            assert split.in_window_count == 2
+            assert split.split_quorum and split.expired
+            assert split.ranked
+            assert split.median is not None
+            assert split.median.composite == pytest.approx(0.67)
+            assert not coverage[short].split_quorum
+            assert not coverage[short].expired
 
 
 class TestInCurrentPin:
