@@ -111,7 +111,8 @@ Coding remains shadow-only and score-ineligible today; see
 for the planned compatibility boundary.
 
 Your harness runs inside a fixed resource envelope: an 863 MiB memory cap
-(including `/tmp`), 2 CPUs, PID and `/tmp` limits, `/seed` and per-case
+(including `/tmp`; the cap in force is `sandbox_memory_limit_mib` on
+`GET /api/v1/public/validators`), 2 CPUs, PID and `/tmp` limits, `/seed` and per-case
 deadlines, 8 overlapping `/run` calls, and the inference walls. An
 out-of-memory kill at your own cap is a failed run: it consumes the attempt
 and starts the cooldown, so keep the harness lightweight.
