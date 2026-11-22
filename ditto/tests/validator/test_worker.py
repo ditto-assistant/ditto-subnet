@@ -3434,6 +3434,39 @@ class TestRunOnce:
         assert "slot-0" not in worker._resource_blocked_until
         platform.submit_score.assert_awaited_once()
 
+    async def test_host_memory_pressure_is_infrastructure_and_blocks_the_slot(
+        self,
+    ) -> None:
+        """SN-488: genuine infra stays infra while a harness OOM is the agent's.
+
+        The counterpart of the test above. A kill the scorer cannot pin on the
+        harness's own cap is handed back as ``infrastructure`` (Platform parks
+        it for an operator retry and never charges the miner), and the slot
+        rests so the host can recover.
+        """
+        jobs = [_job("5MinerA" + "x" * 41)]
+        platform = _platform_with_ledger(jobs=jobs, ledger=[])
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock()
+        dittobench.score_tarball = AsyncMock(
+            side_effect=ValidatorInfrastructureError("host_memory_pressure")
+        )
+        dittobench.last_details = {}
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker.run_once(set_weights=False)
+
+        reason = platform.report_ticket_failed.await_args.args[1]
+        assert reason == "infrastructure"
+        assert "slot-0" not in worker._healthy_slots
+        assert "slot-0" in worker._resource_blocked_until
+
     async def test_ticket_hand_back_failure_never_crashes_the_sweep(self) -> None:
         jobs = [_job("5MinerA" + "x" * 41)]
         platform = _platform_with_ledger(jobs=jobs, ledger=[])
@@ -6862,6 +6895,21 @@ class TestResourceConstrainedAdmission:
         for malformed in (None, True, 0, "8192", MagicMock()):
             assert worker_mod._lease_memory_limit_mib(lease(malformed)) is None
         assert worker_mod._lease_memory_limit_mib(SimpleNamespace()) is None
+
+    def test_published_cap_admits_every_slot_on_the_smallest_host(self) -> None:
+        """SN-488: at the published 863 MiB cap a 7,934 MiB host runs all 8."""
+        collector = self._collector()
+        collector.host_specs = MagicMock(
+            return_value=HostSpecs(
+                cpu_count=4,
+                memory_total_mib=7934,
+                disk_total_gib=200,
+                architecture="x86_64",
+            )
+        )
+        worker, _ = self._worker(collector=collector)
+        assert worker._sandbox_memory_limit_mib == 863
+        assert worker._memory_admitted_slots() == 8
 
     def test_heartbeat_reply_resizes_admission_to_the_live_cap(self) -> None:
         """A host admitting no slot gets no lease; the heartbeat must tell it."""

@@ -162,12 +162,16 @@ from ditto.db.queries.retry_budget import (
     INFRA_RETRY_BACKOFF_CAP,
     MAX_AGENT_INFRA_RETRY_GRANTS,
 )
+from ditto.db.queries.retry_state import is_agent_attributable_failure_detail
 from ditto.db.queries.rollout_dispatch import ROLLOUT_DISPATCH_LOCK_KEY
 from ditto.db.queries.scoring_lease_settings import (
     insert_scoring_lease_settings_revision,
     latest_scoring_lease_settings_revision,
 )
-from ditto.db.queries.tickets import issue_confirmation_ticket
+from ditto.db.queries.tickets import (
+    issue_confirmation_ticket,
+    ticket_retry_budget_spent,
+)
 from ditto.tests.legacy_era import retired_era_writes_allowed
 
 # Real dev keypairs: sign for real so _verify_signature runs end to end. The k=3
@@ -5964,6 +5968,58 @@ class TestFailJob:
             "/api/v1/validator/job", headers=_AUTH_HEADER, json=_job_payload()
         )
         assert reissued.status_code == 204, reissued.text
+
+    @pytest.mark.parametrize(
+        ("reason", "detail", "agent_fault"),
+        [
+            # SN-488: an OOM at the harness's own cap is a failed agent run.
+            ("sandbox_oom", "harness_oom", True),
+            # A kill the scorer could not pin on the harness stays infra.
+            ("infrastructure", "host_memory_pressure", False),
+        ],
+    )
+    async def test_harness_oom_is_an_agent_failure_and_host_pressure_is_infra(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        reason: str,
+        detail: str,
+        agent_fault: bool,
+    ) -> None:
+        """The OOM charge is explicit: attempt spent, never an infra retry.
+
+        Both spend this validator's one attempt (no failure auto-retries). What
+        differs is whose it is. ``harness_oom`` is agent-attributable, so the
+        stuck list never recommends an operator retry grant for it and the
+        6 h agent cooldown applies. ``host_memory_pressure`` stays
+        ``infrastructure``: parked, not the agent's, and on the retry-grant
+        path an operator uses for genuine infra.
+        """
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(agent_id, reason=reason, failure_detail=detail),
+        )
+        assert failed.status_code == 200, failed.text
+
+        async with session_maker() as s:
+            ticket = await s.get(
+                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.failure_reason == reason
+            assert ticket.failure_detail == detail
+            assert ticket.infra_retry_grants == 0
+            assert ticket_retry_budget_spent(ticket)
+            assert is_agent_attributable_failure_detail(ticket.failure_detail) is (
+                agent_fault
+            )
 
     async def test_infrastructure_failure_does_not_earn_an_automatic_grant(
         self,

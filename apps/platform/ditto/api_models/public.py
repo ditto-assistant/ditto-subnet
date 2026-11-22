@@ -4617,8 +4617,9 @@ _PUBLIC_AGENT_FAILURE_CODES: frozenset[str] = frozenset(
         "inference_allowance_exhausted",
         "inference_request_rejected",
         "model_inference_required",
-        # OOM kill at the harness's own published memory cap while the host
-        # kept headroom (docs/RUNTIME-ENVELOPE.md).
+        # OOM kill at the harness's own memory cap, proven by its cgroup's
+        # memory.events or inferred from its peak while the host kept headroom
+        # (docs/RUNTIME-ENVELOPE.md). A failed agent run.
         "harness_oom",
     }
 )

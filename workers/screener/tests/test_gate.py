@@ -2716,7 +2716,7 @@ async def test_fake_gateway_is_internal_and_resource_capped(
     assert "SSL_CERT_FILE=/run/dittobench/openrouter-shim-ca.pem" in harness
     assert "fake-gateway" not in " ".join(harness)
     # The published envelope cap when Platform stamps none; never a stale 3g.
-    assert {"--memory", "8192m", "--memory-swap", "--pids-limit", "512"} <= set(harness)
+    assert {"--memory", "863m", "--memory-swap", "--pids-limit", "512"} <= set(harness)
     assert {"--init", "--user", "65532:65532", "--read-only"} <= set(harness)
     assert {"--ipc", "none", "--log-driver", "local"} <= set(harness)
     assert {"max-size=8m", "max-file=1", "compress=false"} <= set(harness)
@@ -4017,7 +4017,7 @@ async def test_envelope_usage_is_recorded_for_a_passing_image(
     # A passing image is exactly the case rejections cannot answer: how much of
     # the envelope the fleet actually uses.
     assert "393 MiB" in usage.summary
-    assert "8192 MiB" in usage.summary
+    assert "863 MiB" in usage.summary
     assert "12 MiB" in usage.summary
 
 

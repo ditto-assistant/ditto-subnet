@@ -187,11 +187,12 @@ type RuntimeDiagnostics struct {
 
 // Stable resource failure codes. docs/RUNTIME-ENVELOPE.md publishes each rule.
 const (
-	// CodeHarnessOOM is the miner's: the harness reached its own published cap
-	// while the host still had headroom.
+	// CodeHarnessOOM is the miner's: the harness's own cgroup hit its memory
+	// cap (proven by memory.events "oom"), or its peak reached the cap while
+	// the host still had headroom. A failed agent run, never an infra retry.
 	CodeHarnessOOM = "harness_oom"
 	// CodeHostMemoryPressure is the validator's: a kill the evidence cannot
-	// pin on the harness's own cap, or one taken while the host was short.
+	// pin on the harness's own cap. Genuine infrastructure; retried.
 	CodeHostMemoryPressure = "host_memory_pressure"
 	// CodeHarnessKilled137 is a SIGKILL with no OOM flag. Nothing proves who
 	// sent it, so it is infrastructure; Platform treats a repeat on a second
@@ -207,15 +208,25 @@ type ResourceFailure struct {
 	MinerFault bool
 }
 
-// ResourceFailure classifies a failed run from physical evidence alone. An
-// OOM is the miner's only when all three hold: the kernel flagged an OOM kill,
-// the cgroup reached its own cap (memory.peak within the published tolerance
-// of the limit, or memory.events counted an oom at the limit), and host
-// MemAvailable stayed above the published floor up to the kill. Missing
-// evidence never charges the miner.
+// ResourceFailure classifies a failed run from physical evidence alone.
+//
+// An OOM kill is the miner's -- a failed agent run, not an infra retry -- on
+// either of two kinds of proof:
+//
+//   - Proven: memory.events counted an "oom" in the harness's own cgroup. The
+//     kernel records that only when this cgroup reached its own memory.max;
+//     a host-wide OOM kill increments "oom_kill" without it. The harness's
+//     own cap killed it, so how much memory the host had left is irrelevant.
+//   - Inferred: memory.peak reached the cap within the published tolerance
+//     and host MemAvailable stayed above the published floor up to the kill.
+//     A host-wide kill of a harness near its cap looks the same, so the host
+//     must have had headroom.
+//
+// Every other OOM kill is host_memory_pressure, genuine validator
+// infrastructure. Missing evidence never charges the miner.
 func (d RuntimeDiagnostics) ResourceFailure() (ResourceFailure, bool) {
 	if d.OOMKilled || d.MemoryEvents["oom_kill"] > 0 {
-		if d.capReached() && d.hostHadHeadroom() {
+		if d.ownCgroupLimitReached() || (d.peakAtCap() && d.hostHadHeadroom()) {
 			return ResourceFailure{Code: CodeHarnessOOM, MinerFault: true}, true
 		}
 		return ResourceFailure{Code: CodeHostMemoryPressure}, true
@@ -230,14 +241,17 @@ func (d RuntimeDiagnostics) ResourceFailure() (ResourceFailure, bool) {
 	return ResourceFailure{}, false
 }
 
-func (d RuntimeDiagnostics) capReached() bool {
+// ownCgroupLimitReached is direct proof the harness hit its own cap:
+// memory.events "oom" counts only this cgroup reaching its own memory.max.
+func (d RuntimeDiagnostics) ownCgroupLimitReached() bool {
+	return d.MemoryEvents["oom"] > 0
+}
+
+// peakAtCap is the inferred form: the sampled peak came within the published
+// tolerance of the harness's limit.
+func (d RuntimeDiagnostics) peakAtCap() bool {
 	if d.MemoryLimitBytes == nil || *d.MemoryLimitBytes == 0 {
 		return false
-	}
-	// memory.events "oom" counts only this cgroup reaching its own limit; a
-	// host-wide OOM kill increments "oom_kill" without it.
-	if d.MemoryEvents["oom"] > 0 {
-		return true
 	}
 	tolerance := uint64(PublishedEnvelope.OOM.PeakToleranceMiB) * mib
 	return d.MemoryPeakBytes != nil && *d.MemoryPeakBytes+tolerance >= *d.MemoryLimitBytes
