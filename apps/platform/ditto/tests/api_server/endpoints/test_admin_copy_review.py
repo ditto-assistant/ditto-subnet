@@ -1632,6 +1632,66 @@ async def test_list_can_embed_current_comparisons_in_one_request(
     assert "sha256" not in serialized and '"m":' not in serialized
 
 
+async def test_public_reference_order_embeds_comparisons_for_the_page(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """The ranking scan skips the fingerprint columns; the page reloads them."""
+    comparable, comparable_reference = await _seed_current_comparison(maker)
+    await _seed(maker, opened_at=_T0 + timedelta(hours=1))
+    await _publish_reference(maker, comparable_reference, at=_T0 - timedelta(minutes=5))
+    _install(app, maker)
+    response = await client.get(
+        "/api/v1/admin/copy-reviews",
+        params={
+            "status": "pending",
+            "generation": "all",
+            "order": "public_reference_first",
+            "include": "current_comparison",
+            "limit": 1,
+        },
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    [item] = response.json()["items"]
+    assert item["agent_id"] == str(comparable)
+    assert item["original"]["reference_public_release"]["public_before_upload"]
+    assert item["current_comparison"]["availability"] == "available"
+
+
+async def test_legacy_references_derive_in_one_ledger_read(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Many legacy holds under one release policy cost one release read."""
+    from ditto.db.queries import copy_hold_reference
+
+    for hours in range(4):
+        await _seed(maker, opened_at=_T0 + timedelta(hours=hours))
+    calls: list[int] = []
+    real = copy_hold_reference.list_public_source_releases
+
+    async def counting(session, *, agent_ids, quorum, policy):  # type: ignore[no-untyped-def]
+        calls.append(len(list(agent_ids)))
+        return await real(session, agent_ids=agent_ids, quorum=quorum, policy=policy)
+
+    monkeypatch.setattr(copy_hold_reference, "list_public_source_releases", counting)
+    _install(app, maker)
+    response = await client.get(
+        "/api/v1/admin/copy-reviews",
+        params={
+            "status": "pending",
+            "generation": "all",
+            "order": "public_reference_first",
+        },
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    assert len(response.json()["items"]) == 4
+    assert calls == [4]
+
+
 async def test_embedded_comparison_matches_the_dedicated_endpoint(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:

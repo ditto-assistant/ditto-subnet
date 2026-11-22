@@ -18,14 +18,22 @@ release time at or before that upload (the gate's ``available <= submitted``).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections import defaultdict
+from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
+from sqlalchemy import select
+
+from ditto.api_models.source_disclosure import SourceDisclosure
+from ditto.db.models import ArtifactReleaseSettingsRevision
 from ditto.db.queries.artifact_release import list_public_source_releases
-from ditto.db.queries.artifact_release_settings import artifact_release_policy_as_of
+from ditto.db.queries.artifact_release_settings import (
+    DEFAULT_ARTIFACT_RELEASE_POLICY,
+    ArtifactReleasePolicy,
+)
 from ditto.db.queries.scores import SCORING_QUORUM
 
 if TYPE_CHECKING:
@@ -94,26 +102,103 @@ def reference_release_from_provenance(
     )
 
 
+@dataclass(frozen=True)
+class ReferenceReleaseQuery:
+    """One hold whose reference publication should be derived."""
+
+    key: Hashable
+    reference_agent_id: UUID
+    held_uploaded_at: datetime
+
+
+def _policy_as_of(
+    revisions: Sequence[tuple[int, datetime, str, int]], at: datetime
+) -> ArtifactReleasePolicy:
+    """In-memory :func:`artifact_release_policy_as_of` over preloaded rows:
+    the highest revision created at or before ``at``."""
+    eligible = [row for row in revisions if _utc(row[1]) <= at]
+    if not eligible:
+        return DEFAULT_ARTIFACT_RELEASE_POLICY
+    _revision, _created, disclosure, embargo_hours = max(
+        eligible, key=lambda row: row[0]
+    )
+    return ArtifactReleasePolicy(
+        disclosure=SourceDisclosure(disclosure), embargo_hours=embargo_hours
+    )
+
+
+async def derive_reference_public_releases(
+    session: AsyncSession, queries: Sequence[ReferenceReleaseQuery]
+) -> dict[Hashable, ReferencePublicRelease]:
+    """Compute the fact for many holds at once. Read-only.
+
+    The release-settings revision table is append-only and tiny, so it is read
+    once and each upload's policy is resolved in memory. References are then
+    grouped by policy, so the release ledger is read once per distinct policy
+    (in practice one or two), never once per hold.
+    """
+    if not queries:
+        return {}
+    revisions = [
+        (int(revision), created_at, disclosure, int(embargo_hours))
+        for revision, created_at, disclosure, embargo_hours in (
+            await session.execute(
+                select(
+                    ArtifactReleaseSettingsRevision.revision,
+                    ArtifactReleaseSettingsRevision.created_at,
+                    ArtifactReleaseSettingsRevision.disclosure,
+                    ArtifactReleaseSettingsRevision.embargo_hours,
+                )
+            )
+        ).all()
+    ]
+    by_policy: dict[ArtifactReleasePolicy, set[UUID]] = defaultdict(set)
+    policy_for: dict[Hashable, ArtifactReleasePolicy] = {}
+    for query in queries:
+        policy = _policy_as_of(revisions, _utc(query.held_uploaded_at))
+        policy_for[query.key] = policy
+        by_policy[policy].add(query.reference_agent_id)
+    published_by_policy: dict[ArtifactReleasePolicy, dict[UUID, datetime]] = {}
+    for policy, reference_ids in by_policy.items():
+        published_by_policy[policy] = await list_public_source_releases(
+            session,
+            agent_ids=sorted(reference_ids, key=str),
+            quorum=SCORING_QUORUM,
+            policy=policy,
+        )
+    results: dict[Hashable, ReferencePublicRelease] = {}
+    for query in queries:
+        uploaded = _utc(query.held_uploaded_at)
+        published = published_by_policy[policy_for[query.key]].get(
+            query.reference_agent_id
+        )
+        published_at = _utc(published) if published is not None else None
+        results[query.key] = ReferencePublicRelease(
+            reference_agent_id=query.reference_agent_id,
+            published_at=published_at,
+            public_before_upload=(
+                published_at is not None and published_at <= uploaded
+            ),
+            source="derived",
+        )
+    return results
+
+
 async def derive_reference_public_release(
     session: AsyncSession,
     *,
     reference_agent_id: UUID,
     held_uploaded_at: datetime,
 ) -> ReferencePublicRelease:
-    """Compute the fact from the release ledger. Read-only."""
-    uploaded = _utc(held_uploaded_at)
-    policy = await artifact_release_policy_as_of(session, at=uploaded)
-    releases = await list_public_source_releases(
+    """Compute the fact for one hold from the release ledger. Read-only."""
+    results = await derive_reference_public_releases(
         session,
-        agent_ids=[reference_agent_id],
-        quorum=SCORING_QUORUM,
-        policy=policy,
+        [
+            ReferenceReleaseQuery(
+                key=reference_agent_id,
+                reference_agent_id=reference_agent_id,
+                held_uploaded_at=held_uploaded_at,
+            )
+        ],
     )
-    published = releases.get(reference_agent_id)
-    published_at = _utc(published) if published is not None else None
-    return ReferencePublicRelease(
-        reference_agent_id=reference_agent_id,
-        published_at=published_at,
-        public_before_upload=published_at is not None and published_at <= uploaded,
-        source="derived",
-    )
+    return results[reference_agent_id]

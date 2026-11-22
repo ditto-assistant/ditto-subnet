@@ -99,7 +99,8 @@ from ditto.db.queries.benchmark_rollout import (
 )
 from ditto.db.queries.copy_hold_reference import (
     ReferencePublicRelease,
-    derive_reference_public_release,
+    ReferenceReleaseQuery,
+    derive_reference_public_releases,
     reference_release_from_provenance,
 )
 from ditto.db.queries.king_reign import get_king_reveal
@@ -444,11 +445,13 @@ async def _reference_releases(
 ) -> dict[UUID, ReferencePublicRelease]:
     """Each hold's reference publication, keyed by ``review_id`` (SN-499).
 
-    A hold opened since SN-499 recorded it at open; an older hold derives it
-    from the release ledger under the policy in force at its upload. Rows
-    without a reference are absent.
+    A hold opened since SN-499 recorded it at open. Older holds derive it from
+    the release ledger under the policy in force at their upload, in one
+    batched read for the whole set rather than one per hold. Rows without a
+    reference are absent.
     """
     releases: dict[UUID, ReferencePublicRelease] = {}
+    pending: list[ReferenceReleaseQuery] = []
     for review, agent in row_pairs:
         reference = review.original_duplicate_of
         if reference is None:
@@ -457,9 +460,16 @@ async def _reference_releases(
         if recorded is not None and recorded.reference_agent_id == reference:
             releases[review.review_id] = recorded
             continue
-        releases[review.review_id] = await derive_reference_public_release(
-            session, reference_agent_id=reference, held_uploaded_at=agent.created_at
+        pending.append(
+            ReferenceReleaseQuery(
+                key=review.review_id,
+                reference_agent_id=reference,
+                held_uploaded_at=agent.created_at,
+            )
         )
+    derived = await derive_reference_public_releases(session, pending)
+    for query in pending:
+        releases[cast(UUID, query.key)] = derived[query.key]
     return releases
 
 
@@ -839,13 +849,13 @@ async def list_copy_reviews(
             AthReview.review_id.asc(),
         )
     )
-    if with_comparisons:
-        stmt = stmt.options(Load(Agent).undefer_group("anticopy"))
     if order == "public_reference_first":
         # SN-499: forks of a public release are usually the fastest ruling
         # and the most disputed wait. The pending queue is at most one row
         # per held agent, so it is ranked whole and then paged. The sort is
-        # stable, so each tier stays oldest first.
+        # stable, so each tier stays oldest first. The ranking scan never
+        # loads the comparison-only fingerprint columns; they are reloaded
+        # below for just the rows the page returns.
         every_pending = [
             (review, agent) for review, agent in (await session.execute(stmt)).all()
         ]
@@ -859,8 +869,24 @@ async def list_copy_reviews(
             )
         )
         row_pairs = every_pending[offset : offset + limit]
+        if with_comparisons and row_pairs:
+            page_ids = [review.review_id for review, _agent in row_pairs]
+            loaded = {
+                review.review_id: (review, agent)
+                for review, agent in (
+                    await session.execute(
+                        stmt.where(AthReview.review_id.in_(page_ids))
+                        .options(Load(Agent).undefer_group("anticopy"))
+                        .execution_options(populate_existing=True)
+                    )
+                ).all()
+            }
+            row_pairs = [loaded[review_id] for review_id in page_ids]
     else:
-        rows = (await session.execute(stmt.limit(limit).offset(offset))).all()
+        page_stmt = stmt.limit(limit).offset(offset)
+        if with_comparisons:
+            page_stmt = page_stmt.options(Load(Agent).undefer_group("anticopy"))
+        rows = (await session.execute(page_stmt)).all()
         row_pairs = [(review, agent) for review, agent in rows]
         references = await _reference_releases(session, row_pairs)
     matched = await _matched_agents(

@@ -33,6 +33,30 @@ describe('ReviewQueueOverdue', () => {
     expect(screen.getByText('1914239c')).toBeTruthy()
   })
 
+  it('never rounds a threshold up to a stricter day count', () => {
+    render(
+      <ReviewQueueOverdue
+        clocks={[
+          {
+            clock: 'copy',
+            backlog_count: 1,
+            overdue_count: 1,
+            max_age_threshold_hours: 60,
+            oldest_age_hours: 71.9,
+            oldest_agent_id: null,
+            oldest_reason: null,
+            p95_age_hours: null,
+            p95_threshold_hours: null,
+            p95_exceeds_threshold: null,
+          },
+        ]}
+        error={null}
+      />,
+    )
+    expect(screen.getByText('1 of 1 older than 2.5d')).toBeTruthy()
+    expect(screen.getByText('oldest 2.9d')).toBeTruthy()
+  })
+
   it('reports a healthy queue and a failed read distinctly', () => {
     const { rerender } = render(<ReviewQueueOverdue clocks={[]} error={null} />)
     expect(screen.getByText('Every review clock is within its SLO.')).toBeTruthy()

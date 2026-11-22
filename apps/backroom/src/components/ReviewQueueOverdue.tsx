@@ -11,9 +11,13 @@ const CLOCK_LABEL: Record<string, string> = {
   anomalous_score: 'Anomalous score',
 }
 
+// Days are floored to tenths, never rounded up: a 60h threshold reads 2.5d,
+// not 3d, so a breach is never shown against a stricter bound than the one
+// that counted it.
 function age(hoursValue: number | null): string {
   if (hoursValue === null) return 'n/a'
-  return hoursValue >= 48 ? `${Math.round(hoursValue / 24)}d` : `${hoursValue}h`
+  if (hoursValue < 48) return `${hoursValue}h`
+  return `${Math.floor((hoursValue * 10) / 24) / 10}d`
 }
 
 /**
