@@ -95,6 +95,14 @@ def benchmark_model(bench_version: int) -> str:
     return V7_MODEL if bench_version >= 7 else "qwen/qwen3-32b"
 
 
+def aggregate_route_models() -> frozenset[str]:
+    """Models discovery keeps an aggregate OpenRouter route for: the bench
+    contract's harness model, and the frontier oracle's pinned model
+    (SN-496), whose grants select that route in ``aggregate_throughput``
+    mode."""
+    return frozenset({benchmark_model(7), FRONTIER_ORACLE_MODEL})
+
+
 def _profile_revision(model: str, provider: str, quantization: str | None) -> str:
     identity = f"{model}\0{provider}\0{quantization or 'unknown'}"
     reasoning = benchmark_reasoning(model)
@@ -520,7 +528,7 @@ class ProviderRouteRefresher:
                     ).all()
                 )
                 seen: set[tuple[str, str]] = set()
-                if model == benchmark_model(7):
+                if model in aggregate_route_models():
                     aggregate_active = any(
                         endpoint.get("status") == 0 for endpoint in deduped.values()
                     )

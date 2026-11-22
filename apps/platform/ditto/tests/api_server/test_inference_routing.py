@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.benchmark_contract import benchmark_contract
+from ditto.api_models.generator import FRONTIER_ORACLE_MODEL
 from ditto.api_server.inference_routing import (
     AGGREGATE_PROVIDER,
     ProviderRouteRefresher,
@@ -423,3 +424,72 @@ async def test_aggregate_discovery_tracks_active_model_endpoints(
                     )
                     assert route is not None
                     assert route.status == expected
+
+
+@pytest.mark.asyncio
+async def test_discovery_keeps_an_aggregate_route_for_the_frontier_oracle_model(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    # SN-496: an oracle grant on FRONTIER_ORACLE_MODEL selects that model's
+    # aggregate route, so adding the model to allowed_models must create it
+    # (at the profile the scorer pins), not only its per-provider routes.
+    maker = session_maker
+    model = FRONTIER_ORACLE_MODEL
+
+    def respond(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "endpoints": [
+                        {
+                            "provider_name": "glm-provider",
+                            "quantization": "fp8",
+                            "status": 0,
+                        }
+                    ]
+                }
+            },
+        )
+
+    config = SimpleNamespace(
+        allowed_models=("openai/gpt-oss-20b", model),
+        discovery_url_template="https://openrouter.test/{model}",
+        route_speed_weight=0.65,
+        route_cost_weight=0.25,
+        route_exploration_weight=0.10,
+        route_exploration_ticket_budget=3,
+        route_min_tool_accuracy=0.55,
+        route_min_composite=0.15,
+        route_min_calibration_samples=60,
+        route_max_error_rate=0.25,
+        route_max_timeout_rate=0.15,
+        route_cooldown_seconds=30,
+        route_ewma_alpha=0.20,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        refresher = ProviderRouteRefresher(
+            config=config, session_maker=maker, client=client
+        )
+        await refresher.refresh()
+    profile = aggregate_profile_revision(model, bench_version=18)
+    assert profile == "openrouter-route-7186def4bbdafe7e-v1"
+    async with maker() as session:
+        route = await session.get(
+            InferenceProviderRoute, (model, AGGREGATE_PROVIDER, profile)
+        )
+        assert route is not None
+        assert route.status == "discovered"
+    # The lease path's route selection then finds it (v18 needs no
+    # calibration), which is what an oracle grant on the model requires.
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        selected = await select_route(
+            session,
+            model=model,
+            now=now,
+            routing_mode="aggregate_throughput",
+            bench_version=18,
+        )
+        assert selected is not None
+        assert selected.profile_revision == profile
