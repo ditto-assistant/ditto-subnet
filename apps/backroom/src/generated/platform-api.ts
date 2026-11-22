@@ -28076,6 +28076,8 @@ export interface components {
             oracle_attempts: number;
             /** Oracle Deadline */
             oracle_deadline: string | null;
+            /** Oracle Model */
+            oracle_model?: string | null;
             /** Round Index */
             round_index: number;
             /** Settle Reason */

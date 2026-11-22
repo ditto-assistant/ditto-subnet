@@ -939,6 +939,9 @@ export const generatorFrontierSchema = z.object({
   round_index: z.number().int(),
   state: frontierState,
   oracle_agent_id: uuid,
+  // The model the oracle and escalation runs answer on (SN-496); null is the
+  // bench contract's harness model, as is a Platform that predates the field.
+  oracle_model: z.string().nullable().default(null),
   frontier_weight: z.number(),
   audit_cases: z.number().int(),
   candidates: z.array(z.string()),

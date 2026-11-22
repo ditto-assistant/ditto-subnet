@@ -76,7 +76,10 @@ from ditto.api_models.generator import (
     FRONTIER_ORACLE_MIN_BENCH_VERSION,
     GeneratorCompetitionSettings,
 )
-from ditto.api_models.generator_round_validator import GeneratorRoundCaseResult
+from ditto.api_models.generator_round_validator import (
+    LEGACY_ROUND_BENCH_VERSION,
+    GeneratorRoundCaseResult,
+)
 from ditto.api_models.generator_rounds import (
     GeneratorFrontierAuditView,
     GeneratorFrontierCaseView,
@@ -1271,6 +1274,14 @@ def frontier_view(row: GeneratorRound) -> GeneratorFrontierView | None:
         round_index=row.round_index,
         state=frontier["state"],
         oracle_agent_id=UUID(frontier["oracle_agent_id"]),
+        oracle_model=oracle_run_model(
+            frontier,
+            bench_version=(
+                LEGACY_ROUND_BENCH_VERSION
+                if row.bench_version is None
+                else int(row.bench_version)
+            ),
+        ),
         frontier_weight=float(frontier["frontier_weight"]),
         audit_cases=int(frontier.get("audit_cases") or 0),
         candidates=list(frontier.get("candidates") or ()),
