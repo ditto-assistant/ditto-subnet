@@ -276,7 +276,7 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	// V9 reasoning is validated BEFORE reserving capacity, so invalid or
 	// conflicting aliases fail without spending the grant.
-	if _, herr := benchmarkReasoningForRequest(payload, model, grantSnapshot.BenchVersion); herr != nil {
+	if _, herr := grantReasoningForRequest(payload, model, grantSnapshot.BenchVersion); herr != nil {
 		writeHTTPError(w, r, herr)
 		return
 	}

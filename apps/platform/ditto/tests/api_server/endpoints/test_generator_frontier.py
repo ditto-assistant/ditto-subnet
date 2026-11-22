@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -47,6 +48,7 @@ from ditto.api_server.generator_frontier import (
     settle_reason,
 )
 from ditto.api_server.generator_rounds import get_round, round_column_seed
+from ditto.api_server.inference_routing import benchmark_model
 from ditto.db.models import (
     GeneratorRound,
     GeneratorRoundAttempt,
@@ -1560,3 +1562,213 @@ def test_an_escalation_agent_seated_on_the_panel_is_never_leased() -> None:
     assert frontier["escalation"]["skipped_columns"] == {
         "c1": "escalation agent sat on the round panel"
     }
+
+
+# --- oracle inference model ---------------------------------------------------
+
+_ORACLE_MODEL = "openai/gpt-oss-120b"
+
+
+def test_the_oracle_model_is_unset_by_default() -> None:
+    """Unset is the default and keeps the round signature it had before the
+    field existed."""
+    on = GeneratorCompetitionSettings(
+        frontier_weight=1.0,
+        frontier_oracle_agent_id=uuid4(),
+        frontier_escalation_agent_id=uuid4(),
+    )
+    assert on.frontier_oracle_model is None
+    params = on.measurement_params()
+    assert "frontier_oracle_model" not in params
+    assert on.frontier_models() == ()
+    # Set, the model is part of what a round measures.
+    changed = on.model_copy(update={"frontier_oracle_model": _ORACLE_MODEL})
+    assert changed.measurement_params() == {
+        **params,
+        "frontier_oracle_model": _ORACLE_MODEL,
+    }
+    assert changed.frontier_models() == (_ORACLE_MODEL,)
+    # A model whose lane is off decides nothing and stays out.
+    off = GeneratorCompetitionSettings(frontier_oracle_model=_ORACLE_MODEL)
+    assert off.measurement_params() == off.score_params()
+
+
+@pytest.mark.parametrize("bad", ["gpt-oss-120b", "openai/", "OpenAI/x", "a/b c"])
+def test_a_malformed_frontier_model_is_refused(bad: str) -> None:
+    with pytest.raises(ValueError):
+        GeneratorCompetitionSettings(frontier_oracle_model=bad)
+
+
+def _list_frontier_models(app: FastAPI, *models: str) -> None:
+    config = app.state.config
+    proxy = config.inference_proxy
+    app.state.config = replace(
+        config,
+        inference_proxy=replace(
+            proxy,
+            allowed_models=(*proxy.allowed_models, *models),
+            frontier_oracle_models=models,
+        ),
+    )
+
+
+async def _frontier_doc(
+    maker: async_sessionmaker[AsyncSession], round_index: int
+) -> dict[str, Any]:
+    async with maker() as session:
+        row = await get_round(session, round_index)
+        assert row is not None and row.frontier is not None
+        return dict(row.frontier)
+
+
+def _record_grants(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str | None]]:
+    """Wrap the lane's stand-in grant so each lease records its model and the
+    grant pins the model asked for, as a real one does."""
+    seen: list[tuple[str, str | None]] = []
+    stub = lane_mod.ensure_inference_grant
+
+    async def _grant(session: AsyncSession, *, ticket: ValidatorTicket, **kw: Any):
+        seen.append((str(ticket.agent_id), kw.get("model")))
+        grant = await stub(session, ticket=ticket, **kw)
+        if grant is not None:
+            grant.allowed_models = [
+                kw.get("model") or benchmark_model(ticket.bench_version)
+            ]
+        return grant
+
+    monkeypatch.setattr(lane_mod, "ensure_inference_grant", _grant)
+    return seen
+
+
+class TestFrontierOracleModel:
+    async def test_unset_the_lane_is_byte_same(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unset, the frontier document, the grant calls and the view carry
+        nothing new."""
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch)
+        seen = _record_grants(monkeypatch)
+        round_index = await lane.score_round()
+        before = await _frontier_doc(session_maker, round_index)
+        assert "oracle_model" not in before
+        await lane.lease_oracle()
+        assert seen and all(model is None for _agent, model in seen)
+        after = await _frontier_doc(session_maker, round_index)
+        assert "oracle_model_run" not in after
+        assert set(after) == set(before)
+        view = await lane.frontier(round_index)
+        assert view["oracle_model"] is None
+        assert view["oracle_model_run"] is None
+
+    async def test_set_only_the_oracle_ticket_gets_the_model(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _list_frontier_models(app, _ORACLE_MODEL)
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_oracle_model=_ORACLE_MODEL)
+        seen = _record_grants(monkeypatch)
+        round_index = await lane.score_round()
+        panel = list(seen)
+        assert panel and all(model is None for _agent, model in panel)
+
+        job = await lane.lease_oracle()
+        assert seen[len(panel) :] == [(str(lane.oracle), _ORACLE_MODEL)]
+        # The oracle's context and dataset mode do not change with the model.
+        assert job["dataset_mode"] == "generator-frontier-oracle-v1"
+        doc = await _frontier_doc(session_maker, round_index)
+        assert doc["oracle_model"] == _ORACLE_MODEL
+        assert doc["oracle_model_run"]["model"] == _ORACLE_MODEL
+        assert doc["oracle_model_run"]["fallback"] is False
+        view = await lane.frontier(round_index)
+        assert view["oracle_model"] == _ORACLE_MODEL
+        assert view["oracle_model_run"]["model"] == _ORACLE_MODEL
+        assert view["oracle_model_run"]["fallback"] is False
+
+    async def test_no_frontier_grant_falls_back_and_says_so(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A set model without an admitted route must not stall the round:
+        the oracle runs on the bench model, and the round records that it
+        did."""
+        _list_frontier_models(app, _ORACLE_MODEL)
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_oracle_model=_ORACLE_MODEL)
+        seen = _record_grants(monkeypatch)
+        recorded = lane_mod.ensure_inference_grant
+
+        async def _no_frontier_route(
+            session: AsyncSession, *, ticket: ValidatorTicket, **kw: Any
+        ):
+            grant = await recorded(session, ticket=ticket, **kw)
+            return None if kw.get("model") is not None else grant
+
+        monkeypatch.setattr(lane_mod, "ensure_inference_grant", _no_frontier_route)
+        round_index = await lane.score_round()
+        panel = len(seen)
+        job = await lane.lease_oracle()
+        assert job["agent_id"] == str(lane.oracle)
+        assert job["dataset_mode"] == "generator-frontier-oracle-v1"
+        assert seen[panel:] == [
+            (str(lane.oracle), _ORACLE_MODEL),
+            (str(lane.oracle), None),
+        ]
+        view = await lane.frontier(round_index)
+        assert view["oracle_model"] == _ORACLE_MODEL
+        assert view["oracle_model_run"]["model"] == "openai/gpt-oss-20b"
+        assert view["oracle_model_run"]["fallback"] is True
+
+    async def test_escalation_stays_on_the_bench_model(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _list_frontier_models(app, _ORACLE_MODEL)
+        lane = _Lane(client, session_maker)
+        await lane.setup(
+            app,
+            monkeypatch,
+            frontier_audit_cases=0,
+            escalation=True,
+            frontier_oracle_model=_ORACLE_MODEL,
+        )
+        seen = _record_grants(monkeypatch)
+        await lane.score_round()
+        job = await lane.lease_oracle()
+        await lane.report_oracle(job, set(lane.candidates[:6]))
+        esc = await _lease_job(client)
+        assert esc is not None and esc["agent_id"] == str(lane.escalation)
+        assert seen[-2:] == [
+            (str(lane.oracle), _ORACLE_MODEL),
+            (str(lane.escalation), None),
+        ]
+
+    async def test_an_unlisted_model_is_refused_at_settings_write(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        resp = await _apply_settings(
+            client,
+            status=422,
+            validator_rounds_enabled=True,
+            frontier_oracle_agent_id=str(await _seed_agent(session_maker, 9)),
+            frontier_oracle_model="openai/unlisted-model",
+        )
+        assert "DITTO_FRONTIER_ORACLE_MODELS" in resp.text
