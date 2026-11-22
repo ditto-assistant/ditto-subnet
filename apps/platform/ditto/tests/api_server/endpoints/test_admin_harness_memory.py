@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID, uuid4
 
 import httpx
@@ -187,3 +188,107 @@ async def test_listing_pages_with_offset_and_has_more(
     ).json()
     assert [row["agent_name"] for row in rest["agents"]] == ["agent-2"]
     assert (rest["offset"], rest["has_more"]) == (2, False)
+
+
+async def test_runs_page_by_lease_time_so_a_replay_cannot_displace_newer_runs(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        agent_id = await _agent(session, "replayed-agent")
+        old_lease, new_lease = now - timedelta(hours=2), now - timedelta(hours=1)
+        await _observe(
+            session, agent_id, "5A", _telemetry(100, 200, 250), issued=old_lease
+        )
+        await _observe(
+            session, agent_id, "5A", _telemetry(100, 300, 350), issued=new_lease
+        )
+    # The old lease's report is replayed after the newer one landed.
+    async with session_maker() as session, session.begin():
+        await _observe(
+            session, agent_id, "5A", _telemetry(100, 210, 250), issued=old_lease
+        )
+
+    newest = (
+        await client.get(
+            f"/api/v1/admin/agents/{agent_id}/harness-memory?limit=1", headers=_HEADERS
+        )
+    ).json()["runs"]
+    assert len(newest) == 1
+    assert newest[0]["p95_bytes"] == 300 * _MIB
+
+
+async def test_failure_detail_is_kept_whole(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    detail = "harness_oom " + "x" * 300
+    async with session_maker() as session, session.begin():
+        agent_id = await _agent(session, "long-detail-agent")
+        await _observe(
+            session,
+            agent_id,
+            "5A",
+            _telemetry(100, 200, 250),
+            outcome="failed",
+            detail=detail,
+        )
+    runs = (
+        await client.get(
+            f"/api/v1/admin/agents/{agent_id}/harness-memory", headers=_HEADERS
+        )
+    ).json()["runs"]
+    assert runs[0]["failure_detail"] == detail
+
+
+class _FailingSavepoint:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def begin_nested(self) -> _FailingSavepoint:
+        return self
+
+    async def __aenter__(self) -> _FailingSavepoint:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def execute(self, _statement: object) -> None:
+        raise self._error
+
+
+class _InvalidatedConnection(Exception):
+    connection_invalidated = True
+
+
+async def test_a_telemetry_write_error_never_fails_the_report() -> None:
+    session = cast(AsyncSession, _FailingSavepoint(RuntimeError("bad row")))
+    await record_harness_memory(
+        session,
+        agent_id=uuid4(),
+        bench_version=18,
+        validator_hotkey="5A",
+        lease_issued_at=datetime.now(UTC),
+        outcome="scored",
+        telemetry=_telemetry(100, 200, 250),
+    )
+
+
+async def test_a_dead_connection_is_surfaced_not_swallowed() -> None:
+    session = cast(AsyncSession, _FailingSavepoint(_InvalidatedConnection("gone")))
+    with pytest.raises(_InvalidatedConnection):
+        await record_harness_memory(
+            session,
+            agent_id=uuid4(),
+            bench_version=18,
+            validator_hotkey="5A",
+            lease_issued_at=datetime.now(UTC),
+            outcome="scored",
+            telemetry=_telemetry(100, 200, 250),
+        )

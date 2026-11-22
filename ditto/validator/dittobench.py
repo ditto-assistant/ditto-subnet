@@ -960,10 +960,20 @@ class DittobenchClient:
         if not isinstance(raw, dict):
             return
         try:
-            self._harness_memory[run_id] = HarnessMemoryTelemetry.model_validate(raw)
+            memory = HarnessMemoryTelemetry.model_validate(raw)
         except ValidationError:
             logger.warning("run %s harness memory block was malformed", run_id)
             return
+        # The scorer's percentiles are ordered and clamped to the peak by
+        # construction; a block that is not is dropped here rather than
+        # rejected at the Platform wire, where it would fail the score it
+        # rides with.
+        if memory.p50_bytes > memory.p95_bytes or (
+            memory.peak_bytes > 0 and memory.p95_bytes > memory.peak_bytes
+        ):
+            logger.warning("run %s harness memory percentiles are inconsistent", run_id)
+            return
+        self._harness_memory[run_id] = memory
         while len(self._harness_memory) > 64:
             self._harness_memory.pop(next(iter(self._harness_memory)))
 
@@ -2260,7 +2270,9 @@ class DittobenchClient:
                             "dittobench progress callback failed; scoring continues"
                         )
                 status = data.get("status")
-                if status in (_DONE, _FAILED):
+                if status in (_DONE, _FAILED) and not raw:
+                    # Raw polls are generator rounds: no consumer takes their
+                    # memory, so caching it would only evict a scored run's.
                     self._remember_harness_memory(run_id, data)
                 if status == _DONE:
                     rep = data.get("report")

@@ -58,7 +58,8 @@ async def record_harness_memory(
         "lease_issued_at": _aware(lease_issued_at),
         "outcome": outcome,
         "failure_reason": failure_reason,
-        "failure_detail": failure_detail[:200] if failure_detail else None,
+        # Already bounded by the hand-back model; kept whole, like the ticket.
+        "failure_detail": failure_detail or None,
         "peak_bytes": telemetry.peak_bytes,
         "p50_bytes": telemetry.p50_bytes,
         "p95_bytes": telemetry.p95_bytes,
@@ -75,7 +76,11 @@ async def record_harness_memory(
     try:
         async with session.begin_nested():
             await session.execute(statement)
-    except Exception:
+    except Exception as exc:
+        if getattr(exc, "connection_invalidated", False):
+            # A dead connection fails the surrounding report anyway; surface
+            # the real cause instead of a later, unrelated error.
+            raise
         logger.exception(
             "harness memory observation not recorded agent=%s validator=%s",
             agent_id,
@@ -144,7 +149,7 @@ def _rollup(row) -> HarnessMemoryRollup:
 async def agent_harness_memory(
     session: AsyncSession, *, agent_id: UUID, limit: int
 ) -> tuple[HarnessMemoryRollup | None, list[HarnessMemoryObservation]]:
-    """One agent's rollup and its newest ``limit`` observations."""
+    """One agent's rollup and its ``limit`` most recently leased observations."""
     rollup_row = (
         await session.execute(
             select(*_rollup_columns())
@@ -157,7 +162,12 @@ async def agent_harness_memory(
             await session.scalars(
                 select(HarnessMemoryObservation)
                 .where(HarnessMemoryObservation.agent_id == agent_id)
-                .order_by(HarnessMemoryObservation.recorded_at.desc())
+                # Lease order, not write order: a replayed report refreshes
+                # recorded_at and must not push newer runs off the page.
+                .order_by(
+                    HarnessMemoryObservation.lease_issued_at.desc(),
+                    HarnessMemoryObservation.id.desc(),
+                )
                 .limit(limit)
             )
         ).all()
