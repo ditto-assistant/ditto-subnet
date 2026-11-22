@@ -1006,15 +1006,18 @@ async def _off_board_catchups_used(
 ) -> set[UUID]:
     """The agents whose one off-board catch-up at ``bench_version`` is spent.
 
-    Spent: some season's catch-up ran with no queued re-score closed unscored
-    by the platform, or catch-ups were queued in
-    :data:`MAX_OFF_BOARD_CATCHUP_ATTEMPTS` seasons. Two audit reads over the
-    given agents only.
+    Spent: some season's catch-up was served in full -- every queued re-score
+    was promoted to a lease and not then closed unscored by the platform, or
+    closed only because its score was already current -- or catch-ups were
+    queued in :data:`MAX_OFF_BOARD_CATCHUP_ATTEMPTS` seasons. A re-score still
+    waiting (never promoted, never released) is pending, not served, so it
+    spends nothing. Two audit reads over the given agents only.
     """
     from ditto.db.models import ScoreAuditEntry
     from ditto.db.queries.audit import (
         EVENT_SCORE_RETEST_QUEUED,
         EVENT_SCORE_RETEST_RELEASED,
+        EVENT_SCORE_RETEST_REQUESTED,
     )
     from ditto.db.queries.score_retests import (
         CATCH_UP_SOURCE_OFF_BOARD,
@@ -1048,34 +1051,49 @@ async def _off_board_catchups_used(
     )
     if not queued:
         return set()
-    request_ids = {request_id for _a, _s, request_id in queued if request_id}
+    request_ids = sorted({request_id for _a, _s, request_id in queued if request_id})
+    promoted: set[str] = set()
     cut_short: set[str] = set()
+    already_current: set[str] = set()
     if request_ids:
-        cut_short = {
-            str(request_id)
-            for request_id, reason in (
-                await session.execute(
-                    select(
-                        ScoreAuditEntry.payload["retest_request_id"].as_string(),
-                        ScoreAuditEntry.payload["reason"].as_string(),
-                    ).where(
-                        ScoreAuditEntry.event == EVENT_SCORE_RETEST_RELEASED,
-                        ScoreAuditEntry.agent_id.in_(
-                            sorted({a for a, _s, _r in queued}, key=str)
-                        ),
+        for event, request_id, retest_request_id, reason in (
+            await session.execute(
+                select(
+                    ScoreAuditEntry.event,
+                    ScoreAuditEntry.payload["request_id"].as_string(),
+                    ScoreAuditEntry.payload["retest_request_id"].as_string(),
+                    ScoreAuditEntry.payload["reason"].as_string(),
+                ).where(
+                    ScoreAuditEntry.event.in_(
+                        (EVENT_SCORE_RETEST_REQUESTED, EVENT_SCORE_RETEST_RELEASED)
+                    ),
+                    ScoreAuditEntry.agent_id.in_(
+                        sorted({a for a, _s, _r in queued}, key=str)
+                    ),
+                    or_(
+                        ScoreAuditEntry.payload["request_id"]
+                        .as_string()
+                        .in_(request_ids),
                         ScoreAuditEntry.payload["retest_request_id"]
                         .as_string()
-                        .in_(sorted(request_ids)),
-                    )
+                        .in_(request_ids),
+                    ),
                 )
-            ).tuples()
-            if reason != ROTATION_ALREADY_CURRENT_REASON
-        }
+            )
+        ).tuples():
+            if event == EVENT_SCORE_RETEST_REQUESTED:
+                promoted.add(str(request_id))
+            elif reason == ROTATION_ALREADY_CURRENT_REASON:
+                already_current.add(str(retest_request_id or request_id))
+            else:
+                cut_short.add(str(retest_request_id or request_id))
     seasons: dict[UUID, dict[str, bool]] = {}
     for agent_id, season_id, request_id in queued:
+        served = request_id in already_current or (
+            request_id in promoted and request_id not in cut_short
+        )
         per_agent = seasons.setdefault(agent_id, {})
-        complete = per_agent.get(str(season_id), True)
-        per_agent[str(season_id)] = complete and request_id not in cut_short
+        per_agent[str(season_id)] = per_agent.get(str(season_id), True) and served
     return {
         agent_id
         for agent_id, per_season in seasons.items()

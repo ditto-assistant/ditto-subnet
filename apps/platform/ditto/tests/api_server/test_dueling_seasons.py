@@ -2853,21 +2853,54 @@ class TestSeasonCatchup:
         }
         assert fresh not in await self._sources(session_maker)
 
-        # One off-board catch-up per agent and bench version: the next
-        # boundary passes over both, with the reason.
+        from ditto.db.models import ScoreAuditEntry
+        from ditto.db.queries.audit import (
+            EVENT_SCORE_RETEST_QUEUED,
+            append_audit_entry,
+        )
         from ditto.db.queries.dueling_season_window import dueling_season_window
 
-        async with session_maker() as session:
-            window = await dueling_season_window(session, 16)
-            assert window is not None
-            off_board, skipped = await dueling_mod._off_board_candidates(
-                session, 16, window=window, board=(late, fresh)
-            )
+        async def _next_boundary() -> tuple[list[UUID], dict[UUID, str]]:
+            async with session_maker() as session:
+                window = await dueling_season_window(session, 16)
+                assert window is not None
+                off_board, skipped = await dueling_mod._off_board_candidates(
+                    session, 16, window=window, board=(late, fresh)
+                )
+            return [c.agent_id for c in off_board], dict(skipped)
+
+        # SN-497: a catch-up still queued (never promoted) at the next
+        # boundary has not been served, so it spends nothing yet.
+        pending, skipped = await _next_boundary()
+        assert {expiring, expired} <= set(pending)
+        assert expiring not in skipped and expired not in skipped
+
+        # Once every queued re-score is promoted to a lease, that is the one
+        # off-board catch-up per agent and bench version: the next boundary
+        # passes over both, with the reason.
+        async with session_maker() as session, session.begin():
+            for entry in list(
+                await session.scalars(
+                    select(ScoreAuditEntry).where(
+                        ScoreAuditEntry.event == EVENT_SCORE_RETEST_QUEUED,
+                        ScoreAuditEntry.agent_id.in_([expiring, expired]),
+                    )
+                )
+            ):
+                await append_audit_entry(
+                    session,
+                    agent_id=entry.agent_id,
+                    validator_hotkey=entry.validator_hotkey,
+                    event="score_retest_requested",
+                    payload=dict(entry.payload),
+                    recorded_at=datetime.now(UTC),
+                )
+        off_board, skipped = await _next_boundary()
         # Only the agent whose scores now sit in the provisional season (32)
         # is owed one at the next boundary.
-        assert [c.agent_id for c in off_board] == [current]
-        assert dict(skipped)[expiring] == "already_retested"
-        assert dict(skipped)[expired] == "already_retested"
+        assert off_board == [current]
+        assert skipped[expiring] == "already_retested"
+        assert skipped[expired] == "already_retested"
 
     async def test_a_catchup_the_platform_cut_short_is_not_spent(
         self, session_maker: async_sessionmaker[AsyncSession]
@@ -2884,8 +2917,8 @@ class TestSeasonCatchup:
             rotation_request_id,
         )
 
-        full, cut, current_only, exhausted, never = [
-            await _seed_agent(session_maker, 60 + i) for i in range(5)
+        full, cut, current_only, exhausted, never, pending = [
+            await _seed_agent(session_maker, 60 + i) for i in range(6)
         ]
         now = datetime.now(UTC)
         seasons = [uuid4() for _ in range(dueling_mod.MAX_OFF_BOARD_CATCHUP_ATTEMPTS)]
@@ -2896,6 +2929,7 @@ class TestSeasonCatchup:
             season_id: UUID,
             *,
             close: dict[str, str] | None = None,
+            promote: bool = True,
         ) -> None:
             for validator in _CATCHUP_VALIDATORS:
                 request_id = str(rotation_request_id(season_id, agent_id, validator))
@@ -2915,6 +2949,20 @@ class TestSeasonCatchup:
                     recorded_at=now,
                 )
                 reason = (close or {}).get(validator)
+                if promote and reason != ROTATION_ALREADY_CURRENT_REASON:
+                    await append_audit_entry(
+                        session,
+                        agent_id=agent_id,
+                        validator_hotkey=validator,
+                        event="score_retest_requested",
+                        payload={
+                            "request_id": request_id,
+                            "basis": DUELING_ROTATION_RETEST_BASIS,
+                            "bench_version": 16,
+                            "dueling_season_id": str(season_id),
+                        },
+                        recorded_at=now,
+                    )
                 if reason is not None:
                     await append_audit_entry(
                         session,
@@ -2942,10 +2990,13 @@ class TestSeasonCatchup:
             )
             for season_id in seasons:
                 await _catchup(session, exhausted, season_id, close=lapsed)
+            # Queued, never promoted or released by the next boundary: still
+            # pending (ditto-code on #3606), so nothing is spent.
+            await _catchup(session, pending, seasons[0], promote=False)
         async with session_maker() as session:
             used = await dueling_mod._off_board_catchups_used(
                 session,
-                agent_ids=[full, cut, current_only, exhausted, never],
+                agent_ids=[full, cut, current_only, exhausted, never, pending],
                 bench_version=16,
             )
             # Another bench version's catch-up is not this one's.

@@ -24,7 +24,7 @@ import bittensor
 import httpx
 import pytest
 from fastapi import FastAPI, Request
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import ditto.api_server.endpoints.public as public_endpoints
@@ -584,7 +584,7 @@ class TestSeasonCoverage:
                 .values(dueling_season_id=ids[0], composite=0.82)
             )
             await session.execute(
-                Score.__table__.delete().where(
+                delete(Score).where(
                     Score.agent_id == short, Score.validator_hotkey == _VALIDATORS[0]
                 )
             )
