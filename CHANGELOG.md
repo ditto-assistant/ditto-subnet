@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.502.2 (2026-11-22)
+
+### Bug Fixes
+
+- **platform**: Refuse frontier oracle runs whose model calls failed upstream (SN-496)
+  ([#3597](https://github.com/ditto-assistant/ditto-subnet/pull/3597),
+  [`59151bd`](https://github.com/ditto-assistant/ditto-subnet/commit/59151bd7eef810d8b89ff3ccc63c105fe36e9ed4))
+
+
 ## v0.502.1 (2026-11-22)
 
 ### Bug Fixes
