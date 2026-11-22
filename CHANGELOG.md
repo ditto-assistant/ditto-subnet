@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.503.0 (2026-11-22)
+
+### Features
+
+- **platform,backroom**: Show each round's frontier oracle model (SN-496)
+  ([#3601](https://github.com/ditto-assistant/ditto-subnet/pull/3601),
+  [`5ca75aa`](https://github.com/ditto-assistant/ditto-subnet/commit/5ca75aa89d8a5ecb39ffdf038095e94d865abf28))
+
+- **scorer,validator,platform**: Run the frontier oracle on GLM-5.3-Flash (SN-496)
+  ([#3600](https://github.com/ditto-assistant/ditto-subnet/pull/3600),
+  [`ac307e5`](https://github.com/ditto-assistant/ditto-subnet/commit/ac307e55a1a1434f503c90665f0f3c9a120ae8d6))
+
+
 ## v0.502.2 (2026-11-22)
 
 ### Bug Fixes
