@@ -881,7 +881,11 @@ async def list_copy_reviews(
                     )
                 ).all()
             }
-            row_pairs = [loaded[review_id] for review_id in page_ids]
+            # A review resolved between the scan and this reload no longer
+            # matches the pending filter; drop it rather than fail the page.
+            row_pairs = [
+                loaded[review_id] for review_id in page_ids if review_id in loaded
+            ]
     else:
         page_stmt = stmt.limit(limit).offset(offset)
         if with_comparisons:
