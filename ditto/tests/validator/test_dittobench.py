@@ -3518,6 +3518,33 @@ async def test_failed_run_carries_its_harness_memory_on_the_error(
 
 
 @pytest.mark.asyncio
+async def test_refused_dueling_report_still_carries_its_harness_memory() -> None:
+    """A done run whose report fails dueling verification was still measured."""
+    payload = _done_job()  # its report has no details.dueling block
+    payload["harness_memory"] = dict(_HARNESS_MEMORY_BLOCK)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    dueling = DuelingSlice(
+        slice_bytes=b"slice",
+        expected_slice_sha256="a" * 64,
+        owner_key="coldkey:a",
+        season_id="s16-0001",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        with pytest.raises(ValidatorInfrastructureError) as refused:
+            await client._poll_attaching_memory(
+                "run-1", expected_bench_version=8, dueling_slice=dueling
+            )
+    assert refused.value.code == "dueling_report_invalid"
+    memory = harness_memory_of(refused.value)
+    assert memory is not None and memory.p95_bytes == 1700 << 20
+    assert client.take_harness_memory("run-1") is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "block", [None, "not-an-object", {"peak_bytes": -1}, {"p50_bytes": 1}]
 )

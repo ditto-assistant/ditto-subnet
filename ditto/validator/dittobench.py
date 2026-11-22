@@ -1800,15 +1800,13 @@ class DittobenchClient:
             benchmark_runtime=benchmark_runtime,
             dueling_slice=dueling_slice,
         )
-        report = await self._poll_attaching_memory(
+        return await self._poll_attaching_memory(
             run_id,
             progress_callback=progress_callback,
             expected_bench_version=bench_version,
             ticket_deadline=ticket_deadline,
+            dueling_slice=dueling_slice,
         )
-        if dueling_slice is not None:
-            verify_dueling_report(report, dueling_slice, bench_version=bench_version)
-        return report
 
     async def run_generator_round(
         self,
@@ -2115,20 +2113,29 @@ class DittobenchClient:
         progress_callback: ProgressCallback | None = None,
         expected_bench_version: int,
         ticket_deadline: datetime | None = None,
+        dueling_slice: DuelingSlice | None = None,
     ) -> ScoreReport:
-        """:meth:`_poll`, with a failed run's harness memory on its error.
+        """:meth:`_poll` plus dueling verification, with a failed run's
+        harness memory on its error.
 
         SN-500: the worker that reports a failure never sees the run id, so
-        the memory measured for that run rides on the raised error. A scored
-        run's memory stays keyed by run id for :meth:`take_harness_memory`.
+        the memory measured for that run rides on the raised error. That
+        includes a done run whose report then fails dueling verification. A
+        scored run's memory stays keyed by run id for
+        :meth:`take_harness_memory`.
         """
         try:
-            return await self._poll(
+            report = await self._poll(
                 run_id,
                 progress_callback=progress_callback,
                 expected_bench_version=expected_bench_version,
                 ticket_deadline=ticket_deadline,
             )
+            if dueling_slice is not None:
+                verify_dueling_report(
+                    report, dueling_slice, bench_version=expected_bench_version
+                )
+            return report
         except DittobenchError as failed:
             failed.harness_memory = self._harness_memory.pop(run_id, None)
             raise
