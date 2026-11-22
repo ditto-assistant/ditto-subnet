@@ -138,6 +138,7 @@ from ditto.api_models.weight_receipt import (
     SubmitWeightReceiptResponse,
     weight_receipt_signing_message,
 )
+from ditto.api_server import harness_oom_policy
 from ditto.api_server.anti_copy_comparison import ANTI_COPY_ALGORITHM_VERSION
 from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.attestation import expected_netuid
@@ -6973,6 +6974,14 @@ async def fail_job(
                 payload.reason == "sandbox_oom"
                 and payload.failure_detail != HARNESS_OOM_FAILURE_DETAIL
             )
+            # A proven harness OOM counts against the agent only on leases
+            # issued from the published effective time (SN-488). Before it,
+            # it is parked as no-fault infrastructure under its own detail.
+            grace_oom = (
+                payload.reason == "sandbox_oom"
+                and payload.failure_detail == HARNESS_OOM_FAILURE_DETAIL
+                and not harness_oom_policy.harness_oom_charged(ticket.issued_at)
+            )
             if grant_spent_allowance and payload.reason == "infrastructure":
                 # Correct both billing and diagnosis. The stuck-list withdraws
                 # only on named agent codes; leaving budget_evidence_absent
@@ -6997,6 +7006,20 @@ async def fail_job(
                     payload.agent_id,
                     payload.validator_hotkey,
                     payload.failure_detail,
+                )
+            elif grace_oom:
+                ticket.failure_reason = "infrastructure"
+                ticket.failure_detail = (
+                    harness_oom_policy.HARNESS_OOM_GRACE_FAILURE_DETAIL
+                )
+                logger.warning(
+                    "harness OOM on a lease issued before the charge takes "
+                    "effect parked as infrastructure agent=%s validator=%s "
+                    "lease_issued_at=%s effective_at=%s",
+                    payload.agent_id,
+                    payload.validator_hotkey,
+                    ticket.issued_at,
+                    harness_oom_policy.HARNESS_OOM_CHARGE_EFFECTIVE_AT.isoformat(),
                 )
             else:
                 ticket.failure_reason = payload.reason

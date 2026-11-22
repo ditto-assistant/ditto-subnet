@@ -52,18 +52,19 @@ def test_a_host_admitting_every_configured_slot_has_no_note() -> None:
     assert admission.note() is None
 
 
-def test_published_cap_admits_the_whole_sn488_fleet() -> None:
-    """At the published 863 MiB cap every current host admits all 8 slots."""
+def test_published_cap_admits_33_of_the_fleet_s_40_advertised_slots() -> None:
+    """At the published 2048 MiB cap memory admits 7/3/7/8/8 of 8 each."""
     from ditto_screening_protocol.runtime_envelope import runtime_envelope
 
     cap = runtime_envelope().memory_limit_mib
-    assert cap == 863
+    assert cap == 2048
     fleet = [
         host_memory_admission(
             memory_total_mib=mib, configured_slots=8, sandbox_memory_limit_mib=cap
         )
         for mib in (15987, 7934, 15990, 32099, 64085)
     ]
-    assert all(a is not None and a.admitted_slots >= 8 for a in fleet)
-    assert sum(min(8, a.admitted_slots) for a in fleet if a) == 40
-    assert all(a is not None and a.note() is None for a in fleet)
+    assert all(a is not None for a in fleet)
+    assert [min(8, a.admitted_slots) for a in fleet if a] == [7, 3, 7, 8, 8]
+    assert sum(min(8, a.admitted_slots) for a in fleet if a) == 33
+    assert [a.note() is None for a in fleet if a] == [False, False, False, True, True]

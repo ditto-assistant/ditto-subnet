@@ -18,7 +18,7 @@ func u64(v uint64) *uint64 { return &v }
 // host had left; a peak at the cap counts only when the host had headroom;
 // every other kill is genuine validator infrastructure and is retried.
 func TestResourceFailureRules(t *testing.T) {
-	limit := uint64(863 << 20)
+	limit := uint64(2048 << 20)
 	floor := uint64(PublishedEnvelope.OOM.HostAvailableFloorMiB) * mib
 	tolerance := uint64(PublishedEnvelope.OOM.PeakToleranceMiB) * mib
 	cases := []struct {

@@ -89,7 +89,7 @@ RUNTIME_ENVELOPE_PATH = (
     / "data"
     / "runtime_envelope.json"
 )
-_ENVELOPE_FALLBACK = {"memory_limit_mib": 863, "cpus": 2, "case_concurrency": 8}
+_ENVELOPE_FALLBACK = {"memory_limit_mib": 2048, "cpus": 2, "case_concurrency": 8}
 MEMORY_WARN_FRACTION = 0.85
 SECRET_PATTERNS = (
     re.compile(r"sk-or-v1-[A-Za-z0-9_-]+"),

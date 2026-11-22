@@ -6896,8 +6896,8 @@ class TestResourceConstrainedAdmission:
             assert worker_mod._lease_memory_limit_mib(lease(malformed)) is None
         assert worker_mod._lease_memory_limit_mib(SimpleNamespace()) is None
 
-    def test_published_cap_admits_every_slot_on_the_smallest_host(self) -> None:
-        """SN-488: at the published 863 MiB cap a 7,934 MiB host runs all 8."""
+    def test_published_cap_admits_three_slots_on_the_smallest_host(self) -> None:
+        """SN-488: at the published 2048 MiB cap a 7,934 MiB host runs 3."""
         collector = self._collector()
         collector.host_specs = MagicMock(
             return_value=HostSpecs(
@@ -6908,8 +6908,8 @@ class TestResourceConstrainedAdmission:
             )
         )
         worker, _ = self._worker(collector=collector)
-        assert worker._sandbox_memory_limit_mib == 863
-        assert worker._memory_admitted_slots() == 8
+        assert worker._sandbox_memory_limit_mib == 2048
+        assert worker._memory_admitted_slots() == 3
 
     def test_heartbeat_reply_resizes_admission_to_the_live_cap(self) -> None:
         """A host admitting no slot gets no lease; the heartbeat must tell it."""
