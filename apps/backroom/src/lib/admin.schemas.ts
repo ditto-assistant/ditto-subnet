@@ -11119,6 +11119,62 @@ export const validatorRequestOutcomeSummarySchema = z.object({
   allocator: dispatchFenceSnapshotSchema.nullable().default(null),
 } satisfies PlatformResponseShape<GeneratedValidatorRequestOutcomeSummary>)
 
+// Per-agent harness memory (SN-500 step 1). Operator-only: peak and
+// time-weighted P50/P95 of the harness cgroup per run and per agent version.
+// Never shown to miners; there is no data from before the telemetry shipped.
+type GeneratedHarnessMemoryRollupView = PlatformComponents['schemas']['HarnessMemoryRollupView']
+type GeneratedHarnessMemoryRunView = PlatformComponents['schemas']['HarnessMemoryRunView']
+type GeneratedHarnessMemoryList = PlatformComponents['schemas']['HarnessMemoryList']
+type GeneratedAgentHarnessMemory = PlatformComponents['schemas']['AgentHarnessMemory']
+
+const harnessMemoryBytes = z.number().int().nonnegative()
+
+const harnessMemoryRollupViewSchema = z.object({
+  agent_id: z.string(),
+  agent_name: z.string().nullable().optional(),
+  miner_hotkey: z.string().nullable().optional(),
+  runs: z.number().int().nonnegative(),
+  scored_runs: z.number().int().nonnegative(),
+  failed_runs: z.number().int().nonnegative(),
+  oom_runs: z.number().int().nonnegative(),
+  peak_bytes_max: harnessMemoryBytes,
+  p50_bytes_median: harnessMemoryBytes,
+  p95_bytes_median: harnessMemoryBytes,
+  p95_bytes_max: harnessMemoryBytes,
+  limit_bytes_max: harnessMemoryBytes.nullable().optional(),
+  last_recorded_at: z.string(),
+} satisfies PlatformResponseShape<GeneratedHarnessMemoryRollupView>)
+
+const harnessMemoryRunViewSchema = z.object({
+  validator_hotkey: z.string(),
+  bench_version: z.number().int(),
+  lease_issued_at: z.string(),
+  outcome: z.enum(['scored', 'failed']),
+  failure_reason: z.string().nullable().optional(),
+  failure_detail: z.string().nullable().optional(),
+  peak_bytes: harnessMemoryBytes,
+  p50_bytes: harnessMemoryBytes,
+  p95_bytes: harnessMemoryBytes,
+  samples: z.number().int().nonnegative(),
+  sampled_seconds: z.number().nonnegative(),
+  limit_bytes: harnessMemoryBytes.nullable().optional(),
+  recorded_at: z.string(),
+} satisfies PlatformResponseShape<GeneratedHarnessMemoryRunView>)
+
+export const harnessMemoryListSchema = z.object({
+  generated_at: z.string(),
+  agents: z.array(harnessMemoryRollupViewSchema),
+  offset: z.number().int().nonnegative().default(0),
+  has_more: z.boolean().default(false),
+  note: z.string(),
+} satisfies PlatformResponseShape<GeneratedHarnessMemoryList>)
+
+export const agentHarnessMemorySchema = z.object({
+  agent_id: z.string(),
+  rollup: harnessMemoryRollupViewSchema.nullable(),
+  runs: z.array(harnessMemoryRunViewSchema),
+} satisfies PlatformResponseShape<GeneratedAgentHarnessMemory>)
+
 // Unreleased-copy signal (shadow). Evidence carries normalized source text
 // from two submissions, so the per-agent read is gated on the artifact scope.
 type GeneratedUnreleasedCopyItem = PlatformComponents['schemas']['UnreleasedCopyItem']

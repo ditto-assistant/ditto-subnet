@@ -36,6 +36,7 @@ from ditto.api_models.validator import (
     BenchmarkRuntimeSettings,
     ConfirmationDatasetPin,
     FailJobResponse,
+    HarnessMemoryTelemetry,
     JobResponse,
     LedgerEntry,
     LedgerResponse,
@@ -3466,6 +3467,62 @@ class TestRunOnce:
         assert reason == "infrastructure"
         assert "slot-0" not in worker._healthy_slots
         assert "slot-0" in worker._resource_blocked_until
+
+    async def test_harness_memory_reaches_platform_with_score_and_failure(
+        self,
+    ) -> None:
+        """SN-500: measured memory rides with both outcomes, unsigned."""
+        telemetry = HarnessMemoryTelemetry(
+            peak_bytes=1900 << 20,
+            p50_bytes=600 << 20,
+            p95_bytes=1700 << 20,
+            samples=812,
+            sampled_seconds=1624.0,
+            limit_bytes=2048 << 20,
+        )
+        jobs = [_job("5MinerA" + "x" * 41), _job("5MinerB" + "x" * 41)]
+        platform = _platform_with_ledger(jobs=jobs, ledger=[])
+        oom = SandboxOomError("memory allowance")
+        oom.harness_memory = telemetry
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock()
+        dittobench.score_tarball = AsyncMock(side_effect=[oom, _report("run-b", 0.7)])
+        dittobench.take_harness_memory = MagicMock(return_value=telemetry)
+        dittobench.last_details = {}
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker.run_once(set_weights=False)
+
+        failed_kwargs = platform.report_ticket_failed.await_args.kwargs
+        assert failed_kwargs["harness_memory"] == telemetry
+        dittobench.take_harness_memory.assert_called_once_with("run-b")
+        assert platform.submit_score.await_args.kwargs["harness_memory"] == telemetry
+
+    async def test_unmeasured_runs_send_no_harness_memory(self) -> None:
+        jobs = [_job("5MinerA" + "x" * 41)]
+        platform = _platform_with_ledger(jobs=jobs, ledger=[])
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run-a", 0.7))
+        # A bare mock answers anything; only real telemetry may ride.
+        dittobench.last_details = {}
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker.run_once(set_weights=False)
+
+        assert "harness_memory" not in platform.submit_score.await_args.kwargs
 
     async def test_ticket_hand_back_failure_never_crashes_the_sweep(self) -> None:
         jobs = [_job("5MinerA" + "x" * 41)]

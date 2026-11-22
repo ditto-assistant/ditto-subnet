@@ -482,6 +482,8 @@ import {
   athReviewQueueSloSchema,
   validatorCapacitySummarySchema,
   validatorRequestOutcomeSummarySchema,
+  harnessMemoryListSchema,
+  agentHarnessMemorySchema,
   outlierEscalationDryRunInputSchema,
   outlierEscalationDryRunSchema,
   outlierEscalationInputSchema,
@@ -2627,6 +2629,31 @@ export async function fetchValidatorRequestOutcomes(validatorHotkey?: string) {
     retries: 1,
   })
   return validatorRequestOutcomeSummarySchema.parse(payload)
+}
+
+const HARNESS_MEMORY_PATH = '/api/v1/admin/harness-memory'
+
+function harnessMemoryLimit(limit: number) {
+  return Math.min(200, Math.max(1, Math.trunc(limit)))
+}
+
+// SN-500 step 1: operator-only harness memory per agent version. Never
+// miner-facing; agents with no row were not measured, not light.
+export async function fetchHarnessMemoryList(limit = 50, offset = 0) {
+  const start = Math.min(100_000, Math.max(0, Math.trunc(offset)))
+  const payload = await platformAdminRequest(
+    `${HARNESS_MEMORY_PATH}?limit=${harnessMemoryLimit(limit)}&offset=${start}`,
+    { timeoutMs: 15_000, retries: 1 },
+  )
+  return harnessMemoryListSchema.parse(payload)
+}
+
+export async function fetchAgentHarnessMemory(agentId: string, limit = 50) {
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(agentId)}/harness-memory?limit=${harnessMemoryLimit(limit)}`,
+    { timeoutMs: 15_000, retries: 1 },
+  )
+  return agentHarnessMemorySchema.parse(payload)
 }
 
 export async function fetchLedgerEpochSnapshots(limit = 24) {

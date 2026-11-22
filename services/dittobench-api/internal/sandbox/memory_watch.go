@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,27 @@ type memoryWatch struct {
 	frozen   bool
 	done     chan struct{}
 	stopOnce sync.Once
+	// usage is a time-weighted histogram of memory.current in MiB buckets:
+	// seconds spent at each level (SN-500). Weighting by the interval that
+	// followed each sample keeps the faster sampling near the cap from
+	// skewing P50/P95 upward. Bounded by the cap, so it never decimates.
+	usage        map[uint64]float64
+	usageSamples int
+	usageSeconds float64
+}
+
+// mibBytes is one MiB in bytes, the histogram's bucket width.
+const mibBytes = 1 << 20
+
+// MemoryProfile summarises one harness run's cgroup memory (SN-500): the
+// kernel's high-water mark and time-weighted percentiles of memory.current.
+type MemoryProfile struct {
+	PeakBytes      uint64
+	P50Bytes       uint64
+	P95Bytes       uint64
+	Samples        int
+	SampledSeconds float64
+	LimitBytes     uint64
 }
 
 func (d *LocalDocker) readHostMemAvailable() (uint64, bool) {
@@ -88,6 +110,7 @@ cat /sys/fs/cgroup/memory.current 2>/dev/null || true
 			if limitBytes > 0 && sample.MemoryPeakBytes != nil && *sample.MemoryPeakBytes*100 >= limitBytes*85 {
 				interval /= 4
 			}
+			w.recordUsage(sample.MemoryCurrentBytes, interval)
 		} else if state, inspectErr := d.dockerOutput(ctx, "inspect", "--format", "{{.State.Running}}", containerID); inspectErr != nil ||
 			strings.TrimSpace(string(state)) != "true" {
 			// Stopped (or gone): freeze before any post-kill host reading lands.
@@ -124,6 +147,76 @@ func (w *memoryWatch) recordCgroup(sample RuntimeDiagnostics) {
 			w.events[key] = value
 		}
 	}
+}
+
+// recordUsage adds one memory.current reading, weighted by the interval
+// until the next reading.
+func (w *memoryWatch) recordUsage(current *uint64, interval time.Duration) {
+	if current == nil || interval <= 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.frozen {
+		return
+	}
+	if w.usage == nil {
+		w.usage = make(map[uint64]float64)
+	}
+	seconds := interval.Seconds()
+	w.usage[*current/mibBytes] += seconds
+	w.usageSamples++
+	w.usageSeconds += seconds
+}
+
+// profile is the run's memory summary, or nil when nothing was sampled.
+func (w *memoryWatch) profile(limitBytes uint64) *MemoryProfile {
+	if w == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.usageSamples == 0 && w.peak == nil {
+		return nil
+	}
+	profile := &MemoryProfile{
+		Samples:        w.usageSamples,
+		SampledSeconds: w.usageSeconds,
+		LimitBytes:     limitBytes,
+	}
+	if w.peak != nil {
+		profile.PeakBytes = *w.peak
+	}
+	if w.usageSamples > 0 {
+		buckets := make([]uint64, 0, len(w.usage))
+		for bucket := range w.usage {
+			buckets = append(buckets, bucket)
+		}
+		sort.Slice(buckets, func(i, j int) bool { return buckets[i] < buckets[j] })
+		profile.P50Bytes = weightedQuantile(buckets, w.usage, w.usageSeconds, 0.50)
+		profile.P95Bytes = weightedQuantile(buckets, w.usage, w.usageSeconds, 0.95)
+	}
+	// memory.peak is the kernel's exact high-water mark; a percentile rounded
+	// up to its bucket edge must not report more than it.
+	if profile.PeakBytes > 0 {
+		profile.P50Bytes = min(profile.P50Bytes, profile.PeakBytes)
+		profile.P95Bytes = min(profile.P95Bytes, profile.PeakBytes)
+	}
+	return profile
+}
+
+// weightedQuantile is the smallest bucket whose cumulative weight reaches q of
+// the total, reported at the bucket's upper edge so it never understates use.
+func weightedQuantile(sorted []uint64, weights map[uint64]float64, total float64, q float64) uint64 {
+	target := q * total
+	cumulative := 0.0
+	for _, bucket := range sorted {
+		cumulative += weights[bucket]
+		if cumulative >= target {
+			return (bucket + 1) * mibBytes
+		}
+	}
+	return (sorted[len(sorted)-1] + 1) * mibBytes
 }
 
 func (w *memoryWatch) sampleHost(read func() (uint64, bool)) {

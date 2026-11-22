@@ -172,6 +172,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/{agent_id}/harness-memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Harness Memory
+         * @description One agent version's rollup and newest observed runs.
+         */
+        get: operations["get_agent_harness_memory_api_v1_admin_agents__agent_id__harness_memory_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents/{agent_id}/lineage-source-diff": {
         parameters: {
             query?: never;
@@ -2827,6 +2847,26 @@ export interface paths {
         put?: never;
         /** Revoke Github Link */
         post: operations["revoke_github_link_api_v1_admin_github_links__link_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/harness-memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Harness Memory
+         * @description Agents with memory observations, heaviest P95 first.
+         */
+        get: operations["get_harness_memory_api_v1_admin_harness_memory_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -18679,6 +18719,20 @@ export interface components {
             window_start: string;
         };
         /**
+         * AgentHarnessMemory
+         * @description One agent's rollup and newest runs. ``rollup`` is null with no runs.
+         */
+        AgentHarnessMemory: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            rollup: components["schemas"]["HarnessMemoryRollupView"] | null;
+            /** Runs */
+            runs: components["schemas"]["HarnessMemoryRunView"][];
+        };
+        /**
          * AgentResponse
          * @description Returned by ``GET /retrieval/agent-by-hotkey``.
          *
@@ -27043,6 +27097,8 @@ export interface components {
              * @description Reporter's own failure code or diagnostic message behind ``reason``. Advisory: drives no policy, unsigned, and optional.
              */
             failure_detail?: string | null;
+            /** @description The run's harness memory (peak, time-weighted P50/P95). Unsigned operator telemetry; drives no policy and is never published (SN-500). */
+            harness_memory?: components["schemas"]["HarnessMemoryTelemetry"] | null;
             /**
              * Nonce
              * Format: uuid
@@ -29761,6 +29817,155 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HarnessMemoryList
+         * @description Agents with observations, heaviest P95 first.
+         */
+        HarnessMemoryList: {
+            /** Agents */
+            agents: components["schemas"]["HarnessMemoryRollupView"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /**
+             * Has More
+             * @description More agents follow; page with offset.
+             * @default false
+             */
+            has_more: boolean;
+            /**
+             * Note
+             * @description Coverage reminder: observations start with the release that added them; no earlier run has memory data.
+             */
+            note: string;
+            /**
+             * Offset
+             * @default 0
+             */
+            offset: number;
+        };
+        /**
+         * HarnessMemoryRollupView
+         * @description One agent version's memory across every observed run.
+         */
+        HarnessMemoryRollupView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Failed Runs */
+            failed_runs: number;
+            /**
+             * Last Recorded At
+             * Format: date-time
+             */
+            last_recorded_at: string;
+            /**
+             * Limit Bytes Max
+             * @description Largest harness cap any observed run ran under.
+             */
+            limit_bytes_max?: number | null;
+            /** Miner Hotkey */
+            miner_hotkey?: string | null;
+            /**
+             * Oom Runs
+             * @description Failed runs whose detail is `harness_oom` (charged) or `harness_oom_grace` (the notice period's no-fault form).
+             */
+            oom_runs: number;
+            /**
+             * P50 Bytes Median
+             * @description Median of the per-run time-weighted P50s.
+             */
+            p50_bytes_median: number;
+            /**
+             * P95 Bytes Max
+             * @description Highest per-run time-weighted P95.
+             */
+            p95_bytes_max: number;
+            /**
+             * P95 Bytes Median
+             * @description Median of the per-run time-weighted P95s.
+             */
+            p95_bytes_median: number;
+            /**
+             * Peak Bytes Max
+             * @description Highest per-run `memory.peak`.
+             */
+            peak_bytes_max: number;
+            /** Runs */
+            runs: number;
+            /** Scored Runs */
+            scored_runs: number;
+        };
+        /**
+         * HarnessMemoryRunView
+         * @description One lease's observation.
+         */
+        HarnessMemoryRunView: {
+            /** Bench Version */
+            bench_version: number;
+            /** Failure Detail */
+            failure_detail?: string | null;
+            /** Failure Reason */
+            failure_reason?: string | null;
+            /**
+             * Lease Issued At
+             * Format: date-time
+             */
+            lease_issued_at: string;
+            /** Limit Bytes */
+            limit_bytes?: number | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "scored" | "failed";
+            /** P50 Bytes */
+            p50_bytes: number;
+            /** P95 Bytes */
+            p95_bytes: number;
+            /** Peak Bytes */
+            peak_bytes: number;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Sampled Seconds */
+            sampled_seconds: number;
+            /** Samples */
+            samples: number;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * HarnessMemoryTelemetry
+         * @description One scored or failed run's sandboxed-harness memory (SN-500).
+         *
+         *     Measured by the scorer from the harness cgroup: ``peak_bytes`` is the
+         *     kernel's ``memory.peak`` high-water mark; ``p50_bytes`` and ``p95_bytes``
+         *     are time-weighted percentiles of ``memory.current`` at 1 MiB resolution.
+         *     Unsigned operator telemetry: it drives no policy and is never published.
+         */
+        HarnessMemoryTelemetry: {
+            /** Limit Bytes */
+            limit_bytes?: number | null;
+            /** P50 Bytes */
+            p50_bytes: number;
+            /** P95 Bytes */
+            p95_bytes: number;
+            /** Peak Bytes */
+            peak_bytes: number;
+            /** Sampled Seconds */
+            sampled_seconds: number;
+            /** Samples */
+            samples: number;
         };
         /** HarnessUsage */
         HarnessUsage: {
@@ -46866,6 +47071,8 @@ export interface components {
          *     }
          */
         SubmitScoreRequest: {
+            /** @description The run's harness memory (peak, time-weighted P50/P95). Unsigned operator telemetry; drives no policy and is never published (SN-500). */
+            harness_memory?: components["schemas"]["HarnessMemoryTelemetry"] | null;
             /** @description The DittoBench score report. */
             report: components["schemas"]["ScoreReport"];
             /**
@@ -51538,6 +51745,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminAgentEmissionEligibilityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_harness_memory_api_v1_admin_agents__agent_id__harness_memory_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentHarnessMemory"];
                 };
             };
             /** @description Validation Error */
@@ -57542,6 +57784,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_harness_memory_api_v1_admin_harness_memory_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HarnessMemoryList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

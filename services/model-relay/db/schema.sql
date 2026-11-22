@@ -5191,6 +5191,50 @@ CREATE TABLE public.generator_submissions (
 
 
 --
+-- Name: harness_memory_observations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.harness_memory_observations (
+    id bigint NOT NULL,
+    agent_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    validator_hotkey text NOT NULL,
+    lease_issued_at timestamp with time zone NOT NULL,
+    outcome text NOT NULL,
+    failure_reason text,
+    failure_detail text,
+    peak_bytes bigint NOT NULL,
+    p50_bytes bigint NOT NULL,
+    p95_bytes bigint NOT NULL,
+    samples integer NOT NULL,
+    sampled_seconds double precision NOT NULL,
+    limit_bytes bigint,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_harness_memory_observations_nonnegative CHECK (((peak_bytes >= 0) AND (p50_bytes >= 0) AND (p95_bytes >= 0) AND (samples >= 0) AND (sampled_seconds >= (0)::double precision))),
+    CONSTRAINT ck_harness_memory_observations_outcome CHECK ((outcome = ANY (ARRAY['scored'::text, 'failed'::text])))
+);
+
+
+--
+-- Name: harness_memory_observations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.harness_memory_observations_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: harness_memory_observations_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.harness_memory_observations_id_seq OWNED BY public.harness_memory_observations.id;
+
+
+--
 -- Name: hotkey_ban_audit; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -8878,6 +8922,13 @@ ALTER TABLE ONLY public.generator_rounds ALTER COLUMN round_index SET DEFAULT ne
 
 
 --
+-- Name: harness_memory_observations id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.harness_memory_observations ALTER COLUMN id SET DEFAULT nextval('public.harness_memory_observations_id_seq'::regclass);
+
+
+--
 -- Name: hotkey_ban_audit seq; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -9980,6 +10031,14 @@ ALTER TABLE ONLY public.generator_submission_payments
 
 ALTER TABLE ONLY public.generator_submissions
     ADD CONSTRAINT generator_submissions_sha256_key UNIQUE (source_sha256);
+
+
+--
+-- Name: harness_memory_observations harness_memory_observations_lease_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.harness_memory_observations
+    ADD CONSTRAINT harness_memory_observations_lease_key UNIQUE (agent_id, bench_version, validator_hotkey, lease_issued_at);
 
 
 --
@@ -11092,6 +11151,14 @@ ALTER TABLE ONLY public.generator_source_releases
 
 ALTER TABLE ONLY public.generator_submissions
     ADD CONSTRAINT pk_generator_submissions PRIMARY KEY (submission_id);
+
+
+--
+-- Name: harness_memory_observations pk_harness_memory_observations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.harness_memory_observations
+    ADD CONSTRAINT pk_harness_memory_observations PRIMARY KEY (id);
 
 
 --
@@ -13601,6 +13668,13 @@ CREATE INDEX generator_submissions_runnable_idx ON public.generator_submissions 
 --
 
 CREATE INDEX generator_submissions_tree_idx ON public.generator_submissions USING btree (tree_sha256);
+
+
+--
+-- Name: harness_memory_observations_agent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX harness_memory_observations_agent_idx ON public.harness_memory_observations USING btree (agent_id, recorded_at);
 
 
 --
@@ -17236,6 +17310,14 @@ ALTER TABLE ONLY public.v13_replay_private_generation_groups
 
 ALTER TABLE ONLY public.generator_submission_payments
     ADD CONSTRAINT generator_submission_payments_submission_fkey FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: harness_memory_observations harness_memory_observations_agent_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.harness_memory_observations
+    ADD CONSTRAINT harness_memory_observations_agent_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
 
 
 --

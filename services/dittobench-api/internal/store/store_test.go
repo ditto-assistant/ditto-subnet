@@ -1,6 +1,8 @@
 package store
 
 import (
+	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
@@ -204,4 +206,22 @@ func TestConcurrentAccess(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestHarnessMemoryRidesTheRunRecord(t *testing.T) {
+	s := New()
+	s.Create("run-mem", "sandbox", StatusRunning, 1, 114)
+	s.SetHarnessMemory("run-mem", nil)
+	if job, _ := s.Get("run-mem"); job.HarnessMemory != nil {
+		t.Fatal("nil summary was stored")
+	}
+	s.SetHarnessMemory("run-mem", &HarnessMemory{PeakBytes: 3, P50Bytes: 1, P95Bytes: 2, Samples: 4, SampledSeconds: 8, LimitBytes: 9})
+	job, _ := s.Get("run-mem")
+	raw, err := json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"harness_memory":{"peak_bytes":3,"p50_bytes":1,"p95_bytes":2,"samples":4,"sampled_seconds":8,"limit_bytes":9}`) {
+		t.Fatalf("wire = %s", raw)
+	}
 }

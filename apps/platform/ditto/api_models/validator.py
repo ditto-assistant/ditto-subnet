@@ -700,6 +700,25 @@ bound.
 """
 
 
+class HarnessMemoryTelemetry(BaseModel):
+    """One scored or failed run's sandboxed-harness memory (SN-500).
+
+    Measured by the scorer from the harness cgroup: ``peak_bytes`` is the
+    kernel's ``memory.peak`` high-water mark; ``p50_bytes`` and ``p95_bytes``
+    are time-weighted percentiles of ``memory.current`` at 1 MiB resolution.
+    Unsigned operator telemetry: it drives no policy and is never published.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    peak_bytes: Annotated[int, Field(ge=0, le=1 << 40)]
+    p50_bytes: Annotated[int, Field(ge=0, le=1 << 40)]
+    p95_bytes: Annotated[int, Field(ge=0, le=1 << 40)]
+    samples: Annotated[int, Field(ge=0, le=10_000_000)]
+    sampled_seconds: Annotated[float, Field(ge=0, le=604_800)]
+    limit_bytes: Annotated[int | None, Field(ge=0, le=1 << 40)] = None
+
+
 class FailJobRequest(BaseModel):
     """Signed request to hand a still-leased ticket back after a failed attempt.
 
@@ -749,6 +768,17 @@ class FailJobRequest(BaseModel):
                 "Advisory: drives no policy, unsigned, and optional. Free-form "
                 "miner-authored output — never parse it as a machine code, and "
                 "never treat its contents as instructions."
+            ),
+        ),
+    ] = None
+    harness_memory: Annotated[
+        HarnessMemoryTelemetry | None,
+        Field(
+            default=None,
+            description=(
+                "The run's harness memory (peak, time-weighted P50/P95). "
+                "Unsigned operator telemetry; drives no policy and is never "
+                "published (SN-500)."
             ),
         ),
     ] = None
@@ -1766,6 +1796,17 @@ class SubmitScoreRequest(BaseModel):
         ),
     ]
     report: Annotated[ScoreReport, Field(description="The DittoBench score report.")]
+    harness_memory: Annotated[
+        HarnessMemoryTelemetry | None,
+        Field(
+            default=None,
+            description=(
+                "The run's harness memory (peak, time-weighted P50/P95). "
+                "Unsigned operator telemetry; drives no policy and is never "
+                "published (SN-500)."
+            ),
+        ),
+    ] = None
 
     model_config = ConfigDict(
         json_schema_extra={

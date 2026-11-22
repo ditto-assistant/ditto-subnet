@@ -57,6 +57,7 @@ from ditto.api_models.validator import (
 )
 from ditto.api_models.validator import (
     ConfirmationDatasetPin,
+    HarnessMemoryTelemetry,
     ValidatorHeartbeatRequest,
     ValidatorHeartbeatResponse,
     ValidatorRuntimeState,
@@ -105,6 +106,7 @@ from ditto.validator.errors import (
     WeightSubmissionError,
     container_log_tail,
     failure_detail,
+    harness_memory_of,
 )
 from ditto.validator.lease_roster import (
     RosterUnknown,
@@ -1843,6 +1845,7 @@ class ValidatorWorker:
                                 "scoring_error",
                                 failure_detail(error),
                                 container_log_tail(error),
+                                harness_memory_of(error),
                             )
                             slot_failed += 1
                         except SandboxOomError as error:
@@ -1858,6 +1861,7 @@ class ValidatorWorker:
                                 "sandbox_oom",
                                 failure_detail(error),
                                 container_log_tail(error),
+                                harness_memory_of(error),
                             )
                             slot_failed += 1
                         except (
@@ -1876,6 +1880,7 @@ class ValidatorWorker:
                                 "infrastructure",
                                 failure_detail(error),
                                 container_log_tail(error),
+                                harness_memory_of(error),
                             )
                             self._healthy_slots.discard(slot_id)
                             if any(
@@ -1903,6 +1908,7 @@ class ValidatorWorker:
                                 "scoring_error",
                                 failure_detail(error),
                                 container_log_tail(error),
+                                harness_memory_of(error),
                             )
                             slot_failed += 1
                         finally:
@@ -4956,6 +4962,7 @@ class ValidatorWorker:
         reason: FailJobReason,
         detail: str | None = None,
         log_tail: str | None = None,
+        harness_memory: HarnessMemoryTelemetry | None = None,
     ) -> None:
         """Best-effort hand-back of a failed ticket for immediate reissue.
 
@@ -5001,9 +5008,14 @@ class ValidatorWorker:
         if log_tail is not None:
             self._sweep_failures_with_log_tail += 1
         try:
+            # SN-500 telemetry rides only when measured, so a hand-back without
+            # it is unchanged on the wire and for every existing caller.
+            telemetry = (
+                {"harness_memory": harness_memory} if harness_memory is not None else {}
+            )
             await asyncio.wait_for(
                 self._platform.report_ticket_failed(
-                    job, reason, detail, container_log_tail=log_tail
+                    job, reason, detail, container_log_tail=log_tail, **telemetry
                 ),
                 timeout=_FAIL_REPORT_TIMEOUT_SECONDS,
             )
@@ -5521,11 +5533,23 @@ class ValidatorWorker:
             transcript_sha256=transcript_sha256,
             base_evidence_sha256=base_evidence_sha256,
         )
+        take_harness_memory = getattr(self._dittobench, "take_harness_memory", None)
+        harness_memory = (
+            take_harness_memory(report.run_id)
+            if callable(take_harness_memory)
+            else None
+        )
         await self._platform.submit_score(
             agent_id,
             signature=signature,
             report=report,
             ticket_deadline=ticket_deadline,
+            # SN-500 telemetry, unsigned and only when the scorer measured it.
+            **(
+                {"harness_memory": harness_memory}
+                if isinstance(harness_memory, HarnessMemoryTelemetry)
+                else {}
+            ),
         )
         if ticket_deadline is not None:
             self._resolve_ticket_deadline(agent_id, ticket_deadline)

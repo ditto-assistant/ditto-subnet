@@ -61,6 +61,9 @@ type Job struct {
 	Progress     Progress              `json:"progress"`           // stage/done/total for the UI
 	Partial      []protocol.CaseScore  `json:"partial,omitempty"`  // case scores appended as they complete
 	Report       *protocol.ScoreReport `json:"report,omitempty"`   // set when Status == done
+	// HarnessMemory is the sandboxed harness's memory over the run (SN-500):
+	// operator telemetry, set on success and failure when it was sampled.
+	HarnessMemory *HarnessMemory `json:"harness_memory,omitempty"`
 	// TranscriptSHA256 content-addresses the canonical transcript artifact (the
 	// graded per-case inputs) for offline re-grading; the bytes themselves are
 	// served by GET /v1/runs/{id}/transcript, not inlined in run status.
@@ -243,6 +246,29 @@ func (s *Store) SetTranscript(runID, sha string, body []byte) {
 		}
 		j.TranscriptSHA256 = sha
 		j.Transcript = body
+	})
+}
+
+// HarnessMemory is one run's cgroup memory summary (SN-500). Peak is the
+// kernel's memory.peak; P50/P95 are time-weighted over memory.current samples
+// at 1 MiB resolution.
+type HarnessMemory struct {
+	PeakBytes      uint64  `json:"peak_bytes"`
+	P50Bytes       uint64  `json:"p50_bytes"`
+	P95Bytes       uint64  `json:"p95_bytes"`
+	Samples        int     `json:"samples"`
+	SampledSeconds float64 `json:"sampled_seconds"`
+	LimitBytes     uint64  `json:"limit_bytes,omitempty"`
+}
+
+// SetHarnessMemory attaches a run's memory summary. A nil summary is ignored.
+func (s *Store) SetHarnessMemory(runID string, memory *HarnessMemory) {
+	if memory == nil {
+		return
+	}
+	s.Update(runID, func(j *Job) {
+		m := *memory
+		j.HarnessMemory = &m
 	})
 }
 

@@ -183,6 +183,9 @@ type RuntimeDiagnostics struct {
 	// HostMemAvailableMinBytes is the lowest host MemAvailable sampled in the
 	// window that ended when the container stopped (or now, if it is alive).
 	HostMemAvailableMinBytes *uint64 `json:"host_mem_available_min_bytes,omitempty"`
+	// MemoryCurrentBytes is the cgroup's memory.current at this sample: the
+	// usage the SN-500 percentiles are built from. Not part of the failure wire.
+	MemoryCurrentBytes *uint64 `json:"-"`
 }
 
 // Stable resource failure codes. docs/RUNTIME-ENVELOPE.md publishes each rule.
@@ -260,6 +263,15 @@ func (d RuntimeDiagnostics) peakAtCap() bool {
 func (d RuntimeDiagnostics) hostHadHeadroom() bool {
 	floor := uint64(PublishedEnvelope.OOM.HostAvailableFloorMiB) * mib
 	return d.HostMemAvailableMinBytes != nil && *d.HostMemAvailableMinBytes > floor
+}
+
+// MemoryProfile is this run's memory summary (SN-500), or nil when the
+// sampler never ran. Read it before Stop: stopping freezes the sampler.
+func (h *Handle) MemoryProfile() *MemoryProfile {
+	if h == nil {
+		return nil
+	}
+	return h.watch.profile(h.memoryLimitBytes)
 }
 
 type memoryLimitKey struct{}
@@ -1191,6 +1203,10 @@ func parseRuntimeMetrics(diagnostics *RuntimeDiagnostics, output string) {
 			value, err := strconv.ParseUint(line, 10, 64)
 			if err == nil && (diagnostics.MemoryPeakBytes == nil || value > *diagnostics.MemoryPeakBytes) {
 				diagnostics.MemoryPeakBytes = &value
+			}
+			if err == nil && section == "__memory_current__" {
+				current := value
+				diagnostics.MemoryCurrentBytes = &current
 			}
 		case "__tmpfs__":
 			fields := strings.Fields(line)

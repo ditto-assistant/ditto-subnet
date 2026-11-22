@@ -109,6 +109,7 @@ from ditto.api_models.validator import (
     FailJobReason,
     FailJobRequest,
     FailJobResponse,
+    HarnessMemoryTelemetry,
     JobRequest,
     JobResponse,
     LedgerResponse,
@@ -1958,6 +1959,7 @@ class PlatformClient:
         reason: FailJobReason,
         failure_detail: str | None = None,
         container_log_tail: str | None = None,
+        harness_memory: HarnessMemoryTelemetry | None = None,
     ) -> FailJobResponse:
         """Report one failed ticket so Platform can park the attempt.
 
@@ -2000,6 +2002,7 @@ class PlatformClient:
             reason=reason,
             failure_detail=failure_detail,
             container_log_tail=container_log_tail,
+            harness_memory=harness_memory,
             nonce=nonce,
             requested_at=requested_at,
             signature=sign_job_fail_request(
@@ -2024,10 +2027,11 @@ class PlatformClient:
             return await self._client.post(
                 f"{self._base}{_PREFIX}/job/fail",
                 headers=self._headers,
-                # exclude_none drops only failure_detail — every other field on
-                # this model is required and non-None — so a report with no
-                # detail is byte-identical to what this client sent before the
-                # field existed, and an older platform sees no new key at all.
+                # exclude_none drops only the optional fields (failure_detail,
+                # container_log_tail, harness_memory) — every other field is
+                # required and non-None — so a report without them is
+                # byte-identical to what this client sent before they existed,
+                # and an older platform sees no new key at all.
                 json=payload.model_dump(mode="json", exclude_none=True),
             )
         except httpx.HTTPError as e:
@@ -2622,6 +2626,7 @@ class PlatformClient:
         signature: str,
         report: ScoreReport,
         ticket_deadline: datetime | None = None,
+        harness_memory: HarnessMemoryTelemetry | None = None,
     ) -> SubmitScoreResponse:
         """Report a signed score for ``agent_id``.
 
@@ -2637,8 +2642,13 @@ class PlatformClient:
             ticket_deadline=ticket_deadline,
             signature=signature,
             report=report,
+            harness_memory=harness_memory,
         )
         body = payload.model_dump(mode="json")
+        if harness_memory is None:
+            # SN-500 telemetry is optional and unsigned: without it the body
+            # is byte-identical to what this client sent before the field.
+            body.pop("harness_memory", None)
         attempts = len(_SCORE_SUBMIT_RETRY_DELAYS) + 1
         for attempt in range(attempts):
             try:
