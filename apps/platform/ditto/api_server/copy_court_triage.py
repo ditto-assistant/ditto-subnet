@@ -237,6 +237,21 @@ async def _screening(session: AsyncSession, held: Agent) -> ScreeningEvidence:
         )
         .limit(1)
     )
+    build_only_attempt_id = (
+        await session.scalar(
+            select(ScreeningAttempt.attempt_id)
+            .where(
+                ScreeningAttempt.agent_id == held.agent_id,
+                ScreeningAttempt.artifact_sha256 == held.sha256,
+                ScreeningAttempt.status == "passed",
+                ScreeningAttempt.build_only.is_(True),
+            )
+            .order_by(ScreeningAttempt.started_at.desc())
+            .limit(1)
+        )
+        if attempt is None
+        else None
+    )
     open_quarantines = int(
         await session.scalar(
             select(func.count())
@@ -254,6 +269,9 @@ async def _screening(session: AsyncSession, held: Agent) -> ScreeningEvidence:
         agent_policy_version=int(held.screening_policy_version or 0),
         lineage_scope=attempt.lineage_scope if attempt is not None else None,
         open_quarantines=open_quarantines,
+        build_only_attempt_id=(
+            str(build_only_attempt_id) if build_only_attempt_id is not None else None
+        ),
     )
 
 

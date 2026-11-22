@@ -5,8 +5,8 @@ with copy review as its own clock. See
 ``ditto.db.queries.ath_review_queue_slo`` for the class, clock, reason, and
 ghost definitions.
 
-It is read-only by design. It does not enforce thresholds, raise alerts, or
-take escalation actions. Those remain #2042 follow-ups.
+It is read-only by design. It reports each class against its threshold
+(shipped defaults, SN-499) but raises no alert and takes no escalation action.
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ async def get_ath_review_queue_slo(
     snapshot = await load_ath_review_queue_slo_snapshot(
         session,
         ath_thresholds=slo_config.ath,
-        copy_thresholds=slo_config.copy,
+        class_thresholds=slo_config.classes,
     )
     return AthReviewQueueSlo(
         generated_at=datetime.now(UTC),

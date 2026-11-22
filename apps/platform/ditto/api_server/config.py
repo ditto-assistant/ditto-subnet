@@ -469,13 +469,14 @@ class ApiServerConfig:
         default_factory=SourceReviewQueueSloConfig
     )
     """Observability-only overdue thresholds for the ordinary source-review
-    queue-age SLO (ditto-subnet#2042). Both thresholds default unset."""
+    queue-age SLO (ditto-subnet#2042). The env parser ships defaults (SN-499)."""
 
     ath_review_queue_slo: AthReviewQueueSloConfig = field(
         default_factory=AthReviewQueueSloConfig
     )
     """Observability-only overdue thresholds for the ATH-hold and copy-review
-    queue-age SLO (ditto-subnet#2042, slice 2). Every threshold defaults unset."""
+    queue-age SLO (ditto-subnet#2042, slice 2). The env parser ships per-class
+    defaults (SN-499)."""
 
     source_emission_confirmation_enabled: bool = True
     """Allow verified payout attribution to arm the embargo; collection stays on."""

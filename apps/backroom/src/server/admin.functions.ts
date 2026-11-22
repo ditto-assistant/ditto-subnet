@@ -1,6 +1,7 @@
 import { createServerFn } from '@tanstack/react-start'
 import { setResponseHeader } from '@tanstack/react-start/server'
 import { z } from 'zod'
+import { overdueQueueClocks } from '../lib/review-queue-slo'
 import {
   screeningSubmissionFiltersSchema,
   startBenchmarkRolloutInputSchema,
@@ -68,6 +69,8 @@ import {
   selectActiveBenchmark as selectActiveBenchmarkService,
   fetchBenchmarkRolloutControl,
   fetchCopyReviews,
+  fetchSourceReviewQueueSlo,
+  fetchAthReviewQueueSlo,
   fetchCopyReviewSourceDiff,
   fetchCopyReviewSourceDiffFile,
   fetchMinerFeeSummary,
@@ -593,6 +596,31 @@ export const listCopyReviews = createServerFn({ method: 'GET' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return fetchCopyReviews(data.generation)
+  })
+
+// SN-499: the copy-review page shows every review clock past its SLO. A
+// failed read degrades to an error string; it never blocks the review queue.
+export const getReviewQueueOverdue = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .handler(async () => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    const [ordinary, ath] = await Promise.allSettled([
+      fetchSourceReviewQueueSlo(),
+      fetchAthReviewQueueSlo(),
+    ])
+    const errors = [ordinary, ath].flatMap((read) =>
+      read.status === 'rejected'
+        ? [read.reason instanceof Error ? read.reason.message : String(read.reason)]
+        : [],
+    )
+    return {
+      clocks: overdueQueueClocks(
+        ordinary.status === 'fulfilled' ? ordinary.value : null,
+        ath.status === 'fulfilled' ? ath.value : null,
+      ),
+      error: errors.length > 0 ? errors.join('; ') : null,
+    }
   })
 
 export const decideCopyReview = createServerFn({ method: 'POST' })
