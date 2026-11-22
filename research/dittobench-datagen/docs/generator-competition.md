@@ -719,7 +719,14 @@ attestations. The lane that produces them:
    candidate round case ids) to a validator that advertises the mode. The
    validator posts signed per-case scores. Only unsolved cases are sent, so
    the cost tracks how hard the round was, not its size. A case the oracle
-   passes is attested; a faulted case is not.
+   passes is attested; a faulted case is not. Platform refuses a report as an
+   infrastructure failure, so the lease fails and another attempt runs, when
+   every case faulted or when at least half of the run's chat calls failed
+   upstream (`ORACLE_MAX_FAILED_CHAT_FRACTION`, read from the lease's own
+   inference grant). An oracle whose model calls were refused still answers
+   `/run`, so without this gate its 0.0 scores would settle the round as if
+   every candidate had beaten it (SN-496). The same gate applies to the
+   escalation run.
 3. **Audit.** For each column with attested cases, Platform draws
    `FrontierAuditSample(round_seed, column, attested, frontier_audit_cases)`
    into a Backroom audit. With `frontier_audit_cases = 0` there is no audit.

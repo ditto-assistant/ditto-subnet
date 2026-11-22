@@ -36,12 +36,14 @@ from ditto.api_models.private_dataset import PrivateDatasetRequest
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.generator_frontier import (
     MAX_ORACLE_ATTEMPTS,
+    ORACLE_MAX_FAILED_CHAT_FRACTION,
     STATE_AUDIT_PENDING,
     STATE_ORACLE_PENDING,
     STATE_SETTLED,
     advance_frontier_rounds,
     apply_frontier,
     frontier_audit_sample,
+    oracle_inference_refusal,
     record_oracle_results,
     select_escalation,
     settle_reason,
@@ -52,8 +54,11 @@ from ditto.db.models import (
     GeneratorRoundAttempt,
     GeneratorRoundCaseVerdict,
     GeneratorSubmission,
+    InferenceGrant,
+    InferenceRequest,
     ValidatorTicket,
 )
+from ditto.db.queries.canonical_outage_voids import GrantOutage
 from ditto.tests.api_server.endpoints.test_generator_rounds import (
     _ADMIN,
     _JOB_URL,
@@ -308,6 +313,98 @@ def _unsolved_score(work: dict[str, Any], miner_columns: set[str]) -> dict[str, 
         "scorer_version": "challenge-scorer/7",
         "score": {"columns": columns, "agents": agents},
     }
+
+
+async def _book_oracle_chat(
+    maker: Any, job: dict[str, Any], *, completed: int, failed: dict[str, int]
+) -> None:
+    """Record chat calls on the grant of ``job``'s oracle lease, as the
+    inference proxy would while the oracle harness runs. The lane stubs
+    ``ensure_inference_grant``, so the grant row is written here, on the
+    lease's exact ticket key."""
+    deadline = datetime.fromisoformat(job["deadline"])
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        grant = InferenceGrant(
+            grant_id=uuid4(),
+            agent_id=UUID(job["agent_id"]),
+            bench_version=int(job["bench_version"]),
+            validator_hotkey=_VALIDATOR.ss58_address,
+            slot_id=job["slot_id"],
+            ticket_deadline=deadline,
+            status="active",
+            generation=1,
+            allowed_models=["openai/gpt-oss-20b"],
+            route_provider="openrouter",
+            route_profile="openrouter-route-test-v1",
+            request_budget=16384,
+            token_budget=75_000_000,
+            embedding_model="e",
+            embedding_profile="openrouter-embedding-test-v1",
+            embedding_provider="p",
+            embedding_dimensions=768,
+            embedding_request_budget=1000,
+            embedding_token_budget=1_000_000,
+            embedding_request_count=0,
+            embedding_tokens=0,
+            embedding_cost_microusd=0,
+            embedding_active_requests=0,
+            request_count=0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            cost_microusd=0,
+            active_requests=0,
+            expires_at=deadline,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(grant)
+        await session.flush()
+        outcomes = [("completed", None)] * completed + [
+            ("failed", code) for code, count in failed.items() for _ in range(count)
+        ]
+        for status, code in outcomes:
+            session.add(
+                InferenceRequest(
+                    grant_id=grant.grant_id,
+                    nonce=uuid4(),
+                    generation=grant.generation,
+                    status=status,
+                    request_kind="chat",
+                    model="openai/gpt-oss-20b",
+                    reserved_tokens=16,
+                    terminal_error_code=code,
+                    started_at=now,
+                    completed_at=now,
+                )
+            )
+
+
+def test_oracle_inference_refusal_needs_a_failed_majority() -> None:
+    def outage(chat: int, failed: int) -> GrantOutage:
+        return GrantOutage(
+            grant_id=uuid4(),
+            chat_requests=chat,
+            failed_requests=failed,
+            outage_failed=0,
+            failure_codes={"provider_context_length_exceeded": failed}
+            if failed
+            else {},
+        )
+
+    # Unknown or unused grants are not evidence of an outage.
+    assert oracle_inference_refusal(None) is None
+    assert oracle_inference_refusal(outage(0, 0)) is None
+    # Production's healthiest and worst observed oracle runs (SN-496).
+    assert oracle_inference_refusal(outage(192, 52)) is None
+    assert oracle_inference_refusal(outage(725, 555)) is not None
+    # The boundary is a failed share of at least ORACLE_MAX_FAILED_CHAT_FRACTION.
+    assert ORACLE_MAX_FAILED_CHAT_FRACTION == 0.5
+    assert oracle_inference_refusal(outage(100, 49)) is None
+    refusal = oracle_inference_refusal(outage(100, 50))
+    assert refusal is not None
+    assert "50 of 100 chat calls" in refusal
+    assert "provider_context_length_exceeded=50" in refusal
 
 
 class _Lane:
@@ -773,6 +870,69 @@ class TestFrontierOracleLeases:
         retry = await lane.lease_oracle()
         assert retry["oracle_case_ids"] == lane.candidates
         assert (await lane.frontier(round_index))["oracle_attempts"] == 2
+
+    async def test_an_oracle_whose_model_calls_failed_upstream_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # SN-496: the oracle's harness answered every /run, but its model
+        # calls were refused upstream (context overflow), so it scored 0.0
+        # on every case without faulting. Accepted, the round settled with
+        # no attestations, as if every candidate had beaten the oracle.
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        await _book_oracle_chat(
+            session_maker,
+            job,
+            completed=1,
+            failed={"provider_context_length_exceeded": 2, "upstream_http_400": 1},
+        )
+        resp = await lane.report_oracle(job, set(), status=422)
+        detail = resp.json()["message"]
+        assert "failed upstream on 3 of 4 chat calls" in detail
+        assert "provider_context_length_exceeded=2" in detail
+        # Nothing is recorded: the lane still waits on an oracle answer.
+        frontier = await lane.frontier(round_index)
+        assert frontier["state"] == STATE_ORACLE_PENDING
+        # The validator hands the lease back and another attempt runs.
+        resp = await client.post(
+            f"/api/v1/validator/agent/{job['agent_id']}/generator-round-fail",
+            json=_signed_fail(job),
+        )
+        assert resp.status_code == 200, resp.text
+        retry = await lane.lease_oracle()
+        assert retry["oracle_case_ids"] == lane.candidates
+        assert (await lane.frontier(round_index))["oracle_attempts"] == 2
+        # A healthy retry on its own grant attests as usual.
+        await _book_oracle_chat(session_maker, retry, completed=4, failed={})
+        await lane.report_oracle(retry, set(lane.candidates))
+        assert (await lane.frontier(round_index))["state"] == STATE_AUDIT_PENDING
+
+    async def test_an_oracle_with_a_few_failed_calls_still_reports(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Production's healthy oracle runs lose up to about a quarter of their
+        # calls to timeouts and retries; that is an answer, not an outage.
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        await _book_oracle_chat(
+            session_maker, job, completed=3, failed={"provider_timeout": 1}
+        )
+        await lane.report_oracle(job, set())
+        frontier = await lane.frontier(round_index)
+        # Recorded: an oracle that genuinely failed every case attests none.
+        assert frontier["state"] != STATE_ORACLE_PENDING
 
     async def test_a_running_oracle_lease_is_never_settled_under(
         self,

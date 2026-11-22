@@ -89,9 +89,11 @@ from ditto.db.models import (
     GeneratorRoundAttempt,
     GeneratorRoundCaseVerdict,
     GeneratorSubmission,
+    InferenceGrant,
     ValidatorHeartbeat,
     ValidatorTicket,
 )
+from ditto.db.queries.canonical_outage_voids import GrantOutage, grant_outage
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +104,15 @@ FRONTIER_DOCUMENT_VERSION = 1
 # broken oracle cannot pin a round. A lease still running is always allowed to
 # finish (its ticket TTL bounds it), so the last attempt can still deliver.
 MAX_ORACLE_ATTEMPTS = 4
+# Share of an oracle (or escalation) run's chat calls that may fail upstream
+# before its answers are refused as an infrastructure failure. A harness whose
+# model calls are refused (context overflow, provider 400, timeout) still
+# answers /run, so every case it could not reason about grades as an honest
+# 0.0 and the round would settle with no attestations, as if the oracle had
+# tried and failed. SN-496: in rounds 26139-26161 every all-zero oracle run
+# had 73-97% of its chat calls fail upstream; every run that attested had at
+# most 27%.
+ORACLE_MAX_FAILED_CHAT_FRACTION = 0.5
 
 STATE_ORACLE_PENDING = "oracle_pending"
 STATE_AUDIT_PENDING = "audit_pending"
@@ -603,6 +614,53 @@ def validate_oracle_results(
             "every oracle case faulted; hand the lease back as an infrastructure "
             "failure"
         )
+
+
+def oracle_inference_refusal(outage: GrantOutage | None) -> str | None:
+    """Why an oracle run's answers cannot stand as a witness, or None.
+
+    An unknown grant (``None``) or a run with no chat calls is never refused
+    here: absent evidence is not an outage. Only failed calls count, so a
+    call still in flight when the run reports never tips the share."""
+    if outage is None or outage.chat_requests == 0:
+        return None
+    share = outage.failed_requests / outage.chat_requests
+    if share < ORACLE_MAX_FAILED_CHAT_FRACTION:
+        return None
+    codes = ", ".join(
+        f"{code}={count}"
+        for code, count in sorted(
+            outage.failure_codes.items(), key=lambda item: (-item[1], item[0])
+        )
+    )
+    return (
+        f"oracle inference failed upstream on {outage.failed_requests} of "
+        f"{outage.chat_requests} chat calls ({codes}); hand the lease back as "
+        "an infrastructure failure"
+    )
+
+
+async def oracle_lease_inference_refusal(
+    session: AsyncSession, ticket: ValidatorTicket
+) -> str | None:
+    """:func:`oracle_inference_refusal` for the grant of ``ticket``'s lease.
+
+    The grant is resolved on the ``inference_grants_ticket_lease`` key, so it
+    is exactly this run's, never a neighbouring lease's. Read-only."""
+    deadline = ticket.deadline
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=UTC)
+    grant_id = await session.scalar(
+        select(InferenceGrant.grant_id).where(
+            InferenceGrant.agent_id == ticket.agent_id,
+            InferenceGrant.bench_version == ticket.bench_version,
+            InferenceGrant.validator_hotkey == ticket.validator_hotkey,
+            InferenceGrant.ticket_deadline == deadline,
+        )
+    )
+    if grant_id is None:
+        return None
+    return oracle_inference_refusal(await grant_outage(session, grant_id))
 
 
 def _columns_of(case_ids: Iterable[str]) -> dict[str, list[str]]:
