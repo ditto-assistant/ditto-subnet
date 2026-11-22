@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.499.0 (2026-11-22)
+
+### Bug Fixes
+
+- **validator**: Log the host memory each slot needs, and size to the live cap (SN-488)
+  ([#3587](https://github.com/ditto-assistant/ditto-subnet/pull/3587),
+  [`9f75790`](https://github.com/ditto-assistant/ditto-subnet/commit/9f757900e7232804ad07a295954771e332d3336f))
+
+### Chores
+
+- **screener**: Stage starter-kit provenance v53 (SN-488)
+  ([#3595](https://github.com/ditto-assistant/ditto-subnet/pull/3595),
+  [`86d917b`](https://github.com/ditto-assistant/ditto-subnet/commit/86d917b3601009dc9470adfd48378b29ac363471))
+
+### Features
+
+- **platform,backroom**: Show validators what host memory each slot needs (SN-488)
+  ([#3586](https://github.com/ditto-assistant/ditto-subnet/pull/3586),
+  [`8d07adc`](https://github.com/ditto-assistant/ditto-subnet/commit/8d07adc550b5ed9fa55094ac8c825081d3aff345))
+
+
 ## v0.498.1 (2026-11-20)
 
 ### Bug Fixes
