@@ -723,7 +723,10 @@ attestations. The lane that produces them:
    infrastructure failure, so the lease fails and another attempt runs, when
    every case faulted or when at least half of the run's chat calls failed
    upstream (`ORACLE_MAX_FAILED_CHAT_FRACTION`, read from the lease's own
-   inference grant). An oracle whose model calls were refused still answers
+   inference grant). That takes at least `MIN_ORACLE_FAILED_CALLS` (5) failed
+   calls, unless every call failed. Every failure code counts, not only the
+   outage class the miner-score gates use: the oracle is the subnet's own
+   harness, so a refused call of any kind leaves a generator's case unjudged. An oracle whose model calls were refused still answers
    `/run`, so without this gate its 0.0 scores would settle the round as if
    every candidate had beaten it (SN-496). The same gate applies to the
    escalation run.

@@ -36,6 +36,7 @@ from ditto.api_models.private_dataset import PrivateDatasetRequest
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.generator_frontier import (
     MAX_ORACLE_ATTEMPTS,
+    MIN_ORACLE_FAILED_CALLS,
     ORACLE_MAX_FAILED_CHAT_FRACTION,
     STATE_AUDIT_PENDING,
     STATE_ORACLE_PENDING,
@@ -405,6 +406,30 @@ def test_oracle_inference_refusal_needs_a_failed_majority() -> None:
     assert refusal is not None
     assert "50 of 100 chat calls" in refusal
     assert "provider_context_length_exceeded=50" in refusal
+
+    # Below the evidence floor a run that also got answers is accepted: one or
+    # two transient failures are not an outage.
+    assert MIN_ORACLE_FAILED_CALLS == 5
+    assert oracle_inference_refusal(outage(2, 1)) is None
+    assert oracle_inference_refusal(outage(8, 4)) is None
+    assert oracle_inference_refusal(outage(9, 5)) is not None
+    # A run whose every call failed had no model at all: refused at any count.
+    assert oracle_inference_refusal(outage(1, 1)) is not None
+    assert oracle_inference_refusal(outage(3, 3)) is not None
+
+
+def test_oracle_refusal_counts_every_failure_code_not_only_outage_class() -> None:
+    # SN-496's blind runs had zero outage-class (402/429/503) failures: every
+    # failed call was a context overflow, a provider 400 or a timeout. A gate
+    # on outage-class failures alone would have accepted all ten.
+    blind = GrantOutage(
+        grant_id=uuid4(),
+        chat_requests=725,
+        failed_requests=555,
+        outage_failed=0,
+        failure_codes={"provider_context_length_exceeded": 555},
+    )
+    assert oracle_inference_refusal(blind) is not None
 
 
 class _Lane:
@@ -890,12 +915,12 @@ class TestFrontierOracleLeases:
             session_maker,
             job,
             completed=1,
-            failed={"provider_context_length_exceeded": 2, "upstream_http_400": 1},
+            failed={"provider_context_length_exceeded": 4, "upstream_http_400": 2},
         )
         resp = await lane.report_oracle(job, set(), status=422)
         detail = resp.json()["message"]
-        assert "failed upstream on 3 of 4 chat calls" in detail
-        assert "provider_context_length_exceeded=2" in detail
+        assert "failed upstream on 6 of 7 chat calls" in detail
+        assert "provider_context_length_exceeded=4" in detail
         # Nothing is recorded: the lane still waits on an oracle answer.
         frontier = await lane.frontier(round_index)
         assert frontier["state"] == STATE_ORACLE_PENDING

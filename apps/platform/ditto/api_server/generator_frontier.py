@@ -113,6 +113,12 @@ MAX_ORACLE_ATTEMPTS = 4
 # had 73-97% of its chat calls fail upstream; every run that attested had at
 # most 27%.
 ORACLE_MAX_FAILED_CHAT_FRACTION = 0.5
+# Fewer failed calls than this never refuse a run that also got answers: one or
+# two transient failures are not an outage. The established outage gate uses
+# the same floor (``confirmation_score_voids.MIN_OUTAGE_FAILED_CALLS``). A run
+# whose every chat call failed is refused at any count, because no model
+# answered any case. Every blind run in SN-496 had at least 36 failed calls.
+MIN_ORACLE_FAILED_CALLS = 5
 
 STATE_ORACLE_PENDING = "oracle_pending"
 STATE_AUDIT_PENDING = "audit_pending"
@@ -621,11 +627,23 @@ def oracle_inference_refusal(outage: GrantOutage | None) -> str | None:
 
     An unknown grant (``None``) or a run with no chat calls is never refused
     here: absent evidence is not an outage. Only failed calls count, so a
-    call still in flight when the run reports never tips the share."""
+    call still in flight when the run reports never tips the share.
+
+    Every failure code counts, not only the outage class
+    (``OUTAGE_FAILURE_CODES``: 402, 429, 503) that the miner-score gates use.
+    Those gates decide whether a *miner's* score was ours to void, and a
+    miner harness's context overflow is its own fault. The oracle is the
+    subnet's own reference harness, and the generator it judges is someone
+    else. A refused call of any kind leaves that generator's case unjudged.
+    SN-496's blind runs failed with ``provider_context_length_exceeded``,
+    ``upstream_http_400`` and timeouts: zero outage-class failures."""
     if outage is None or outage.chat_requests == 0:
         return None
     share = outage.failed_requests / outage.chat_requests
     if share < ORACLE_MAX_FAILED_CHAT_FRACTION:
+        return None
+    every_call_failed = outage.failed_requests == outage.chat_requests
+    if outage.failed_requests < MIN_ORACLE_FAILED_CALLS and not every_call_failed:
         return None
     codes = ", ".join(
         f"{code}={count}"
