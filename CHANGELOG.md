@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.501.0 (2026-11-22)
+
+### Documentation
+
+- Say the 863 MiB cap is published, and slots are per validator (SN-488)
+  ([#3599](https://github.com/ditto-assistant/ditto-subnet/pull/3599),
+  [`56c9758`](https://github.com/ditto-assistant/ditto-subnet/commit/56c975825118eabe4d37849044f679a5538da1bd))
+
+### Features
+
+- **platform**: Publish the live 2048 MiB cap; charge harness OOMs only from Nov 25 noon ET (SN-488)
+  ([#3603](https://github.com/ditto-assistant/ditto-subnet/pull/3603),
+  [`e5481d5`](https://github.com/ditto-assistant/ditto-subnet/commit/e5481d528085452dcd2fa16845b02de781dab170))
+
+
 ## v0.500.0 (2026-11-22)
 
 ### Features
