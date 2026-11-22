@@ -80,10 +80,11 @@ func TestFullRunConcurrencyIsOnePerScorer(t *testing.T) {
 }
 
 func TestFinishSandboxRunClassifiesOOMBeforeStop(t *testing.T) {
+	// A host-wide OOM kill: oom_kill without the cgroup's own "oom" event.
 	backend := &diagnosticSandbox{diagnostics: sandbox.RuntimeDiagnostics{
 		OOMKilled:       true,
 		ExitCode:        137,
-		MemoryEvents:    map[string]uint64{"oom": 1, "oom_kill": 1},
+		MemoryEvents:    map[string]uint64{"oom": 0, "oom_kill": 1},
 		MemoryPeakBytes: pointer(uint64(3 << 30)),
 	}}
 	s := &server{store: store.New(), sandbox: backend}
@@ -98,7 +99,8 @@ func TestFinishSandboxRunClassifiesOOMBeforeStop(t *testing.T) {
 	if job.Error != "validator sandbox resource envelope exhausted" {
 		t.Fatalf("private error was not replaced: %q", job.Error)
 	}
-	// No cap or host evidence on the diagnostics: never the miner's.
+	// No proof the harness hit its own cap, and no host evidence: never the
+	// miner's.
 	if job.Failure == nil || job.Failure.Code != sandbox.CodeHostMemoryPressure ||
 		job.Failure.Kind != "validator_infrastructure" || !job.Failure.Retryable {
 		t.Fatalf("infrastructure classifier missing: %+v", job.Failure)
@@ -124,6 +126,36 @@ func TestFinishSandboxRunChargesOOMAtOwnCapToHarness(t *testing.T) {
 	if job.Failure == nil || job.Failure.Code != sandbox.CodeHarnessOOM ||
 		job.Failure.Kind != "sandbox_failure" || job.Failure.Retryable {
 		t.Fatalf("harness OOM not charged as terminal sandbox_failure: %+v", job.Failure)
+	}
+}
+
+// SN-488: the cgroup's own "oom" event proves the harness hit its cap, so the
+// run is the agent's failure even with the host short of memory or unobserved.
+func TestFinishSandboxRunChargesProvenOwnCapOOMWhateverTheHost(t *testing.T) {
+	for name, host := range map[string]*uint64{
+		"host short":      pointer(uint64(256 << 20)),
+		"host unobserved": nil,
+	} {
+		backend := &diagnosticSandbox{diagnostics: sandbox.RuntimeDiagnostics{
+			OOMKilled:                true,
+			ExitCode:                 137,
+			MemoryEvents:             map[string]uint64{"oom": 3, "oom_kill": 1},
+			MemoryLimitBytes:         pointer(uint64(863 << 20)),
+			HostMemAvailableMinBytes: host,
+		}}
+		s := &server{store: store.New(), sandbox: backend}
+		s.store.Create("run-proven-oom", "sandbox", store.StatusRunning, 1, 114)
+		s.store.Fail("run-proven-oom", "harness died")
+
+		s.finishSandboxRun("run-proven-oom", &sandbox.Handle{ContainerID: "private"})
+		job, _ := s.store.Get("run-proven-oom")
+		if job.Failure == nil || job.Failure.Code != sandbox.CodeHarnessOOM ||
+			job.Failure.Kind != "sandbox_failure" || job.Failure.Retryable {
+			t.Fatalf("%s: proven OOM not charged as terminal sandbox_failure: %+v", name, job.Failure)
+		}
+		if job.Error != "harness exceeded its published sandbox memory cap" {
+			t.Fatalf("%s: miner-facing error = %q", name, job.Error)
+		}
 	}
 }
 
