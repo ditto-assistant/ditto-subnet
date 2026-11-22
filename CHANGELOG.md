@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.500.0 (2026-11-22)
+
+### Features
+
+- **scorer,validator,platform**: 863 MiB harness cap; a proven harness OOM is a failed agent run
+  (SN-488) ([#3596](https://github.com/ditto-assistant/ditto-subnet/pull/3596),
+  [`e9db222`](https://github.com/ditto-assistant/ditto-subnet/commit/e9db222def6e7235579f6220fb360ff1464bb7cc))
+
+
 ## v0.499.0 (2026-11-22)
 
 ### Bug Fixes
