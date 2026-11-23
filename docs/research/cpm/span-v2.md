@@ -43,6 +43,13 @@ assistant:
   `span_head.safetensors` holding `weight [2, hidden]` and `bias [2]`. The
   manifest lists the head with its SHA-256 like any weight file. Screening
   checks the tensor names, shapes and dtype, and rejects NaN or Inf.
+- **Multi-span buffer (§7).** The span head generalises to a fixed buffer of
+  K `(start, end)` tuples, padded with `(-1, -1)`. An all-empty buffer means
+  "no answer": nothing in the document is relevant. The PoC's winning form is
+  `Linear(hidden, 2K)` (K = 12 "slots"). Each slot scores the document tokens
+  plus a null position, the last input token, which has read everything. The
+  head file is then `weight [2K, hidden]`, `bias [2K]`, and the manifest states
+  K.
 - **Why a head, not generation.** A head makes every prediction a verbatim
   token range, needs one forward pass per document, and is deterministic
   under the v1 rules. Generating the quote can paraphrase, so it needs fuzzy
@@ -58,8 +65,18 @@ assistant:
 3. Compute in float64 on the CPU from the float32 logits. Ties go to the
    smallest `i`, then the smallest `j`.
 
+**Multi-span decoding (slots).**
+
+1. Slot k takes the best span that starts after slot k−1's end.
+2. If the null score (start and end logits at the null position) is at least
+   as high as that span's score, slot k is null. The first null slot ends the
+   buffer.
+3. The result is in document order and has no overlaps.
+
 **Per case.** Treat the predicted and gold spans as sets of token indices `P`
-and `G`.
+and `G`. For a buffer, `P` and `G` are the unions over spans. Add span-level
+exact F1, the share of gold spans contained, and, on documents with empty
+gold, whether the buffer is empty.
 
 | Metric | Rule |
 | --- | --- |
@@ -128,6 +145,8 @@ Exact match, IoU, containment and tokens are still reported for review.
      until then.
 
 ## 5. Open questions for ML review
+
+Questions 1 to 3 have first answers from the PoC in §7.
 
 1. **Multiple spans.** Most memory cases have 3–4 evidence pairs, and many
    need two facts. Options:
@@ -238,10 +257,163 @@ time at about 135 tokens. The "v1 LoRA" is the 0.778 v1 PoC adapter.
 - Gold labels come from the exporter's string matching, not from native
   generator spans (§4.1).
 
-**Next, before any spend:**
+**Next, before any spend:** multi-span, a null output and wider gold are in
+§7. The same evaluation in bf16 on one CUDA host (phase B0 of
+[bittensor-compute.md](bittensor-compute.md)) waits for a CUDA host.
 
-- multi-span packing under B;
-- a null span for absence;
-- widening gold to the support clause;
-- the same evaluation in bf16 on one CUDA host (phase B0 of
-  [bittensor-compute.md](bittensor-compute.md)).
+## 7. Multi-span, "no answer" and wider gold (Mac mini PoC, part 2)
+
+Code: `span_v2/multi_*.py`. Same caveats as §6: fp32 on Apple MPS, small n,
+not a season score.
+
+**Task.** Spans are relevance, not only the needle. Given the query and a raw
+document, return every span that is relevant to the query, as a fixed buffer
+of K = 12 `(start, end)` tuples. Return an empty buffer only when nothing in
+the document is relevant.
+
+**Data** (`multi_data.py`, bench v18, deterministic). There are three kinds of
+document:
+
+| Kind | Gold |
+| --- | --- |
+| `answer` | Every `answer_value` occurrence inside the case's evidence pairs. List and ordered answers give 2–8 spans. |
+| `absence` | Every occurrence of the case's `grounding_tokens` inside evidence pairs: the facts a grounded decline should cite. These are relevant spans, not "no answer". |
+| `null` | Empty. The case's query over a same-seed document with all of the case's evidence removed, plus any pair holding an answer, distractor, forbidden or grounding string, or a rare query term (document frequency < 2%). |
+
+- **Train:** seeds 101–106, 2 variants per case, null documents at a rate of
+  0.35. That gives 1,605 documents (950 answer, 144 absence, 511 null),
+  sha256 `649913ab…`.
+- **Held out:** seeds 42 and 7, one document per case plus one null document
+  per case. That gives 427 documents (sha256 `28e89b5c…`):
+  - 107 single-answer;
+  - 46 multi-answer;
+  - 24 absence;
+  - 250 null.
+- **Skipped:** 60 held-out answer cases whose answer never appears verbatim in
+  evidence (computed numbers and sums), 7 that overflow the budget or K, and
+  6 absence cases without grounding hits.
+
+**Models.**
+- Qwen3.5-0.8B with a LoRA (as in §6), 1 epoch, 402 optimiser steps of 4
+  documents.
+- About 2.7 h each, with two runs sharing the GPU, at 5.2 GB each.
+- Gold spans are assigned to slots in document order.
+
+**Two ways to fill the buffer, one forward pass each:**
+
+- **`slots`**: `Linear(hidden, 2K)`. Each slot has start and end logits over
+  document tokens plus the null position. Decoding is as in §3.
+- **`pointer`**: `Linear(hidden, 1 + 32)`. Every token gets an "a relevant span
+  ends here" logit (> 0 to fire) and a pointer back to the start. The best K
+  non-overlapping spans fill the buffer. It is meant to sidestep the causal
+  limit (§5.5) by locating a span at its end token, where the whole span has
+  been read.
+
+**Held-out results, needle gold.** "Positive" is the 177 documents with gold
+spans; null is the 250 without. Brackets are 95% bootstrap intervals over
+documents. "Single EM" is the share of the 107 single-answer documents where
+the buffer is exactly the gold span.
+
+| Predictor | Token F1 (positive) | Span F1 | Gold spans contained | Single EM | Multi F1 (n 46) | Absence F1 (n 24) | Null correct (n 250) | Tokens |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **slots, K = 12** | **0.644** [0.58, 0.70] | **0.612** | **0.620** [0.56, 0.68] | **0.692** | **0.595** | **0.413** | 0.876 [0.83, 0.92] | 7.2 |
+| pointer | 0.389 [0.32, 0.45] | 0.257 | 0.289 | 0.215 | 0.464 | 0.224 | 0.996 | 3.8 |
+| §6 single-span model | 0.528 [0.46, 0.59] | 0.454 | 0.476 | 0.673 | 0.278 | 0.100 | 0.000 | 5.0 |
+| v1 top-1 memory (v1 LoRA) | 0.050 | 0 | 0.507 | 0 | 0.021 | 0.082 | 0.000 | 218 |
+| v1 top-3 memories (v1 LoRA) | 0.035 | 0 | 0.774 [0.72, 0.83] | 0 | 0.022 | 0.089 | 0.000 | 446 |
+| Pack the whole document | 0.010 | 0 | 1.000 | 0 | 0.012 | 0.024 | 0.000 | 1,500 |
+
+Per seed, the slots model's token F1 is 0.648 on seed 42 and 0.640 on seed 7,
+and its null-correct rate is 0.888 and 0.864. Re-running both models gave
+identical predicted buffers (`preds_sha256` `33e736737be9…` for slots).
+
+**Reading the numbers:**
+
+- **The fixed buffer of slots works, and adding spans costs nothing on single
+  answers.**
+  - On the 107 single-answer documents, its exact match (0.692) equals the §6
+    model's (0.673): the paired difference is +0.02 [−0.07, 0.12].
+  - Over all positive documents it beats the §6 model by +0.116 token F1
+    [0.055, 0.177] and +0.144 gold spans contained [0.077, 0.211].
+  - The gain comes from multi-answer (0.595 against 0.278) and absence
+    documents (0.413 against 0.100).
+- **"No answer" is learnable.** On documents with nothing relevant, the slots
+  model returns an empty buffer 87.6% of the time, leaking 0.8 tokens on
+  average. Every other predictor always returns something. Of its 31 false
+  positives, 13 are absence cases where it picked a near-miss person or
+  company. The null filter is a heuristic, so some of those documents may
+  really hold a related fact.
+- **The pointer head lost.** It returned an empty buffer on 43.5% of positive
+  documents: the fixed 0 threshold on a rare-positive BCE is too conservative.
+  It was also less exact when it fired. A tuned threshold, or a focal loss,
+  might close part of the gap. Its null rate (0.996) is the other side of the
+  same calibration.
+- **The weak spot is counting.**
+  - On 70 documents with two or more gold spans, the slots head returned
+    fewer spans than gold 57 times, the same number 13 times, and more never.
+  - Its share of documents with all gold contained is 0.196 on multi-answer
+    documents.
+  - Ordered slots stop at the first null. Hungarian (set) matching, or
+    decoding each slot independently, are the next things to try.
+- **Against v1.** v1's top 3 memories contain 77% of gold spans at about 446
+  tokens, which is 62 times the slots buffer. v1's top 1 contains 51% at
+  218 tokens. The span head trades some recall for a packet of about 7
+  tokens. With B = 2,048, that leaves room to return spans and whole
+  memories together.
+
+**Wider gold (open question 2): the "as of" date and the clause.** The same
+slots model was trained at two more gold widths, on the same documents:
+
+- `anchored`: each needle plus its memory's `[timestamp]` as a separate span,
+  with K = 16;
+- `clause`: the sentence of the memory holding the needle, with spans of up to
+  96 tokens.
+
+Every width is scored on whether the packet still holds the needle:
+
+| Gold width | Needle contained | All needles contained | Null correct | Tokens | Own-level token F1 |
+| --- | --- | --- | --- | --- | --- |
+| needle | 0.620 [0.56, 0.68] | 0.497 | 0.876 [0.83, 0.92] | 7.2 | 0.644 |
+| anchored (needle + timestamp) | 0.496 [0.43, 0.56] | 0.384 | 0.976 [0.96, 0.99] | 26.3 | 0.491 |
+| clause | 0.618 [0.55, 0.68] | 0.503 | 0.972 [0.95, 0.99] | 37.2 | 0.641 |
+
+- **The as-of anchor as a span hurts.** Needle containment falls by 0.124
+  [0.068, 0.182].
+  - An ISO timestamp costs 20 tokens.
+  - It sits at the start of a memory, before the content that makes the memory
+    relevant, which is the causal limit (§5.5) in its purest form.
+  - Doubling the spans also doubles the under-counting: the model predicted
+    400 spans against 693 gold. It got 40% of timestamps exact and 32% of
+    needles.
+- **Why the date mattered in the first place.** Of the §6 model's 13 misses
+  that landed in another evidence memory, 10 picked an older, stale value and
+  3 a newer one. Almost all of them were v13 supersession programs.
+  `point-in-time-contact` stays at 0.38 needle containment at every width.
+  Emitting the date as a span does not fix temporal resolution. Better
+  options:
+  - render a compact date into the memory text;
+  - add the superseded values with their dates as relevant spans (a "history"
+    width built from distractor strings inside evidence pairs), so the reader
+    gets the timeline.
+- **The clause width is the better widening.**
+  - It keeps needle containment the same (paired −0.002 [−0.069, 0.067]).
+  - It hands the reader the whole statement at about 37 tokens (1.8% of B).
+  - It cuts false "relevant" outputs on null documents from 12.4% to 2.8%.
+  - Families move both ways: `world-story-next-action` goes from 0.48 to 0.87
+    needle containment and `world-story-x-owner-email` from 0.86 to 0.50.
+  - Some clause spans run across a memory boundary into the next memory.
+
+**Caveats, beyond §6's:**
+- Gold strings are string-matched. For example, a channel answer `message`
+  also matches "prompted by a message from …".
+- The null documents are built by filtering, so "nothing relevant" is
+  approximate.
+- Answers that are computed (60 held-out cases) have no extractable span.
+- User-profile relevance ("who the user is") has no generator label yet;
+  grounding tokens cover only part of it.
+
+**Next on the Mac mini:**
+1. set matching for slots;
+2. a "history" gold width with compact dates;
+3. clause spans clipped at memory boundaries;
+4. a calibrated pointer threshold chosen on a train split.
