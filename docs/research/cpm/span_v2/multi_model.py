@@ -15,6 +15,10 @@ Two ways to fill the buffer from one forward pass (same template as
   unused slots point at null. Decoding is sequential: slot k takes the best
   span that starts after slot k-1's end, or null, and the first null ends the
   buffer.
+  With `matching="set"`, gold spans go to the slots that already score them
+  best (an exact minimum-cost assignment, DETR-style), and decoding is per
+  slot: every non-null slot proposes its best span, and the highest-scoring
+  non-overlapping proposals fill the buffer in document order.
 - `pointer`: `Linear(hidden, 1 + L)`. At every document token j, column 0 is an
   "a relevant span ends here" logit and columns 1..L point back to the span's
   start (offset 0..L-1). A causal model has read the whole span at its end
@@ -34,6 +38,7 @@ import span_model as sm
 
 K_SLOTS = 12
 HEADS = ("slots", "pointer")
+MATCHINGS = ("ordered", "set")
 NULL = (-1, -1)
 END_BIAS_INIT = -7.0  # about 1 / 1,100: the end-token prior of a document
 
@@ -101,7 +106,51 @@ def _slot_positions(e: EncodedMulti):
     return [*range(first, last + 1), e.null_pos]
 
 
-def loss(kind: str, logits, e: EncodedMulti, k: int, max_span: int):
+def match_slots(cost, null_cost) -> list[int]:
+    """Exact min-cost assignment of every gold span to a distinct slot.
+
+    cost[s][g] is slot s's loss for gold g, null_cost[s] its loss for null.
+    Returns, per slot, the gold index or -1. A DP over (slot, set of golds
+    used); ties go to the lower slot and gold index, so it is deterministic.
+    """
+    k, n_gold = len(cost), len(cost[0]) if cost else 0
+    full = (1 << n_gold) - 1
+    inf = float("inf")
+    dp = [[inf] * (full + 1) for _ in range(k + 1)]
+    choice = [[-1] * (full + 1) for _ in range(k + 1)]
+    dp[0][0] = 0.0
+    for s in range(k):
+        for mask in range(full + 1):
+            base = dp[s][mask]
+            if base == inf:
+                continue
+            c = base + null_cost[s]
+            if c < dp[s + 1][mask]:
+                dp[s + 1][mask], choice[s + 1][mask] = c, -1
+            for g in range(n_gold):
+                if mask >> g & 1:
+                    continue
+                nm = mask | 1 << g
+                c = base + cost[s][g]
+                if c < dp[s + 1][nm]:
+                    dp[s + 1][nm], choice[s + 1][nm] = c, g
+    out, mask = [-1] * k, full
+    for s in range(k, 0, -1):
+        g = choice[s][mask]
+        out[s - 1] = g
+        if g >= 0:
+            mask ^= 1 << g
+    return out
+
+
+def loss(
+    kind: str,
+    logits,
+    e: EncodedMulti,
+    k: int,
+    max_span: int,
+    matching: str = "ordered",
+):
     import torch
 
     ce = torch.nn.functional.cross_entropy
@@ -110,8 +159,21 @@ def loss(kind: str, logits, e: EncodedMulti, k: int, max_span: int):
     if kind == "slots":
         pos = torch.tensor(_slot_positions(e), device=logits.device)
         sub = logits[pos]  # [n + 1, 2k]; row n is null
-        tgt_s = [a - first for a, _ in e.gold] + [n] * (k - len(e.gold))
-        tgt_e = [b - first for _, b in e.gold] + [n] * (k - len(e.gold))
+        if matching == "set" and e.gold:
+            with torch.no_grad():
+                ls = torch.log_softmax(sub[:, 0::2].T.float(), -1).cpu()
+                le = torch.log_softmax(sub[:, 1::2].T.float(), -1).cpu()
+            cost = [
+                [-float(ls[s, a - first] + le[s, b - first]) for a, b in e.gold]
+                for s in range(k)
+            ]
+            null_cost = [-float(ls[s, n] + le[s, n]) for s in range(k)]
+            assign = match_slots(cost, null_cost)
+            tgt_s = [e.gold[g][0] - first if g >= 0 else n for g in assign]
+            tgt_e = [e.gold[g][1] - first if g >= 0 else n for g in assign]
+        else:
+            tgt_s = [a - first for a, _ in e.gold] + [n] * (k - len(e.gold))
+            tgt_e = [b - first for _, b in e.gold] + [n] * (k - len(e.gold))
         ts = torch.tensor(tgt_s, device=logits.device)
         te = torch.tensor(tgt_e, device=logits.device)
         return 0.5 * (ce(sub[:, 0::2].T, ts) + ce(sub[:, 1::2].T, te))
@@ -136,8 +198,21 @@ def loss(kind: str, logits, e: EncodedMulti, k: int, max_span: int):
     return bce + ptr_ce
 
 
-def _best_span(s, t, lo: int, max_span: int):
-    """Best (i, j, score) with lo <= i <= j < i + max_span; float64 tensors."""
+def _same_segment(seg, max_span: int):
+    """ok[i, k]: tokens i and i + k sit in the same memory (seg >= 0)."""
+    import torch
+
+    n = seg.shape[0]
+    pad = torch.full((max_span,), -2, dtype=seg.dtype)
+    ext = torch.cat([seg, pad])
+    cols = [(ext[k : k + n] == seg) & (seg >= 0) for k in range(max_span)]
+    return torch.stack(cols, 1)
+
+
+def _best_span(s, t, lo: int, max_span: int, ok=None):
+    """Best (i, j, score) with lo <= i <= j < i + max_span; float64 tensors.
+
+    `ok` ([n, max_span] bool) further restricts the candidates."""
     import torch
 
     n = s.shape[0]
@@ -147,50 +222,110 @@ def _best_span(s, t, lo: int, max_span: int):
     cols = [s + (torch.cat([t[k:], neg[:k]]) if k else t) for k in range(max_span)]
     grid = torch.stack(cols, 1)
     grid[:lo] = float("-inf")
+    if ok is not None:
+        grid[~ok] = float("-inf")
+    if not bool(torch.isfinite(grid).any()):
+        return None
     flat = int(torch.argmax(grid.reshape(-1)))
     i, k = divmod(flat, max_span)
     return i, i + k, float(grid[i, k])
 
 
-def decode(kind: str, logits, e: EncodedMulti, k: int, max_span: int):
-    """Fixed buffer of k (start, end) tuples, padded with NULL."""
+def _fill(props, k: int, first: int):
+    """Top-k non-overlapping (score desc, then position) proposals, in order."""
+    taken: list[tuple[int, int]] = []
+    for _, i, j in sorted(props):
+        if len(taken) == k:
+            break
+        if any(i <= b and a <= j for a, b in taken):
+            continue
+        taken.append((i, j))
+    return [(first + i, first + j) for i, j in sorted(taken)]
+
+
+def decode(
+    kind: str,
+    logits,
+    e: EncodedMulti,
+    k: int,
+    max_span: int,
+    *,
+    matching: str = "ordered",
+    stop_at_null: bool = True,
+    null_margin: float = 0.0,
+    end_threshold: float = 0.0,
+    seg=None,
+):
+    """Fixed buffer of k (start, end) tuples, padded with NULL.
+
+    - slots/ordered: slot s takes the best span after slot s-1's end unless
+      null + null_margin scores at least as high; the first null ends the
+      buffer (or is skipped with stop_at_null=False).
+    - slots/set: every slot whose best span beats null + null_margin proposes
+      it; proposals fill the buffer by score without overlaps.
+    - pointer: tokens with end logit > end_threshold propose a span.
+    - seg (per document token, memory index or -1 between memories) keeps every
+      span inside one memory.
+    """
     import torch
 
     first, last = e.doc_tokens
     n = last - first + 1
+    ok = None
+    if seg is not None:
+        seg = torch.as_tensor(seg, dtype=torch.long)
+        ok = _same_segment(seg, max_span)
     spans: list[tuple[int, int]] = []
     if kind == "slots":
         pos = torch.tensor(_slot_positions(e), device=logits.device)
         sub = logits[pos].detach().cpu().to(torch.float64)
-        lo = 0
+        lo, props = 0, []
         for slot in range(k):
             s, t = sub[:n, 2 * slot], sub[:n, 2 * slot + 1]
-            null = float(sub[n, 2 * slot] + sub[n, 2 * slot + 1])
-            best = _best_span(s, t, lo, max_span)
+            null = float(sub[n, 2 * slot] + sub[n, 2 * slot + 1]) + null_margin
+            best = _best_span(s, t, lo if matching == "ordered" else 0, max_span, ok)
             if best is None or best[2] <= null:
-                break
-            i, j, _ = best
+                if matching == "ordered" and stop_at_null:
+                    break
+                continue
+            i, j, score = best
+            if matching == "set":
+                props.append((-score, i, j))
+                continue
             spans.append((first + i, first + j))
             lo = j + 1
+        if matching == "set":
+            spans = _fill(props, k, first)
     else:
         doc = logits[first : last + 1].detach().cpu().to(torch.float64)
         props = []
         for j in range(n):
-            if doc[j, 0] <= 0:
+            if doc[j, 0] <= end_threshold:
                 continue
             valid = min(max_span, j + 1)
-            o = int(torch.argmax(doc[j, 1 : 1 + valid]))
-            props.append((-float(doc[j, 0]), j, j - o))
-        props.sort()
-        taken: list[tuple[int, int]] = []
-        for _, j, i in props:
-            if len(taken) == k:
-                break
-            if any(i <= b and a <= j for a, b in taken):
-                continue
-            taken.append((i, j))
-        spans = [(first + i, first + j) for i, j in sorted(taken)]
+            ptr = doc[j, 1 : 1 + valid].clone()
+            if ok is not None:
+                for o in range(valid):  # start j - o must share j's memory
+                    if not ok[j - o, o]:
+                        ptr[o] = float("-inf")
+                if not bool(torch.isfinite(ptr).any()):
+                    continue
+            o = int(torch.argmax(ptr))
+            props.append((-float(doc[j, 0]), j - o, j))
+        spans = _fill(props, k, first)
     return spans + [NULL] * (k - len(spans))
+
+
+def segments(e: EncodedMulti, pairs: Sequence[dict]) -> list[int]:
+    """Memory index of every document token (-1 for separator tokens)."""
+    first, last = e.doc_tokens
+    seg = [-1] * (last - first + 1)
+    for idx, p in enumerate(pairs):
+        for i in range(first, last + 1):
+            a, b = e.offsets[i]
+            if a >= p["start"] and b <= p["end"]:
+                seg[i - first] = idx
+    return seg
 
 
 def live(buf: Sequence[Sequence[int]]) -> list[tuple[int, int]]:

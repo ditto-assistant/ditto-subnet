@@ -16,13 +16,18 @@ or chunk markers) with a SET of gold spans, which can be empty. Three kinds:
   that holds an answer, distractor, forbidden or grounding string, or a rare
   query term (document frequency under 2% of the seed's pairs). Gold is empty.
 
-Gold comes at three widths (`gold.<level>`, character offsets into `doc`):
+Gold comes at four widths (`gold.<level>`, character offsets into `doc`):
 
 - `needle`: the strings above;
 - `anchored`: each needle plus the `[timestamp]` of the memory that holds it,
   as a separate span (the "as of" date);
 - `clause`: the sentence (break at `.!?` + space, or a newline) of the memory
-  that holds each needle, merged when two needles share one.
+  that holds each needle, merged when two needles share one;
+- `history`: `clause`, plus the sentence of every distractor or forbidden
+  string (an older, superseded or other value) inside an evidence pair, so the
+  packet carries the timeline the reader has to resolve.
+
+The first three widths are byte-identical to DATA_VERSION 2.
 
 Documents keep every gold-bearing evidence pair, then the case's other evidence
 pairs, up to 4 hard distractors and random candidates, up to DOC_TOKEN_BUDGET.
@@ -68,11 +73,12 @@ from span_data import (  # noqa: E402
     case_rng,
 )
 
-DATA_VERSION = 2
+DATA_VERSION = 3
 MAX_GOLD = 12  # needle spans per document; the fixed output buffer is K = 12
 MAX_CLAUSE_TOKENS = 96
 RARE_DF = 0.02
-LEVELS = ("needle", "anchored", "clause")
+LEVELS = ("needle", "anchored", "clause", "history")
+HISTORY_TYPES = ("distractor", "forbidden")
 WORD = re.compile(r"[a-z0-9][a-z0-9@._'-]*[a-z0-9]")
 
 
@@ -184,6 +190,10 @@ def build_examples(
             if pid not in gold_spans
         ]
         kind = "absence" if abstain else "answer"
+        hist_spans = {
+            pid: [s for s in case["spans"].get(pid, []) if s["type"] in HISTORY_TYPES]
+            for pid in evidence
+        }
 
         # Null pool: nothing relevant to this case at all.
         q_rare = {
@@ -265,6 +275,13 @@ def build_examples(
                                 stats["clause:fallback_to_needle"] += 1
                                 ca, cb = a, b
                             gold["clause"].append((cursor + ca, cursor + cb))
+                            gold["history"].append((cursor + ca, cursor + cb))
+                    if dkind != "null" and hist_spans.get(pid):
+                        for g in pair_gold(pairs[pid], hist_spans[pid]):
+                            ca, cb = g["clause"]
+                            if tokens(text[pid][ca:cb]) > MAX_CLAUSE_TOKENS:
+                                ca, cb = g["needle"]
+                            gold["history"].append((cursor + ca, cursor + cb))
                     cursor += len(text[pid])
                 doc = "".join(parts)
                 rec = {

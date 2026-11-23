@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Train a CPM v2 multi-span PoC model: a LoRA on the base plus a K-span head.
 
-`--head slots|pointer` picks how the fixed buffer is filled (multi_model.py)
-and `--level needle|anchored|clause` which gold width is learned. Documents
+`--head slots|pointer` picks how the fixed buffer is filled (multi_model.py),
+`--matching ordered|set` how gold spans are assigned to slots, and
+`--level needle|anchored|clause|history` which gold width is learned. Documents
 with more gold spans than `--k` are skipped and counted.
 
 Gradient checkpointing is always on (see train_span.py for the memory numbers).
@@ -48,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--head", choices=mm.HEADS, required=True)
     ap.add_argument("--level", default="needle")
+    ap.add_argument("--matching", choices=mm.MATCHINGS, default="ordered")
     ap.add_argument("--k", type=int, default=mm.K_SLOTS)
     ap.add_argument("--max-span", type=int, default=sm.MAX_SPAN_TOKENS)
     ap.add_argument("--base", default="qwen3.5-0.8b")
@@ -162,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             e = encoded[idx]
             logits = mm.head_logits(decoder, head, e.input_ids, args.device)
-            loss = mm.loss(args.head, logits, e, args.k, args.max_span)
+            loss = mm.loss(args.head, logits, e, args.k, args.max_span, args.matching)
             start = ((i - 1) // args.accum) * args.accum
             size = min(args.accum, per_epoch - start)
             (loss / size).backward()
@@ -201,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
                 "k": args.k,
                 "max_span": args.max_span,
                 "level": args.level,
+                "matching": args.matching,
             },
             indent=2,
         )

@@ -73,6 +73,11 @@ assistant:
    buffer.
 3. The result is in document order and has no overlaps.
 
+In the set-matched variant (§8), every slot whose best span beats null
+proposes it, and proposals fill the buffer by score, without overlaps. In both
+variants a span may not cross a memory boundary. The null margin is a fixed
+decoding constant, published with the season.
+
 **Per case.** Treat the predicted and gold spans as sets of token indices `P`
 and `G`. For a buffer, `P` and `G` are the unions over spans. Add span-level
 exact F1, the share of gold spans contained, and, on documents with empty
@@ -412,8 +417,131 @@ Every width is scored on whether the packet still holds the needle:
 - User-profile relevance ("who the user is") has no generator label yet;
   grounding tokens cover only part of it.
 
-**Next on the Mac mini:**
+**Next on the Mac mini** (done in §8):
 1. set matching for slots;
 2. a "history" gold width with compact dates;
 3. clause spans clipped at memory boundaries;
 4. a calibrated pointer threshold chosen on a train split.
+
+## 8. Set matching, the history width and calibration (Mac mini PoC, part 3)
+
+The same documents, model recipe and caveats as §7. The data file gains a
+fourth gold width (`DATA_VERSION = 3`, sha256 `f279e697…` held out,
+`62e904e2…` train). Its first three widths, and every document, are
+byte-identical to §7's.
+
+**What changed:**
+
+- **Set matching** (`train_multi.py --matching set`). Gold spans go to the
+  slots that already score them best. The assignment is an exact minimum-cost
+  one: a DP over subsets of gold, which matched brute force on 300 random
+  cases. Each slot decodes on its own, and the highest-scoring proposals that
+  don't overlap fill the buffer in document order.
+- **`history` width.** The `clause` gold, plus the sentence of every
+  distractor or forbidden string inside an evidence memory: the older,
+  superseded or other values. The packet carries the timeline, for example
+  every dated milestone for "counting from the earliest", or the old and new
+  email for "as of June 22". It adds spans to 48 of the 177 positive held-out
+  documents.
+- **Dates from the packer, not the model.** `dated_tokens` is the packet cost
+  when the packer prefixes each quoted memory with its compact date
+  (`[YYYY-MM-DD] `, from the memory's metadata). The reader always gets the
+  as-of date, and the model never has to point at a timestamp (§7 showed that
+  hurts).
+- **Decoding variants, no retraining.** These re-decode saved logits on the
+  CPU (`eval_multi.py redecode`):
+  - `--clip-pairs`: no span may cross a memory boundary;
+  - `--no-stop`: ordered slots skip an empty slot instead of stopping;
+  - a null margin for slots and a fire threshold for the pointer. Each is
+    picked on **seed 108**, a calibration seed in neither the training nor the
+    held-out split (214 documents), by `calibrate.py`. It maximises
+    `0.5 · positive token F1 + 0.5 · null correct`.
+
+**Held-out results** (n = 177 positive and 250 null documents, seeds 42 and 7):
+
+| Model and decoding | Token F1 | Needle contained | All needles contained | Multi F1 (n 46) | Absence F1 (n 24) | Null correct | Tokens | Tokens with packer dates |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| §7 slots, needle | 0.644 | 0.620 | 0.497 | 0.595 | 0.413 | 0.876 | 7.2 | 23.3 |
+| set matching, needle | 0.672 [0.61, 0.73] | 0.642 | 0.475 | 0.685 | 0.603 | 0.848 | 7.2 | 23.9 |
+| set matching + margin −2 | 0.686 | 0.669 | 0.531 | 0.713 | 0.682 | 0.800 | 8.0 | 26.1 |
+| pointer + threshold −3 | 0.652 | 0.615 | 0.497 | 0.756 | 0.536 | 0.912 | 10.5 | 32.4 |
+| §7 slots, clause | 0.641 | 0.618 | 0.503 | 0.660 | 0.461 | 0.972 | 37.2 | 51.4 |
+| clause + margin −4 + clip | 0.676 | 0.682 | 0.565 | 0.674 | 0.681 | 0.944 | 43.4 | 59.8 |
+| **history** | 0.692 | 0.711 [0.65, 0.77] | 0.582 | 0.702 | 0.781 | **0.988** | 52.8 | 71.3 |
+| **history + margin −4 + clip** | **0.721** [0.67, 0.76] | **0.783** [0.73, 0.83] | **0.655** | **0.733** | **0.797** | 0.976 [0.96, 0.99] | 64.5 | 87.1 (4.3% of B) |
+| v1 top 3 memories (§7) | 0.035 | 0.774 | 0.701 | 0.022 | 0.089 | 0.000 | 446 | — |
+
+- Token F1 is against each model's own gold width. Needle containment is
+  comparable across rows.
+- "Multi" and "Absence" are F1 against the model's own width.
+- The ordered `--no-stop` variant changed nothing (0.645 F1). Clipping at
+  memory boundaries never hurt and saved 1–5 tokens. Neither is listed.
+- The two new models were evaluated once. Every re-decode of saved logits is
+  deterministic, and the three §7 models reproduced their §7 predictions
+  byte for byte through the new eval path.
+
+**Reading the numbers:**
+
+- **The history width is the win.** It is trained on the timeline, not just
+  the answer.
+  - It finds the answer more often: needle containment is +0.091 [0.021,
+    0.162] against the needle-trained model and +0.092 [0.042, 0.143] against
+    the clause model.
+  - Its false-positive rate on null documents drops to 1.2%.
+  - The as-of failures it was aimed at move the most (needle contained,
+    needle model → history):
+
+    | Family | n | Needle model | History |
+    | --- | --- | --- | --- |
+    | `point-in-time-contact` | 8 | 0.38 | 0.88 |
+    | `world-story-owner-current` | 14 | 0.49 | 0.85 |
+    | `absence-false-premise` | 6 | 0.18 | 0.73 |
+
+  - With the seed-108 margin and memory clipping, needle containment is 0.783.
+    That matches v1's top 3 whole memories (0.774) at a seventh of the tokens
+    (64.5 against 446, or 87 with dates), and it still says "nothing relevant"
+    correctly 97.6% of the time.
+  - Against the §7 needle model, that is +0.163 [0.100, 0.228] needle
+    containment and +0.100 [0.064, 0.144] null correct.
+  - Per seed, token F1 is 0.758 on seed 42 and 0.683 on seed 7, and null
+    correct is 0.968 and 0.984.
+- **Set matching helps multi-answer documents but does not fix counting.**
+  - Multi-answer token F1 rises by +0.124 [0.063, 0.186] and absence F1 from
+    0.413 to 0.603.
+  - Overall, token F1 rises by +0.028 [−0.031, 0.084] and null correct falls
+    by −0.028 [−0.060, 0.004].
+  - It still returns too few spans on 51 of 70 documents with two or more gold
+    spans (ordered slots: 57). All needles contained does not move
+    (−0.014 [−0.100, 0.071]).
+  - Counting is the open problem. A learned count, or a per-slot calibrated
+    margin, comes next.
+- **The pointer head was a calibration problem.**
+  - With the fire threshold picked on seed 108 (−3.0), its token F1 goes from
+    0.389 to 0.652, level with the slots (+0.007 [−0.052, 0.069]).
+  - It is best on multi-answer documents (0.756).
+  - Its span-level exact F1 (0.419 against 0.612) shows looser boundaries.
+- **Calibration trades null precision for recall, as it should.** The margin
+  the balanced objective picks is −2 to −4 for every slots model: it fires
+  more readily.
+- **The v13 programs stay the weak spot** at 0.49–0.65 needle contained, even
+  with history. They need the struck or "decision so far" statements, which
+  carry no distractor string, so the history gold misses them. A generator
+  `supersedes` label (§5.2) would cover them.
+
+**What this means for the spec.** The strongest form so far is:
+
+- a K = 12 slot head trained on the history width;
+- the null margin calibrated on a calibration seed;
+- spans clipped to one memory each;
+- a compact date per memory added by the packer.
+
+Two things would turn into contract items: the margin (a fixed decoding
+constant, published with the season), and the history width (gold labels the
+generator would export natively, §4.1). Nothing here changes live scoring.
+
+**Next on the Mac mini:**
+1. history width with set matching;
+2. a span count head, or a per-slot margin, for multi-answer documents;
+3. a `supersedes` label for the v13 programs;
+4. a reader test: answer accuracy of a small local model given each packet,
+   rather than span overlap alone.
