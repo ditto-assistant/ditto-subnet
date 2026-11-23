@@ -16,6 +16,7 @@ under `docs/` (release-ignored) like `export_cpm.py`, uses only public
 | `train_multi.py` | LoRA plus a K-span head at one gold width, resumable |
 | `eval_multi.py` | `multi` (optionally saving logits), `redecode` (decoding variants from saved logits), `single`, `chunk --top N` and `packall`; set metrics and packer-date cost |
 | `calibrate.py` | Picks a null margin or pointer threshold on a calibration seed's saved logits |
+| `reader_eval.py` | Reader test: a pinned small model (Qwen3.5-2B) answers from each packet; answer and decline accuracy |
 
 ```bash
 R="uv run --project services/cpm-scorer python docs/research/cpm/span_v2"
@@ -29,7 +30,7 @@ $R/eval_span.py zeroshot --data /tmp/span/heldout.jsonl --device mps --out /tmp/
 $R/eval_span.py packall --data /tmp/span/heldout.jsonl --out /tmp/span/eval/packall.json
 ```
 
-Multi-span (span-v2.md §7 and §8):
+Multi-span (span-v2.md §7 to §9):
 
 ```bash
 $R/multi_data.py --seeds 101,102,103,104,105,106 --variants 2 --null-rate 0.35 --out /tmp/span2/train.jsonl
@@ -45,6 +46,8 @@ $R/eval_multi.py multi --model /tmp/span2/slots-history/final --data /tmp/span2/
 $R/calibrate.py --model /tmp/span2/slots-history/final --data /tmp/span2/calib.jsonl --logits /tmp/span2/calib-history.safetensors --param null_margin --clip-pairs
 $R/eval_multi.py multi --model /tmp/span2/slots-history/final --data /tmp/span2/heldout.jsonl --device mps --dump-logits /tmp/span2/history.safetensors --out /tmp/span2/eval/history.json
 $R/eval_multi.py redecode --model /tmp/span2/slots-history/final --logits /tmp/span2/history.safetensors --data /tmp/span2/heldout.jsonl --null-margin -4 --clip-pairs --out /tmp/span2/eval/history-margin-clip.json
+$R/train_multi.py --head slots --matching set --count --level history --k 12 --max-span 96 --data /tmp/span2/train.jsonl --device mps --out /tmp/span2/history-set-count
+$R/reader_eval.py --data /tmp/span2/heldout.jsonl --device mps --out-dir /tmp/span2/reader --packet closed --packet gold:history --packet count=/tmp/span2/eval/history-set-count.preds.jsonl --packet packall
 $R/eval_multi.py chunk --model base --top 3 --data /tmp/span2/heldout.jsonl --device mps --out /tmp/span2/eval/chunk-top3.json
 ```
 

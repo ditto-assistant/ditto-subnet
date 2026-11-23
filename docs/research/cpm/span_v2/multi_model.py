@@ -19,6 +19,10 @@ Two ways to fill the buffer from one forward pass (same template as
   best (an exact minimum-cost assignment, DETR-style), and decoding is per
   slot: every non-null slot proposes its best span, and the highest-scoring
   non-overlapping proposals fill the buffer in document order.
+  With `count=True` the head has K + 1 more columns: at the null position they
+  predict how many spans the document holds (0..K). Decoding then keeps the
+  top n̂ non-overlapping slot proposals, ranked by how far each beats its
+  slot's null score, and n̂ = 0 is "no answer".
 - `pointer`: `Linear(hidden, 1 + L)`. At every document token j, column 0 is an
   "a relevant span ends here" logit and columns 1..L point back to the span's
   start (offset 0..L-1). A causal model has read the whole span at its end
@@ -79,10 +83,12 @@ def encode(tok, ex: dict, level: str, max_span: int) -> EncodedMulti:
     return EncodedMulti(ids, (first, last), rel, tuple((a, b) for a, b in spans))
 
 
-def build_head(kind: str, hidden: int, k: int, max_span: int, seed: int = 0):
+def build_head(
+    kind: str, hidden: int, k: int, max_span: int, seed: int = 0, count: bool = False
+):
     import torch
 
-    out = 2 * k if kind == "slots" else 1 + max_span
+    out = 2 * k + (k + 1 if count else 0) if kind == "slots" else 1 + max_span
     g = torch.Generator().manual_seed(seed)
     head = torch.nn.Linear(hidden, out)
     with torch.no_grad():
@@ -158,7 +164,11 @@ def loss(
     n = last - first + 1
     if kind == "slots":
         pos = torch.tensor(_slot_positions(e), device=logits.device)
-        sub = logits[pos]  # [n + 1, 2k]; row n is null
+        sub = logits[pos][:, : 2 * k]  # [n + 1, 2k]; row n is null
+        count_loss = 0.0
+        if logits.shape[1] > 2 * k:  # count columns at the null position
+            target = torch.tensor([min(len(e.gold), k)], device=logits.device)
+            count_loss = ce(logits[e.null_pos, 2 * k :][None], target)
         if matching == "set" and e.gold:
             with torch.no_grad():
                 ls = torch.log_softmax(sub[:, 0::2].T.float(), -1).cpu()
@@ -176,7 +186,7 @@ def loss(
             tgt_e = [b - first for _, b in e.gold] + [n] * (k - len(e.gold))
         ts = torch.tensor(tgt_s, device=logits.device)
         te = torch.tensor(tgt_e, device=logits.device)
-        return 0.5 * (ce(sub[:, 0::2].T, ts) + ce(sub[:, 1::2].T, te))
+        return 0.5 * (ce(sub[:, 0::2].T, ts) + ce(sub[:, 1::2].T, te)) + count_loss
     doc = logits[first : last + 1]
     end_t = torch.zeros(n, device=logits.device)
     for _, b in e.gold:
@@ -255,6 +265,7 @@ def decode(
     null_margin: float = 0.0,
     end_threshold: float = 0.0,
     seg=None,
+    use_count: bool = False,
 ):
     """Fixed buffer of k (start, end) tuples, padded with NULL.
 
@@ -266,6 +277,8 @@ def decode(
     - pointer: tokens with end logit > end_threshold propose a span.
     - seg (per document token, memory index or -1 between memories) keeps every
       span inside one memory.
+    - use_count (slots with count columns): keep the top n̂ proposals by
+      margin over null, n̂ = argmax of the count logits; null_margin unused.
     """
     import torch
 
@@ -278,7 +291,19 @@ def decode(
     spans: list[tuple[int, int]] = []
     if kind == "slots":
         pos = torch.tensor(_slot_positions(e), device=logits.device)
-        sub = logits[pos].detach().cpu().to(torch.float64)
+        full = logits[pos].detach().cpu().to(torch.float64)
+        sub = full[:, : 2 * k]
+        if use_count:
+            n_hat = int(torch.argmax(full[n, 2 * k :]))
+            props = []
+            for slot in range(k):
+                s, t = sub[:n, 2 * slot], sub[:n, 2 * slot + 1]
+                null = float(sub[n, 2 * slot] + sub[n, 2 * slot + 1])
+                best = _best_span(s, t, 0, max_span, ok)
+                if best is not None:
+                    props.append((null - best[2], best[0], best[1]))
+            spans = _fill(props, n_hat, first)
+            return spans + [NULL] * (k - len(spans))
         lo, props = 0, []
         for slot in range(k):
             s, t = sub[:n, 2 * slot], sub[:n, 2 * slot + 1]

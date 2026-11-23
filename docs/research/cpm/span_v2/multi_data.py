@@ -16,7 +16,7 @@ or chunk markers) with a SET of gold spans, which can be empty. Three kinds:
   that holds an answer, distractor, forbidden or grounding string, or a rare
   query term (document frequency under 2% of the seed's pairs). Gold is empty.
 
-Gold comes at four widths (`gold.<level>`, character offsets into `doc`):
+Gold comes at five widths (`gold.<level>`, character offsets into `doc`):
 
 - `needle`: the strings above;
 - `anchored`: each needle plus the `[timestamp]` of the memory that holds it,
@@ -25,9 +25,15 @@ Gold comes at four widths (`gold.<level>`, character offsets into `doc`):
   that holds each needle, merged when two needles share one;
 - `history`: `clause`, plus the sentence of every distractor or forbidden
   string (an older, superseded or other value) inside an evidence pair, so the
-  packet carries the timeline the reader has to resolve.
+  packet carries the timeline the reader has to resolve;
+- `evidence`: `history`, plus, for every other evidence pair in the document,
+  its whole user statement when it is at most MAX_CLAUSE_TOKENS tokens. These
+  memories hold no labelled string but the generator marks them as needed:
+  who a person is to the user, where they work now, a glossary line, a
+  "that entry was struck" correction.
 
-The first three widths are byte-identical to DATA_VERSION 2.
+The first three widths are byte-identical to DATA_VERSION 2, and `history` to
+DATA_VERSION 3.
 
 Documents keep every gold-bearing evidence pair, then the case's other evidence
 pairs, up to 4 hard distractors and random candidates, up to DOC_TOKEN_BUDGET.
@@ -73,11 +79,11 @@ from span_data import (  # noqa: E402
     case_rng,
 )
 
-DATA_VERSION = 3
+DATA_VERSION = 4
 MAX_GOLD = 12  # needle spans per document; the fixed output buffer is K = 12
 MAX_CLAUSE_TOKENS = 96
 RARE_DF = 0.02
-LEVELS = ("needle", "anchored", "clause", "history")
+LEVELS = ("needle", "anchored", "clause", "history", "evidence")
 HISTORY_TYPES = ("distractor", "forbidden")
 WORD = re.compile(r"[a-z0-9][a-z0-9@._'-]*[a-z0-9]")
 
@@ -276,12 +282,22 @@ def build_examples(
                                 ca, cb = a, b
                             gold["clause"].append((cursor + ca, cursor + cb))
                             gold["history"].append((cursor + ca, cursor + cb))
+                            gold["evidence"].append((cursor + ca, cursor + cb))
                     if dkind != "null" and hist_spans.get(pid):
                         for g in pair_gold(pairs[pid], hist_spans[pid]):
                             ca, cb = g["clause"]
                             if tokens(text[pid][ca:cb]) > MAX_CLAUSE_TOKENS:
                                 ca, cb = g["needle"]
                             gold["history"].append((cursor + ca, cursor + cb))
+                            gold["evidence"].append((cursor + ca, cursor + cb))
+                    labelled = pid in gold_spans or hist_spans.get(pid)
+                    if dkind != "null" and pid in rel and not labelled:
+                        prompt = pairs[pid].get("prompt") or ""
+                        a = answer_offset(pairs[pid], {"field": "prompt", "start": 0})
+                        if prompt.strip() and tokens(prompt) <= MAX_CLAUSE_TOKENS:
+                            gold["evidence"].append(
+                                (cursor + a, cursor + a + len(prompt.rstrip()))
+                            )
                     cursor += len(text[pid])
                 doc = "".join(parts)
                 rec = {

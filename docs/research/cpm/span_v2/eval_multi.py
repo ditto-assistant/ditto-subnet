@@ -19,8 +19,9 @@ Modes:
 - `packall`: the whole document.
 
 Decoding variants (multi, redecode): `--matching`, `--no-stop`,
-`--null-margin`, `--end-threshold` and `--clip-pairs` (no span crosses a
-memory boundary); see `multi_model.decode`.
+`--null-margin`, `--end-threshold`, `--clip-pairs` (no span crosses a
+memory boundary) and `--no-count` (decode a count-head model by null scores);
+see `multi_model.decode`.
 
 `dated_tokens` is what the packet costs when the packer prefixes each memory
 it quotes with that memory's compact date (`[YYYY-MM-DD] `, from metadata), so
@@ -72,6 +73,7 @@ def decode_opts(args, meta: dict) -> dict:
         "stop_at_null": not args.no_stop,
         "null_margin": args.null_margin,
         "end_threshold": args.end_threshold,
+        "use_count": bool(meta.get("count")) and not args.no_count,
     }
 
 
@@ -186,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--null-margin", type=float, default=0.0)
     ap.add_argument("--end-threshold", type=float, default=0.0)
     ap.add_argument("--clip-pairs", action="store_true")
+    ap.add_argument("--no-count", action="store_true", help="ignore a count head")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
 
@@ -228,7 +231,13 @@ def main(argv: list[str] | None = None) -> int:
         state = load_file(str(mdir / sm.HEAD_FILE))
         hidden = net.config.hidden_size
         if args.mode == "multi":
-            head = mm.build_head(meta["head"], hidden, meta["k"], meta["max_span"])
+            head = mm.build_head(
+                meta["head"],
+                hidden,
+                meta["k"],
+                meta["max_span"],
+                count=bool(meta.get("count")),
+            )
         else:
             head = sm.SpanHead.build(hidden)
         head.load_state_dict(state)

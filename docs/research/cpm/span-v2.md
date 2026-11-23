@@ -49,7 +49,9 @@ assistant:
   `Linear(hidden, 2K)` (K = 12 "slots"). Each slot scores the document tokens
   plus a null position, the last input token, which has read everything. The
   head file is then `weight [2K, hidden]`, `bias [2K]`, and the manifest states
-  K.
+  K. The best form so far (§9) adds a count head: K + 1 more columns at the
+  null position that predict how many spans to keep, so "no answer" is a
+  count of 0 (`weight [3K + 1, hidden]`).
 - **Why a head, not generation.** A head makes every prediction a verbatim
   token range, needs one forward pass per document, and is deterministic
   under the v1 rules. Generating the quote can paraphrase, so it needs fuzzy
@@ -539,9 +541,145 @@ Two things would turn into contract items: the margin (a fixed decoding
 constant, published with the season), and the history width (gold labels the
 generator would export natively, §4.1). Nothing here changes live scoring.
 
-**Next on the Mac mini:**
+**Next on the Mac mini** (done in §9):
 1. history width with set matching;
 2. a span count head, or a per-slot margin, for multi-answer documents;
 3. a `supersedes` label for the v13 programs;
 4. a reader test: answer accuracy of a small local model given each packet,
    rather than span overlap alone.
+
+## 9. A count head, the evidence width and a reader test (Mac mini PoC, part 4)
+
+The same documents, recipe and caveats as §7 and §8.
+
+**Data.** `DATA_VERSION = 4` adds a fifth width (sha256 `ee887c22…` held out,
+`58897997…` train, `1cb75e5b…` calibration seed 108). Every document and the
+four earlier widths are byte-identical to version 3. The new width:
+
+- **`evidence`**: `history`, plus, for every other evidence memory in the
+  document, its whole user statement when it is at most 96 tokens.
+- These memories hold no labelled string, but the generator marks them as
+  needed:
+  - who a person is to the user ("Shanna Garner is my physiotherapist");
+  - where they work now;
+  - a glossary line;
+  - a "that entry was struck" correction.
+
+  That is the "who the user is, in relation to the question" relevance, and
+  the closest exporter-side stand-in for a `supersedes` label.
+- It adds spans to 89 of the 177 positive held-out documents.
+
+**Models.** Three LoRA plus slots runs (K = 12, spans up to 96 tokens, 1 epoch,
+set matching):
+
+1. history width;
+2. history width plus a **count head**. K + 1 more columns at the null
+   position predict how many spans the document holds (0..K). Decoding keeps
+   the top n̂ non-overlapping slot proposals by margin over null, and n̂ = 0 is
+   "no answer". There is no threshold to calibrate.
+3. evidence width.
+
+Margins were again picked on seed 108, and every span is clipped to one
+memory.
+
+**Span results** (n = 177 positive and 250 null documents, seeds 42 and 7).
+Needle containment is comparable across widths:
+
+| Model and decoding | Needle contained | All needles contained | Absence F1 | Null correct | Tokens (dated) |
+| --- | --- | --- | --- | --- | --- |
+| §8 ordered, history, default decoding | 0.711 | 0.582 | 0.781 | 0.988 | 53 (71) |
+| §8 ordered, history, margin −4 + clip | 0.783 | 0.655 | 0.797 | 0.976 | 65 (87) |
+| set, history, margin −2.5 + clip | 0.729 | 0.644 | 0.876 | 0.964 | 57 (79) |
+| **set + count head, history, clip (no calibration)** | **0.784** [0.73, 0.84] | **0.695** | 0.808 | 0.964 [0.94, 0.98] | 60 (80) |
+| **set, evidence, margin −4.5 + clip** | **0.832** [0.78, 0.88] | **0.763** | **0.906** | 0.916 [0.88, 0.95] | 110 (145) |
+
+- **The count head fixes most of the counting.**
+  - On the 99 documents with two or more history spans, it returns the right
+    number of spans 65 times. Ordered slots return the right number 36 times,
+    or 53 with the calibrated margin. Under-counts fall from 57 to 25.
+  - Against ordered slots at default decoding, all needles contained is +0.113
+    [0.045, 0.181] and needle containment +0.073 [0.008, 0.137], for −0.024
+    null correct.
+  - It matches the calibrated ordered model (+0.001 needle containment
+    [−0.061, 0.062]) without needing a calibration seed. That matters for a
+    contract: there is no published margin to tune against.
+  - Per seed, token F1 is 0.704 on seed 42 and 0.676 on seed 7.
+- **Set matching alone does not help at the history width.** It is −0.051
+  [−0.114, 0.012] needle containment against ordered slots.
+- **The evidence width finds the most.**
+  - It reaches 0.832 needle containment, 0.763 all needles contained and
+    0.906 absence F1 (per seed, token F1 0.845 and 0.835).
+  - It pays about twice the tokens, and null correct falls by −0.060 [−0.092,
+    −0.032] against the §8 best.
+
+**Reader test** (`reader_eval.py`). A small local reader, Qwen3.5-2B (bf16,
+greedy, thinking off, told to answer only from the excerpts or reply "I don't
+know"), answers each query from one packet. Packets are dated per memory by
+the packer.
+
+- **Answer** documents (n = 153) are correct when the reply contains the
+  generator's answer: every `answer_items` string, or else any expected or
+  accepted string.
+- **Absence** (n = 24) and **null** documents (n = 92, a deterministic
+  subsample of the 250) are correct when the reply declines. That uses a
+  keyword heuristic.
+
+| Packet | Answer correct | Absence declined | Null declined | Tokens |
+| --- | --- | --- | --- | --- |
+| No memory | 0.000 | 1.000 | 1.000 | 0 |
+| Oracle needle gold | 0.183 [0.12, 0.24] | 1.000 | 1.000 | 21 |
+| Oracle history gold | **0.627** [0.55, 0.70] | 0.792 | 1.000 | 77 |
+| Oracle evidence gold | 0.562 | 0.750 | 1.000 | 153 |
+| §7 slots, needle | 0.111 | 0.958 | 1.000 | 20 |
+| §8 ordered, history, margin + clip | 0.497 [0.42, 0.58] | 0.625 | 1.000 | 81 |
+| set, history, margin + clip | 0.471 | 0.833 | 0.989 | 70 |
+| **set + count head, history** | **0.503** [0.42, 0.58] | 0.750 | 0.978 | **73** |
+| set, evidence, margin + clip | 0.490 | 0.708 | 0.989 | 147 |
+| v1 top 3 memories (§7) | 0.523 [0.44, 0.60] | 0.833 | 0.957 | 512 |
+| Pack the whole document | 0.510 | 0.583 | 0.935 | 1,498 |
+
+- **Bare answers do not help a reader.** Given exactly the gold answer values,
+  the reader is right 18% of the time. 118 of its 125 misses are "I don't
+  know": a value with no context does not answer anything. The history gold
+  lifts the same reader to 63% (+0.444 [0.353, 0.529]). **Grading v2 on
+  needle overlap would reward packets the reader cannot use.**
+- **A ~73-token history packet reads as well as 512 or 1,500 tokens.** The
+  count-head packet is level with v1's top 3 memories (−0.020 [−0.092, 0.046])
+  and with the whole document (−0.007 [−0.092, 0.072]). It uses a seventh and
+  a twentieth of the tokens. On "nothing relevant" documents it declines 97.8%
+  of the time, against 95.7% and 93.5%.
+- **More context is not better for a 2B reader.** Oracle evidence (153
+  tokens) reads worse than oracle history (77 tokens), and the evidence model's
+  packet equals the history ones. A stronger reader may use the extra
+  relevance. This one does not.
+- **Absence questions are where focused packets cost.** Near-miss facts make
+  the reader guess a little more often than v1's top 3 do (0.750 against
+  0.833 declined, n = 24, so wide intervals). The whole document is worst
+  (0.583).
+- **Headroom.** The best predicted packet (0.503) is 0.124 below the oracle
+  history packet (0.627). The span model, not the width, is now the limit.
+- **v13 programs stay hard for every packet** (the oracle history reads
+  0.38 on `v13-open-program`). The reader has to compose a glossary with
+  events. That is a reader-capacity question as much as a span one.
+
+**What this means for the spec:**
+
+1. **Grade on the history width, not the needle.**
+   - Gold is the answer's sentence plus every superseded or other value's
+     sentence inside evidence, with exported `answer_span` and `history_span`
+     labels (§4.1).
+   - `span_f1` and needle containment against that gold track reader accuracy
+     here; needle-only overlap does not.
+2. **Use a count head.** "No answer" becomes n̂ = 0, and decoding needs no
+   season-published threshold.
+3. **The packer adds a compact date per memory,** from metadata.
+4. **Keep a reader check** (a pinned small reader, answer and decline
+   accuracy) as a screening or calibration signal beside span metrics. It
+   should not replace them: it adds generation and its own variance.
+
+**Next on the Mac mini:**
+1. evidence width with a count head;
+2. a second reader size (0.8B) to see how packet value scales with the reader;
+3. a pinned reader-accuracy number per packet in `eval_multi.py` output.
+
+A bf16 CUDA check still waits for a CUDA host.

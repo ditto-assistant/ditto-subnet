@@ -50,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--head", choices=mm.HEADS, required=True)
     ap.add_argument("--level", default="needle")
     ap.add_argument("--matching", choices=mm.MATCHINGS, default="ordered")
+    ap.add_argument("--count", action="store_true", help="slots: add a count head")
     ap.add_argument("--k", type=int, default=mm.K_SLOTS)
     ap.add_argument("--max-span", type=int, default=sm.MAX_SPAN_TOKENS)
     ap.add_argument("--base", default="qwen3.5-0.8b")
@@ -101,7 +102,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     inner = net.get_base_model()
     head = mm.build_head(
-        args.head, net.config.hidden_size, args.k, args.max_span, args.seed
+        args.head,
+        net.config.hidden_size,
+        args.k,
+        args.max_span,
+        args.seed,
+        count=args.count,
     )
     net.to(device=args.device, dtype=torch.float32)
     head.to(device=args.device)
@@ -204,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
                 "max_span": args.max_span,
                 "level": args.level,
                 "matching": args.matching,
+                "count": args.count,
             },
             indent=2,
         )
