@@ -557,23 +557,29 @@ func finishConfirmationInferenceRequest(ctx context.Context, q *postgres.Queries
 	providerMatches := !p.upstreamProvider.Valid ||
 		(grant.Lane != "judge" && len(p.upstreamProvider.String) >= 1 && len(p.upstreamProvider.String) <= 120) ||
 		p.upstreamProvider.String == grant.ReceiptProvider
-	costFits := grant.CostMicrousd+p.costMicrousd <= grant.CostBudgetMicrousd
 	// Overflow-safe form of prompt+completion <= max_chargeable (Python
 	// compares with arbitrary-precision ints).
 	withinCeiling := p.promptTokens >= 0 && p.completionTokens >= 0 &&
 		p.promptTokens <= request.MaxChargeableTokens-p.completionTokens
-	usageValid := withinCeiling && p.costMicrousd >= 0 && providerMatches && costFits
-	delivered := p.status == "completed" && usageValid
+	usageValid := withinCeiling && p.costMicrousd >= 0 && providerMatches
+	costFits := grant.CostMicrousd+p.costMicrousd <= grant.CostBudgetMicrousd
+	delivered := p.status == "completed" && usageValid && costFits
 
 	promptTokens := p.promptTokens
 	completionTokens := p.completionTokens
 	costMicrousd := p.costMicrousd
 	status := p.status
 	failure := p.failure
-	if !delivered {
+	// A completed call with a valid receipt was billed upstream even when it
+	// overshoots the cost budget. It is not delivered, but its real usage is
+	// booked so the ledger matches provider spend and the exhaustion check
+	// below stops the grant admitting another billed call (#2971).
+	if p.status != "completed" || !usageValid {
 		promptTokens = 0
 		completionTokens = 0
 		costMicrousd = 0
+	}
+	if !delivered {
 		status = "failed"
 		if p.status == "completed" {
 			// The provider answered and the relay accepted it, but the grant

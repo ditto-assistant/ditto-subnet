@@ -1042,6 +1042,98 @@ func TestConfirmationChatSettlementExhaustsSpentBudget(t *testing.T) {
 	expectEnvelope(t, w, 429, relayhttp.CodeHTTPException, "confirmation inference declined: budget_exhausted")
 }
 
+// A completed call whose real cost lands exactly on the remaining budget is
+// within budget: it is delivered and spends the grant.
+func TestConfirmationChatCostLandingOnBudgetIsDeliveredAndExhausts(t *testing.T) {
+	upstream := fakeConfirmationUpstream(t, nil)
+	defer upstream.Close()
+	f := newConfirmationFixture(t, chatTestConfig(t, upstream.URL), "judge", confirmationTestModel, "openrouter")
+	// The fake upstream bills 2100 µUSD per call.
+	testutil.SeedSQL(t, f.pool,
+		`UPDATE confirmation_inference_grants SET cost_microusd = cost_budget_microusd - 2100 WHERE grant_id = $1`, f.grantID)
+
+	body := []byte(confirmationChatBody())
+	w := serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, uuid.New(), body)))
+	if w.Code != 200 {
+		t.Fatalf("a call that lands on the budget must be delivered: %d %s", w.Code, w.Body.String())
+	}
+	var status string
+	var cost, budget int64
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT status, cost_microusd, cost_budget_microusd FROM confirmation_inference_grants WHERE grant_id = $1`,
+		f.grantID).Scan(&status, &cost, &budget); err != nil {
+		t.Fatalf("read grant: %v", err)
+	}
+	if status != "exhausted" || cost != budget {
+		t.Fatalf("grant after a budget-exact call: %s cost=%d budget=%d", status, cost, budget)
+	}
+}
+
+// #2971: a completed call that overshoots the cost budget was billed upstream.
+// It is refused, but the ledger books its real usage and the grant is
+// exhausted, so no further call is sent upstream and billed.
+func TestConfirmationChatCostOvershootIsBookedAndExhaustsGrant(t *testing.T) {
+	var calls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"gen-c3","object":"chat.completion","created":1755000000,
+			"model":"` + confirmationTestModel + `","provider":"deepinfra",
+			"choices":[{"index":0,"finish_reason":"stop","logprobs":null,
+				"message":{"role":"assistant","content":"verdict"}}],
+			"usage":{"prompt_tokens":12,"completion_tokens":5,"cost":0.0021,"total_tokens":17}
+		}`))
+	}))
+	defer upstream.Close()
+	f := newConfirmationFixture(t, chatTestConfig(t, upstream.URL), "judge", confirmationTestModel, "openrouter")
+	// 1000 µUSD left; the fake upstream bills 2100 µUSD per call.
+	testutil.SeedSQL(t, f.pool,
+		`UPDATE confirmation_inference_grants SET cost_microusd = cost_budget_microusd - 1000 WHERE grant_id = $1`, f.grantID)
+
+	body := []byte(confirmationChatBody())
+	nonce := uuid.New()
+	w := serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, nonce, body)))
+	expectEnvelope(t, w, 409, relayhttp.CodeHTTPException, "confirmation grant is no longer live")
+
+	ctx := t.Context()
+	var requestStatus string
+	var failureKind *string
+	var prompt, completion, cost int64
+	if err := f.pool.QueryRow(ctx,
+		`SELECT status, failure_kind, prompt_tokens, completion_tokens, cost_microusd
+		 FROM confirmation_inference_requests WHERE grant_id = $1 AND nonce = $2`,
+		f.grantID, nonce).Scan(&requestStatus, &failureKind, &prompt, &completion, &cost); err != nil {
+		t.Fatalf("read request: %v", err)
+	}
+	if requestStatus != "failed" || failureKind == nil || *failureKind != confirmationFailureSettleRejected ||
+		prompt != 12 || completion != 5 || cost != 2100 {
+		t.Fatalf("overshoot settle must book the billed usage: %s kind=%v %d/%d cost=%d",
+			requestStatus, failureKind, prompt, completion, cost)
+	}
+	var grantStatus string
+	var grantPrompt, grantCompletion, grantCost, budget int64
+	var requestCount, active int
+	if err := f.pool.QueryRow(ctx,
+		`SELECT status, request_count, active_requests, prompt_tokens, completion_tokens, cost_microusd, cost_budget_microusd
+		 FROM confirmation_inference_grants WHERE grant_id = $1`, f.grantID).
+		Scan(&grantStatus, &requestCount, &active, &grantPrompt, &grantCompletion, &grantCost, &budget); err != nil {
+		t.Fatalf("read grant: %v", err)
+	}
+	if grantStatus != "exhausted" || requestCount != 1 || active != 0 ||
+		grantPrompt != 12 || grantCompletion != 5 || grantCost != budget+1100 {
+		t.Fatalf("grant after overshoot: %s count=%d active=%d %d/%d cost=%d budget=%d",
+			grantStatus, requestCount, active, grantPrompt, grantCompletion, grantCost, budget)
+	}
+
+	// The exhausted grant declines before dispatch: no second upstream bill.
+	w = serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, uuid.New(), body)))
+	expectEnvelope(t, w, 429, relayhttp.CodeHTTPException, "confirmation inference declined: budget_exhausted")
+	if calls != 1 {
+		t.Fatalf("upstream calls after the overshoot: got %d want 1", calls)
+	}
+}
+
 func TestConfirmationEmbeddingsFullFlow(t *testing.T) {
 	vector := make([]byte, 768)
 	for i := range vector {
