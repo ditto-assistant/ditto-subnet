@@ -93,8 +93,8 @@ def decode(start_logits, end_logits, e: Encoded, max_len: int = MAX_SPAN_TOKENS)
     import torch
 
     first, last = e.doc_tokens
-    s = start_logits[first : last + 1].detach().to("cpu", torch.float64)
-    t = end_logits[first : last + 1].detach().to("cpu", torch.float64)
+    s = start_logits[first : last + 1].detach().cpu().to(torch.float64)
+    t = end_logits[first : last + 1].detach().cpu().to(torch.float64)
     n = s.shape[0]
     neg = torch.full((n,), float("-inf"), dtype=torch.float64)
     cols = []

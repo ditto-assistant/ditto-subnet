@@ -153,4 +153,95 @@ Exact match, IoU, containment and tokens are still reported for review.
 Code: [`span_v2/`](span_v2/). Unofficial: fp32 on Apple MPS (M4 Pro), small
 n, not a season score.
 
-Results pending: the Mac mini run is in progress.
+**Setup.**
+
+- **Data** (`span_data.py`, bench v18, deterministic):
+  - Train: seeds 101–106, 330 cases × 2 documents = 660 documents
+    (sha256 `e356a7a5…`).
+  - Held out: seeds 42 and 7, 1 document per case, **n = 107**
+    (`d7fbeb65…`; 55 + 52).
+  - Documents have a median of 16 pairs and about 1,500 document tokens, and
+    78% contain a hard-distractor pair. Gold spans are a median of 5 tokens.
+- **Span model:**
+  - Qwen3.5-0.8B with a LoRA (r 16, α 32, every allowed target) and the
+    span head.
+  - lr 1e-4 for the LoRA and 1e-3 for the head, 4 documents per step,
+    2 epochs, 330 steps.
+  - 67 min at 5.2 GB, with gradient checkpointing. The loss went from 7.7 to
+    0.006.
+- **Head-only probe:** the same, with the base frozen; 13 min.
+- **Precision and statistics:**
+  - float32 throughout; decoding in float64 on the CPU.
+  - Intervals are 95% percentile bootstrap over cases (2,000 resamples, seed
+    20261122).
+
+**Held-out results** (n = 107; tokens are charged against `B = 2,048`):
+
+| Predictor | Exact match | Token F1 | IoU | Contained | Tokens (share of B) |
+| --- | --- | --- | --- | --- | --- |
+| **LoRA + span head** | **0.701** [0.617, 0.776] | **0.747** [0.669, 0.825] | **0.738** [0.658, 0.815] | **0.720** [0.636, 0.804] | **5.3 (0.26%)** |
+| Head-only probe (base frozen) | 0.505 [0.411, 0.598] | 0.541 [0.448, 0.634] | 0.536 [0.442, 0.627] | 0.514 [0.421, 0.607] | 5.2 (0.25%) |
+| Base, zero-shot quote | 0.000 | 0.041 [0.018, 0.068] | 0.027 [0.011, 0.046] | 0.103 [0.047, 0.159] | 14.7 (0.72%) |
+| v1 top chunk, base | 0.000 | 0.052 [0.039, 0.067] | 0.028 [0.021, 0.037] | 0.486 [0.383, 0.579] | 134.5 (6.6%) |
+| v1 top chunk, v1 LoRA | 0.000 | 0.055 [0.041, 0.069] | 0.030 [0.022, 0.038] | 0.533 [0.439, 0.626] | 137.4 (6.7%) |
+| Pack the whole document | 0.000 | 0.007 [0.006, 0.008] | 0.003 [0.003, 0.004] | 1.000 | 1,493 (72.9%) |
+
+Per seed, the LoRA's exact match is 0.727 on seed 42 (n 55) and 0.673 on
+seed 7 (n 52).
+
+The v1 rows grade v1's own interface fairly. v1 picks whole memories, so it
+never isolates the answer: its top memory holds the answer about half the
+time at about 135 tokens. The "v1 LoRA" is the 0.778 v1 PoC adapter.
+
+**Reading the numbers:**
+
+- **The span head works.** It isolates the exact answer in 70% of held-out
+  documents with about 5 tokens. The best v1 top chunk holds the answer in
+  53% of documents at about 26× the tokens.
+- **The LoRA matters.** Against the frozen-base probe, compared case by case:
+  - the LoRA alone is exact in 25 cases, the probe alone in 4, both in 50 and
+    neither in 28;
+  - the exact-match gain is +0.196 [0.103, 0.290].
+
+  The frozen base already gets half the answers from a trained linear head.
+- **Zero-shot quoting fails.** The unmodified base copied a findable quote in
+  57% of cases and never the exact answer. It tends to quote whole sentences,
+  sometimes from the wrong memory. This is why §2 uses a head and not
+  generation.
+- **Where the LoRA misses** (32 cases):
+
+  | Prediction landed in | Cases |
+  | --- | --- |
+  | Another evidence pair (often the stale or superseded value) | 13 |
+  | Partial overlap with the gold span | 8 |
+  | A hard-distractor pair | 7 |
+  | The answer pair, but the wrong words | 3 |
+  | An unrelated pair | 1 |
+
+  The weakest families are the program and supersession ones:
+  `v13-personal-program` 0.30 (n 10) and `v13-open-program` 0.50 (n 20). That
+  is where open question 2 (temporal anchor and supersedes spans) bites.
+- **Determinism.** Re-running the LoRA eval gave identical predicted spans:
+  `preds_sha256` `0639a44e35db…` both times. That is on one MPS host in fp32.
+  Cross-host, bf16 CUDA determinism is still untested
+  ([open-questions.md](open-questions.md) Q5).
+
+**Caveats:**
+
+- This is not a season score. n = 107 single-span cases from 2 seeds, fp32 on
+  Apple MPS.
+- The data comes from the same public generator the training seeds came from
+  (Q1 applies).
+- The documents are about 1,500 tokens, not a user's full history.
+- It covers single-span, answerable cases only; multi-span and abstain cases
+  are §5.
+- Gold labels come from the exporter's string matching, not from native
+  generator spans (§4.1).
+
+**Next, before any spend:**
+
+- multi-span packing under B;
+- a null span for absence;
+- widening gold to the support clause;
+- the same evaluation in bf16 on one CUDA host (phase B0 of
+  [bittensor-compute.md](bittensor-compute.md)).
