@@ -54,11 +54,13 @@ from ditto.db.queries.audit import (
     append_audit_entry,
 )
 from ditto.db.queries.score_retests import (
+    OUTAGE_VOID_RETEST_BASIS,
     REPLACEMENT_TICKET_TTL,
     V9_CONTRACT_RETEST_BASIS,
     activate_next_score_retest,
     score_retest_queue_positions,
 )
+from ditto.db.queries.tickets import expire_overdue_tickets, issue_confirmation_ticket
 
 _NOW = datetime(2026, 7, 28, 18, 3, 1, tzinfo=UTC)
 _HOTKEY = "5CFtzzb4"
@@ -114,6 +116,7 @@ async def _seed_contract_retest(
     event: str,
     request_id: str,
     name: str,
+    basis: str = V9_CONTRACT_RETEST_BASIS,
 ) -> None:
     session.add(
         Agent(
@@ -168,7 +171,7 @@ async def _seed_contract_retest(
         event=event,
         payload={
             "request_id": request_id,
-            "basis": V9_CONTRACT_RETEST_BASIS,
+            "basis": basis,
             "bench_version": 9,
             "run_id": run_id,
             "replacement_deadline": (_NOW - timedelta(minutes=30)).isoformat(),
@@ -758,3 +761,197 @@ class TestScoreRetestLockingAndPriority:
                     timeout=_NO_WAIT,
                 )
             assert promoted is None
+
+
+class TestLapsedOrdinaryReplacementCloses:
+    """#2965: an ordinary replacement that lapses must not strand its lifecycle.
+
+    A promoted replacement reuses the accepted score's ticket row. Every job
+    request runs the fleet-wide ``expire_overdue_tickets`` sweep first, so the
+    row usually reads ``expired`` before this validator's own re-test lane next
+    sees it as ``issued`` past its deadline. Only the repair bases used to
+    handle that row. For an ordinary basis the lifecycle stayed
+    ``score_retest_requested`` forever, and that blocks every confirmation and
+    continual lease for the (agent, validator) pair.
+    """
+
+    _BASIS = "statistical_outlier"
+
+    async def _promote(self, session: AsyncSession) -> tuple[UUID, datetime]:
+        agent_id = uuid4()
+        async with session.begin():
+            await _seed_contract_retest(
+                session,
+                agent_id=agent_id,
+                run_id="accepted-run",
+                event=EVENT_SCORE_RETEST_QUEUED,
+                request_id=str(uuid4()),
+                name="ordinary retest",
+                basis=self._BASIS,
+            )
+            promoted = await activate_next_score_retest(
+                session,
+                validator_hotkey=_HOTKEY,
+                now=_NOW,
+                supports_version=lambda version: version == 9,
+                slot_id=_SLOT,
+            )
+            assert promoted is not None
+            assert promoted.status == TicketStatus.ISSUED
+            deadline = promoted.deadline
+        return agent_id, deadline
+
+    async def _lifecycle(
+        self, session: AsyncSession, agent_id: UUID
+    ) -> list[ScoreAuditEntry]:
+        return list(
+            (
+                await session.scalars(
+                    select(ScoreAuditEntry)
+                    .where(ScoreAuditEntry.agent_id == agent_id)
+                    .order_by(ScoreAuditEntry.seq.asc())
+                )
+            ).all()
+        )
+
+    async def _assert_released_and_confirmable(
+        self, session: AsyncSession, agent_id: UUID, *, reason: str, at: datetime
+    ) -> None:
+        async with session.begin():
+            ticket = await session.get(ValidatorTicket, (agent_id, 9, _HOTKEY))
+            assert ticket is not None
+            assert ticket.status == TicketStatus.SCORED
+            assert ticket.retry_after is None
+            lifecycle = await self._lifecycle(session, agent_id)
+            assert [entry.event for entry in lifecycle] == [
+                EVENT_SCORE_RETEST_QUEUED,
+                EVENT_SCORE_RETEST_REQUESTED,
+                EVENT_SCORE_RETEST_RELEASED,
+            ]
+            released = lifecycle[-1].payload
+            assert released["reason"] == reason
+            assert released["automatic"] is True
+            assert released["actor"] == "platform:score-retest-queue"
+            assert released["preserved_run_id"] == "accepted-run"
+
+        async with session.begin():
+            confirmation = await issue_confirmation_ticket(
+                session,
+                agent_id=agent_id,
+                validator_hotkey=_HOTKEY,
+                now=at + timedelta(days=2),
+                ttl=REPLACEMENT_TICKET_TTL,
+                bench_version=9,
+                slot_id=_SLOT,
+            )
+            assert confirmation is not None
+            assert confirmation.purpose == TicketPurpose.CONTINUAL_RETEST
+
+    async def test_own_lane_closes_an_issued_replacement_past_deadline(
+        self, session: AsyncSession
+    ) -> None:
+        """The ordering that already worked: the lane sees ``issued`` first."""
+        agent_id, deadline = await self._promote(session)
+        later = deadline + timedelta(minutes=1)
+        async with session.begin():
+            assert (
+                await activate_next_score_retest(
+                    session,
+                    validator_hotkey=_HOTKEY,
+                    now=later,
+                    supports_version=lambda version: version == 9,
+                    slot_id=_SLOT,
+                )
+                is None
+            )
+        await self._assert_released_and_confirmable(
+            session,
+            agent_id,
+            reason="replacement ticket expired before completion",
+            at=later,
+        )
+
+    @pytest.mark.parametrize(
+        "lane",
+        ["ordinary", "outage_void"],
+        ids=["ordinary-lane", "other-basis-lane"],
+    )
+    async def test_sweep_first_expired_replacement_closes_on_next_poll(
+        self, session: AsyncSession, lane: str
+    ) -> None:
+        """Any re-test lane on the validator's next poll settles the lapse.
+
+        The ordinary lane runs only on an idle validator outside a rollout,
+        so the closure must not wait for it: the outage-void lane runs on
+        almost every poll and must close it too.
+        """
+        agent_id, deadline = await self._promote(session)
+        later = deadline + timedelta(minutes=1)
+        async with session.begin():
+            # Another validator's request_job reaches the row first.
+            assert await expire_overdue_tickets(session, now=later) == 1
+        async with session.begin():
+            ticket = await session.get(ValidatorTicket, (agent_id, 9, _HOTKEY))
+            assert ticket is not None
+            assert ticket.status == TicketStatus.EXPIRED
+
+        async with session.begin():
+            if lane == "ordinary":
+                promoted = await activate_next_score_retest(
+                    session,
+                    validator_hotkey=_HOTKEY,
+                    now=later,
+                    supports_version=lambda version: version == 9,
+                    slot_id=_SLOT,
+                )
+            else:
+                promoted = await activate_next_score_retest(
+                    session,
+                    validator_hotkey=_HOTKEY,
+                    now=later,
+                    supports_version=lambda version: version == 9,
+                    slot_id=_SLOT,
+                    required_basis=OUTAGE_VOID_RETEST_BASIS,
+                    allow_parallel_ordinary=True,
+                    allow_parallel_contract_retests=True,
+                )
+            assert promoted is None
+        await self._assert_released_and_confirmable(
+            session,
+            agent_id,
+            reason="replacement ticket expired before completion",
+            at=later,
+        )
+
+    async def test_failed_replacement_closes_with_its_own_reason(
+        self, session: AsyncSession
+    ) -> None:
+        """``fail_job`` also leaves the row ``expired``, before the deadline."""
+        agent_id, deadline = await self._promote(session)
+        failed_at = _NOW + timedelta(minutes=30)
+        assert failed_at < deadline
+        async with session.begin():
+            ticket = await session.get(ValidatorTicket, (agent_id, 9, _HOTKEY))
+            assert ticket is not None
+            # The writes fail_job makes when it closes and parks this lease.
+            ticket.status = TicketStatus.EXPIRED
+            ticket.deadline = failed_at
+            ticket.retry_after = failed_at + timedelta(minutes=10)
+            ticket.failure_reason = "scoring_error"
+        async with session.begin():
+            assert (
+                await activate_next_score_retest(
+                    session,
+                    validator_hotkey=_HOTKEY,
+                    now=failed_at + timedelta(minutes=1),
+                    supports_version=lambda version: version == 9,
+                    slot_id=_SLOT,
+                )
+                is None
+            )
+        await self._assert_released_and_confirmable(
+            session,
+            agent_id,
+            reason="replacement run ended before completion",
+            at=failed_at,
+        )
