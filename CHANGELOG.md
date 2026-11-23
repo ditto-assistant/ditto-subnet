@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.504.0 (2026-11-23)
+
+### Features
+
+- **scorer,validator,platform,backroom**: P95 harness-memory factor in shadow, with a proposed curve
+  and backtest (SN-500) ([#3617](https://github.com/ditto-assistant/ditto-subnet/pull/3617),
+  [`bb9f3c8`](https://github.com/ditto-assistant/ditto-subnet/commit/bb9f3c8b53385563ea1cd252c552c310a24aba74))
+
+- **validator,platform,backroom**: Show miners their harness memory; record the worst seed (SN-500)
+  ([#3616](https://github.com/ditto-assistant/ditto-subnet/pull/3616),
+  [`8b8f16b`](https://github.com/ditto-assistant/ditto-subnet/commit/8b8f16b6cb97b11ee661b5c2eb730c89dc352ce2))
+
+
 ## v0.503.0 (2026-11-22)
 
 ### Features
