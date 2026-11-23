@@ -9897,6 +9897,10 @@ export const publicDuelingBreakdownSchema = z.object({
   priced_cost_posture: z.string().nullish().default(null),
   priced_cost_result: z.string().nullish().default(null),
   priced_cost_window: z.string().max(32).nullish().default(null),
+  // SN-500: present only once a P95 memory factor changed the score.
+  memory_factor_applied_factor_bps: gateBps.nullish().default(null),
+  memory_factor: z.number().min(0).max(1).nullish().default(null),
+  memory_factor_p95_bytes: z.number().int().nonnegative().nullish().default(null),
   other_gate_factor: z.number().min(0).max(1).nullish().default(null),
   columns: z.array(duelingColumnAggregateSchema.extend({
     grading_bench_version: z.number().int().positive().nullish().default(null),

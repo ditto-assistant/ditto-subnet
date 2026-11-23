@@ -67,13 +67,22 @@ def ranked(scores: dict[str, float]) -> list[str]:
     return sorted(scores, key=lambda agent: (-scores[agent], agent))
 
 
-def lead_lost_at_mib(lead: float, top: float, free_mib: int, floor_bps: int) -> float:
-    """The P95 at which the leader's factor erases its lead over #2."""
-    drop_needed = lead / top
+def lead_lost_at_mib(
+    lead: float, top: float, free_mib: int, cap_mib: float, floor_bps: int
+) -> float | None:
+    """The P95 at which the leader's factor erases its lead over #2.
+
+    Measured against the leader's own cap; ``None`` when no P95 below the cap
+    can do it (no penalised band, a zero top score, or a lead larger than the
+    floor's haircut).
+    """
     full_drop = (10_000 - floor_bps) / 10_000
+    if top <= 0 or cap_mib <= free_mib or full_drop <= 0:
+        return None
+    drop_needed = lead / top
     if drop_needed >= full_drop:
-        return float("inf")
-    return free_mib + drop_needed / full_drop * (2048 - free_mib)
+        return None
+    return free_mib + drop_needed / full_drop * (cap_mib - free_mib)
 
 
 def report(
@@ -92,12 +101,22 @@ def report(
         moved = [a for a in agents if before.index(a) != after.index(a)]
         moves += len(moved)
         top_changes += before[0] != after[0]
-        lead = base[before[0]] - base[before[1]] if len(before) > 1 else float("nan")
-        lost_at = lead_lost_at_mib(lead, base[before[0]], free_mib, floor_bps)
+        if len(before) > 1:
+            lead = base[before[0]] - base[before[1]]
+            cap_mib = statistics.median(r.limit for r in agents[before[0]]) / MIB
+            lost_at = lead_lost_at_mib(
+                lead, base[before[0]], free_mib, cap_mib, floor_bps
+            )
+            threshold = (
+                f"lead {lead:.4f}, leader loses the lead at P95 ~{lost_at:,.0f} MiB"
+                if lost_at is not None
+                else f"lead {lead:.4f}, no P95 under the cap costs the lead"
+            )
+        else:
+            threshold = "a single agent, no lead to lose"
         print(
             f"season {season}: {len(agents):2d} agents, leader {before[0]}"
-            f" -> {after[0]}, lead {lead:.4f}, leader loses the lead at P95"
-            f" ~{lost_at:,.0f} MiB, rank moves {len(moved)}"
+            f" -> {after[0]}, {threshold}, rank moves {len(moved)}"
         )
         for agent in moved:
             print(
@@ -119,6 +138,8 @@ def main() -> None:
     args = parser.parse_args()
     seasons = load(args.csv)
     runs = [run for agents in seasons.values() for rs in agents.values() for run in rs]
+    if not runs:
+        raise SystemExit(f"no runs found in {args.csv!r}")
     p95s = sorted(run.p95 / MIB for run in runs)
     print(
         f"{len(runs)} runs, {sum(len(a) for a in seasons.values())} agent-seasons;"
