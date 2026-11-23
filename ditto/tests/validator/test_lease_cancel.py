@@ -657,3 +657,246 @@ class TestDrainAdvertisesImmediately:
         drain.clear()
         await worker._report_heartbeat("running_benchmark")
         assert heartbeat.requests[-1].benchmark_capacity.admission == "accepting"
+
+
+def _accepting_worker(
+    *,
+    upload: Any,
+    job: Any,
+) -> tuple[Any, MagicMock, _RosterHeartbeat]:
+    """A canonical lease whose score Platform accepts, then drops from the roster.
+
+    ``submit_score`` models the real endpoint: the ticket becomes ``SCORED`` and
+    every roster answered afterwards omits it, exactly as
+    ``tickets.py``'s ``ISSUED``-only roster query does. ``upload`` stands in for
+    ``PlatformClient.submit_transcript``.
+    """
+    from ditto.tests.validator.test_worker import _report  # noqa: PLC0415
+
+    report = _report("run-accepted", 0.8).model_copy(
+        update={"details": {"transcript_sha256": "ee" * 32}}
+    )
+
+    async def score(*_args: object, **_kwargs: object) -> Any:
+        return report
+
+    heartbeat = _RosterHeartbeat()
+    worker, platform, dittobench = _worker_with_scorer(
+        score, heartbeat=heartbeat.mock, jobs=[job]
+    )
+    dittobench.take_transcript = MagicMock(return_value=b'{"cases":[]}')
+    dittobench.take_harness_memory = MagicMock(return_value=None)
+
+    async def accept(agent_id: UUID, **_kwargs: object) -> None:
+        heartbeat._evict.add(agent_id)
+
+    platform.submit_score = AsyncMock(side_effect=accept)
+    platform.submit_transcript = AsyncMock(side_effect=upload)
+    return worker, platform, heartbeat
+
+
+class TestAnAcceptedScoreIsNotRevoked:
+    """#2966: once Platform accepts the score, the lease is spent, not revoked.
+
+    ``submit_score`` marks the ticket ``SCORED`` and the roster drops it at
+    once, while the slot is still uploading the signed transcript. A heartbeat
+    in that window -- the slot's own 10 s tick or any sibling slot's, since
+    every heartbeat carries every slot -- must not cancel the upload as a
+    revocation, and the lease budget must not turn a slow upload into a
+    ``scoring_error`` hand-back for a ticket that is already scored.
+    """
+
+    async def test_a_heartbeat_during_the_transcript_upload_does_not_revoke(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        job = _job("5MinerA" + "x" * 41)
+        finished: list[str] = []
+        worker: Any = None
+
+        async def upload(*_args: object, run_id: str, **_kw: object) -> None:
+            # The roster answering this heartbeat no longer lists the lease.
+            await worker._report_heartbeat("running_benchmark")
+            await asyncio.sleep(0.05)
+            finished.append(run_id)
+
+        worker, platform, heartbeat = _accepting_worker(upload=upload, job=job)
+        after_score = MagicMock()
+        worker._after_score = after_score
+
+        with caplog.at_level("WARNING"):
+            await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+
+        # The heartbeat really did advertise the slot after acceptance.
+        assert job.agent_id in heartbeat._evict
+        platform.submit_score.assert_awaited_once()
+        assert finished == ["run-accepted"]
+        after_score.assert_called_once_with(job.agent_id, 8)
+        platform.report_ticket_failed.assert_not_awaited()
+        assert "revoked by the platform" not in caplog.text
+        assert all(slot.active_agent_id is None for slot in worker._slots.values())
+
+    async def test_a_roster_read_while_the_accept_is_in_flight_does_not_revoke(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Platform commits ``SCORED`` before ``submit_score``'s answer arrives.
+
+        A sibling heartbeat answered in that gap omits the lease while the slot
+        is not yet marked accepted, so it does set ``revoked``. The watchdog
+        must still let the accepted score's transcript finish.
+        """
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        job = _job("5MinerA" + "x" * 41)
+        finished: list[str] = []
+        worker: Any = None
+
+        async def upload(*_args: object, run_id: str, **_kw: object) -> None:
+            await asyncio.sleep(0.05)
+            finished.append(run_id)
+
+        worker, platform, heartbeat = _accepting_worker(upload=upload, job=job)
+
+        async def accept_then_heartbeat(agent_id: UUID, **_kwargs: object) -> None:
+            heartbeat._evict.add(agent_id)
+            await worker._report_heartbeat("running_benchmark")
+
+        platform.submit_score = AsyncMock(side_effect=accept_then_heartbeat)
+
+        with caplog.at_level("WARNING"):
+            await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+
+        assert finished == ["run-accepted"]
+        platform.report_ticket_failed.assert_not_awaited()
+        assert "revoked by the platform" not in caplog.text
+
+    async def test_a_refused_submission_on_a_revoked_lease_hands_nothing_back(
+        self,
+    ) -> None:
+        """The other answer to the same race: Platform really took the lease.
+
+        The submission is not cancelled, so Platform refuses it with a 409. The
+        roster already said the lease was gone, so this is the revocation it
+        was -- silence on the wire, never a ``scoring_error`` that would spend
+        an attempt Platform already withdrew.
+        """
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        job = _job("5MinerA" + "x" * 41)
+        worker: Any = None
+
+        async def upload(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("a refused score has no transcript to publish")
+
+        worker, platform, heartbeat = _accepting_worker(upload=upload, job=job)
+
+        async def revoked_then_refused(agent_id: UUID, **_kwargs: object) -> None:
+            heartbeat._evict.add(agent_id)
+            await worker._report_heartbeat("running_benchmark")
+            raise PlatformError("score rejected (409): no live lease")
+
+        platform.submit_score = AsyncMock(side_effect=revoked_then_refused)
+        stages: list[str] = []
+        publish = worker._publish_benchmark_progress
+
+        async def record_stage(stage: str, **kwargs: Any) -> bool:
+            stages.append(stage)
+            return bool(await publish(stage, **kwargs))
+
+        worker._publish_benchmark_progress = record_stage
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+
+        platform.submit_score.assert_awaited_once()
+        platform.submit_transcript.assert_not_awaited()
+        platform.report_ticket_failed.assert_not_awaited()
+        # Exactly the wire of a watchdog revocation: no failure progress either.
+        assert "submitting_result" in stages
+        assert "failed_retrying" not in stages
+        assert all(slot.active_agent_id is None for slot in worker._slots.values())
+
+    async def test_a_refused_submission_on_a_held_lease_is_still_handed_back(
+        self,
+    ) -> None:
+        """The control: without a revocation, a refusal is a scoring failure."""
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        job = _job("5MinerA" + "x" * 41)
+
+        async def upload(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("a refused score has no transcript to publish")
+
+        worker, platform, _ = _accepting_worker(upload=upload, job=job)
+        platform.submit_score = AsyncMock(
+            side_effect=PlatformError("score rejected (422): bad signature")
+        )
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+
+        platform.report_ticket_failed.assert_awaited_once()
+        assert platform.report_ticket_failed.await_args.args[1] == "scoring_error"
+
+    async def test_the_lease_deadline_during_the_upload_hands_nothing_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        # Half a second of lease budget: scoring and submission fit, a slow
+        # transcript upload does not.
+        monkeypatch.setattr(worker_module, "lease_budget_seconds", lambda *_a: 0.5)
+        job = _job("5MinerA" + "x" * 41)
+        finished: list[str] = []
+
+        async def slow_upload(*_args: object, run_id: str, **_kw: object) -> None:
+            await asyncio.sleep(1.0)
+            finished.append(run_id)
+
+        worker, platform, _ = _accepting_worker(upload=slow_upload, job=job)
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+
+        platform.submit_score.assert_awaited_once()
+        assert finished == ["run-accepted"]
+        platform.report_ticket_failed.assert_not_awaited()
+
+    async def test_a_hung_upload_is_bounded_without_a_hand_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Post-acceptance work has its own bound, so a hung upload frees the slot."""
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        monkeypatch.setattr(worker_module, "_POST_SCORE_TIMEOUT_SECONDS", 0.2)
+        job = _job("5MinerA" + "x" * 41)
+
+        async def hang(*_args: object, **_kwargs: object) -> None:
+            await asyncio.sleep(3600)
+
+        worker, platform, _ = _accepting_worker(upload=hang, job=job)
+        after_score = MagicMock()
+        worker._after_score = after_score
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+
+        platform.submit_score.assert_awaited_once()
+        platform.report_ticket_failed.assert_not_awaited()
+        # The canary offer still follows the accepted score.
+        after_score.assert_called_once_with(job.agent_id, 8)
+        assert all(slot.active_agent_id is None for slot in worker._slots.values())
+
+    async def test_a_revocation_still_cancels_a_run_that_has_not_submitted(
+        self,
+    ) -> None:
+        """The control: the exemption starts at submission, not before."""
+        worker, _, _ = _worker_with_scorer(
+            AsyncMock(), heartbeat=_RosterHeartbeat().mock
+        )
+        slot = worker._slots["slot-0"]
+        agent_id = uuid4()
+        slot.active_agent_id = agent_id
+
+        worker._apply_lease_roster(
+            _response([]), advertised=_capacity(("slot-0", agent_id))
+        )
+
+        assert slot.revoked.is_set()
