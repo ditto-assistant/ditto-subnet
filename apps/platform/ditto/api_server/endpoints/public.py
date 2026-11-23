@@ -321,7 +321,10 @@ from ditto.api_server.koth import (
     project_koth,
 )
 from ditto.api_server.ledger_pin import (
+    LedgerPin,
     classify_vector_against_pins,
+    crown_family_root,
+    pin_champion_hotkey,
     pin_expected_shares,
     pin_generator_fraction,
     pin_provisional_incumbent,
@@ -5044,15 +5047,23 @@ def _pin_crown_heir(pin: LedgerEpochSnapshot, rows: Sequence[LedgerRow]) -> UUID
     """The row the next pin hands ``pin``'s crown to, as ``build_pin_draft`` does.
 
     The owner family's representative in ``rows`` inherits the crown; a legacy
-    pin without an owner root only carries it to the exact same agent.
+    pin without an owner root only carries it to the exact same agent. The
+    family is resolved through the champion's identity by the same
+    :func:`crown_family_root` the next pin uses, so a family renamed by an
+    owner link since ``pin`` was taken keeps its crown here too (#2991).
     """
     if pin.champion_owner_root is not None:
-        return next(
-            (
-                row.agent_id
+        family = crown_family_root(
+            stored_root=pin.champion_owner_root,
+            champion_agent_id=pin.champion_agent_id,
+            champion_hotkey=pin_champion_hotkey(LedgerPin.from_row(pin)),
+            members=(
+                (row.agent_id, row.miner_hotkey, row.emission_owner_root)
                 for row in rows
-                if row.emission_owner_root == pin.champion_owner_root
             ),
+        )
+        return next(
+            (row.agent_id for row in rows if row.emission_owner_root == family),
             None,
         )
     return next(
