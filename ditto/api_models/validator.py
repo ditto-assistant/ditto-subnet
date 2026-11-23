@@ -502,7 +502,8 @@ class HarnessMemoryTelemetry(BaseModel):
     Measured by the scorer from the harness cgroup: ``peak_bytes`` is the
     kernel's ``memory.peak`` high-water mark; ``p50_bytes`` and ``p95_bytes``
     are time-weighted percentiles of ``memory.current`` at 1 MiB resolution.
-    Unsigned operator telemetry: it drives no policy and is never published.
+    Unsigned telemetry: it drives no policy. Each agent's own measured runs
+    are published on its public pipeline (``harness_memory``).
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True)

@@ -29955,7 +29955,8 @@ export interface components {
          *     Measured by the scorer from the harness cgroup: ``peak_bytes`` is the
          *     kernel's ``memory.peak`` high-water mark; ``p50_bytes`` and ``p95_bytes``
          *     are time-weighted percentiles of ``memory.current`` at 1 MiB resolution.
-         *     Unsigned operator telemetry: it drives no policy and is never published.
+         *     Unsigned telemetry: it drives no policy. Each agent's own measured runs
+         *     are published on its public pipeline (``harness_memory``).
          */
         HarnessMemoryTelemetry: {
             /** Limit Bytes */
@@ -38036,6 +38037,93 @@ export interface components {
             versions: components["schemas"]["GeneratorSubmissionSummary"][];
         };
         /**
+         * PublicHarnessMemory
+         * @description This agent's harness memory across its measured runs (SN-500).
+         *
+         *     Measured only since the release that added the telemetry: earlier runs
+         *     and runs on validators that have not updated carry none, so a short or
+         *     absent list means unmeasured, not light.
+         */
+        PublicHarnessMemory: {
+            /**
+             * Last Recorded At
+             * Format: date-time
+             */
+            last_recorded_at: string;
+            /**
+             * Limit Bytes Max
+             * @description Largest harness cap any measured run ran under.
+             */
+            limit_bytes_max?: number | null;
+            /**
+             * P50 Bytes Median
+             * @description Median of the per-run time-weighted P50s.
+             */
+            p50_bytes_median: number;
+            /**
+             * P95 Bytes Max
+             * @description Highest per-run time-weighted P95.
+             */
+            p95_bytes_max: number;
+            /**
+             * P95 Bytes Median
+             * @description Median of the per-run time-weighted P95s.
+             */
+            p95_bytes_median: number;
+            /**
+             * Peak Bytes Max
+             * @description Highest per-run `memory.peak`.
+             */
+            peak_bytes_max: number;
+            /**
+             * Recent Runs
+             * @description Most recently leased runs first, at most 20.
+             */
+            recent_runs?: components["schemas"]["PublicHarnessMemoryRun"][];
+            /** Runs */
+            runs: number;
+        };
+        /**
+         * PublicHarnessMemoryRun
+         * @description Harness memory the scorer measured for one validator run (SN-500).
+         *
+         *     ``peak_bytes`` is the harness cgroup's ``memory.peak``; ``p50_bytes`` and
+         *     ``p95_bytes`` are time-weighted percentiles of ``memory.current`` at 1 MiB
+         *     resolution. Reported by the validator alongside the run's score or
+         *     failure; no failure detail beyond the outcome is published here.
+         */
+        PublicHarnessMemoryRun: {
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Lease Issued At
+             * Format: date-time
+             */
+            lease_issued_at: string;
+            /**
+             * Limit Bytes
+             * @description The harness memory cap the run ran under.
+             */
+            limit_bytes?: number | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "scored" | "failed";
+            /** P50 Bytes */
+            p50_bytes: number;
+            /** P95 Bytes */
+            p95_bytes: number;
+            /** Peak Bytes */
+            peak_bytes: number;
+            /** Sampled Seconds */
+            sampled_seconds: number;
+            /** Samples */
+            samples: number;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
          * PublicHealthResponse
          * @description Aggregate subnet-health rollup for the public dashboard.
          *
@@ -40124,6 +40212,8 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
+            /** @description The harness's measured memory (peak and time-weighted P50/P95) across its validator runs; null when no run has been measured. */
+            harness_memory?: components["schemas"]["PublicHarnessMemory"] | null;
             /** Inference Runs */
             inference_runs?: components["schemas"]["PublicInferenceRun"][];
             /** @description Ordinary source-review clock and reason while the submission is in the pre-score screening pipeline; null once it leaves that pipeline (whichever way). */

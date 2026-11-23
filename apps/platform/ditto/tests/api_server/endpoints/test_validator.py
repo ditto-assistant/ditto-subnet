@@ -6160,7 +6160,7 @@ class TestFailJob:
             )
             assert row.limit_bytes == 2048 << 20
 
-    async def test_scored_run_records_its_harness_memory_and_never_publishes_it(
+    async def test_scored_run_records_its_harness_memory_for_the_pipeline_only(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -6184,14 +6184,15 @@ class TestFailJob:
             assert row.outcome == "scored"
             assert row.failure_reason is None
             assert row.p95_bytes == 1700 << 20
-        # Operator-only: no public read carries it.
-        for path in (
-            f"/api/v1/public/agent/{agent_id}/pipeline",
-            f"/api/v1/public/agent/{agent_id}/scores",
-        ):
-            public = await client.get(path)
-            assert "harness_memory" not in public.text
-            assert "p95_bytes" not in public.text
+        # SN-500: the agent's own pipeline publishes it (decision 1); the
+        # scores read, which carries only the signed score, does not.
+        pipeline = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+        memory = pipeline.json()["harness_memory"]
+        assert memory["p95_bytes_max"] == 1700 << 20
+        assert memory["recent_runs"][0]["outcome"] == "scored"
+        scores = await client.get(f"/api/v1/public/agent/{agent_id}/scores")
+        assert "harness_memory" not in scores.text
+        assert "p95_bytes" not in scores.text
 
     async def test_a_report_without_harness_memory_records_nothing(
         self,

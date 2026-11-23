@@ -98,6 +98,8 @@ from ditto.api_models import (
     PublicEfficiencySnapshotResponse,
     PublicEfficiencyStatus,
     PublicEmissionRecipient,
+    PublicHarnessMemory,
+    PublicHarnessMemoryRun,
     PublicHealthResponse,
     PublicHostSpecs,
     PublicInferenceRun,
@@ -433,6 +435,7 @@ from ditto.db.queries.emission_eligibility import (
     AgentReviewPosture,
     load_review_postures,
 )
+from ditto.db.queries.harness_memory import agent_harness_memory
 from ditto.db.queries.heartbeats import (
     ActiveValidatorAssignment,
     ActiveValidatorWork,
@@ -542,6 +545,9 @@ from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
 from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 logger = logging.getLogger(__name__)
+
+# Recent harness memory runs published per agent on the pipeline (SN-500).
+_PUBLIC_HARNESS_MEMORY_RUNS = 20
 
 router = APIRouter(prefix="/public", tags=["public"])
 
@@ -9009,6 +9015,11 @@ async def agent_pipeline(
             )
         )
     )
+    # SN-500: miners see their own harness memory beside their inference
+    # spend. Bounded: one indexed rollup and at most 20 recent runs.
+    memory_rollup, memory_runs = await agent_harness_memory(
+        session, agent_id=agent_id, limit=_PUBLIC_HARNESS_MEMORY_RUNS
+    )
     inference_grants = list(
         await session.scalars(
             select(InferenceGrant)
@@ -9585,6 +9596,34 @@ async def agent_pipeline(
             )
             for grant in inference_grants
         ],
+        harness_memory=(
+            PublicHarnessMemory(
+                runs=memory_rollup.runs,
+                peak_bytes_max=memory_rollup.peak_bytes_max,
+                p50_bytes_median=memory_rollup.p50_bytes_median,
+                p95_bytes_median=memory_rollup.p95_bytes_median,
+                p95_bytes_max=memory_rollup.p95_bytes_max,
+                limit_bytes_max=memory_rollup.limit_bytes_max,
+                last_recorded_at=memory_rollup.last_recorded_at,
+                recent_runs=[
+                    PublicHarnessMemoryRun(
+                        validator_hotkey=run.validator_hotkey,
+                        bench_version=run.bench_version,
+                        lease_issued_at=run.lease_issued_at,
+                        outcome="scored" if run.outcome == "scored" else "failed",
+                        peak_bytes=run.peak_bytes,
+                        p50_bytes=run.p50_bytes,
+                        p95_bytes=run.p95_bytes,
+                        samples=run.samples,
+                        sampled_seconds=run.sampled_seconds,
+                        limit_bytes=run.limit_bytes,
+                    )
+                    for run in memory_runs
+                ],
+            )
+            if memory_rollup is not None
+            else None
+        ),
         dispute=_public_dispute(dispute) if dispute is not None else None,
     )
 

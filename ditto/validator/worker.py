@@ -834,6 +834,20 @@ def _attach_transform_audit(
     return representative.model_copy(update={"details": details})
 
 
+def worst_seed_memory(
+    measured: Sequence[HarnessMemoryTelemetry],
+) -> HarnessMemoryTelemetry | None:
+    """The heaviest seed's harness memory: highest P95, then highest peak.
+
+    SN-500: a multi-seed submission reports its worst seed, not the median
+    run, so a seed that needed the most memory is the one operators and miners
+    see. ``None`` when no seed was measured.
+    """
+    if not measured:
+        return None
+    return max(measured, key=lambda memory: (memory.p95_bytes, memory.peak_bytes))
+
+
 def _pooled_confirmation_stderr(
     composites: Sequence[float], single_run_stderr: float | None
 ) -> float | None:
@@ -5488,6 +5502,12 @@ class ValidatorWorker:
         )
         return report
 
+    def _take_harness_memory(self, run_id: str) -> HarnessMemoryTelemetry | None:
+        """Consume the scorer's memory for ``run_id``, when the client keeps it."""
+        take = getattr(self._dittobench, "take_harness_memory", None)
+        memory = take(run_id) if callable(take) else None
+        return memory if isinstance(memory, HarnessMemoryTelemetry) else None
+
     async def _submit_report(
         self,
         agent_id: UUID,
@@ -5495,12 +5515,16 @@ class ValidatorWorker:
         report: ScoreReport,
         *,
         ticket_deadline: datetime | None = None,
+        harness_memory: HarnessMemoryTelemetry | None = None,
     ) -> ScoreReport:
         """Sign and submit an already-scored :class:`ScoreReport`. The signature
         binds ``(validator_hotkey, agent_id, ticket_deadline, run_id, composite,
         seed)`` of this exact run. The ticket deadline is the lease identity, so
         a late result cannot be replayed after reissue. Advisory
-        ``confirmation_composites`` rides unsigned (like ``composite_stderr``)."""
+        ``confirmation_composites`` rides unsigned (like ``composite_stderr``).
+
+        ``harness_memory`` overrides the run's own measurement: a multi-seed
+        caller passes its worst seed's memory (SN-500)."""
         if (
             ticket_deadline is not None
             and ticket_deadline.tzinfo is not None
@@ -5533,12 +5557,9 @@ class ValidatorWorker:
             transcript_sha256=transcript_sha256,
             base_evidence_sha256=base_evidence_sha256,
         )
-        take_harness_memory = getattr(self._dittobench, "take_harness_memory", None)
-        harness_memory = (
-            take_harness_memory(report.run_id)
-            if callable(take_harness_memory)
-            else None
-        )
+        own_memory = self._take_harness_memory(report.run_id)
+        if harness_memory is None:
+            harness_memory = own_memory
         await self._platform.submit_score(
             agent_id,
             signature=signature,
@@ -5744,23 +5765,32 @@ class ValidatorWorker:
             )
             return None
         reports: list[ScoreReport] = []
+        # SN-500: every seed's measured memory, including a seed that failed,
+        # so the submission carries the worst seed rather than the median run.
+        seed_memory: list[HarnessMemoryTelemetry] = []
         for s in seeds:
             try:
-                reports.append(
-                    await self._evaluate(
-                        agent_id,
-                        expected_sha256,
-                        seed=s,
-                        bench_version=bench_version,
-                    )
+                report = await self._evaluate(
+                    agent_id,
+                    expected_sha256,
+                    seed=s,
+                    bench_version=bench_version,
                 )
             except (PlatformError, DittobenchError) as exc:
+                failed_memory = harness_memory_of(exc)
+                if failed_memory is not None:
+                    seed_memory.append(failed_memory)
                 logger.warning(
                     "re-score of stale agent %s (seed %d) failed; skipping seed: %s",
                     agent_id,
                     s,
                     exc,
                 )
+                continue
+            reports.append(report)
+            measured = self._take_harness_memory(report.run_id)
+            if measured is not None:
+                seed_memory.append(measured)
         if not reports:
             return None
         # Representative = the middle run by composite (a real run, so the signed
@@ -5789,7 +5819,12 @@ class ValidatorWorker:
                 }
             )
         representative = _attach_transform_audit(representative, reports)
-        return await self._submit_report(agent_id, miner_hotkey, representative)
+        return await self._submit_report(
+            agent_id,
+            miner_hotkey,
+            representative,
+            harness_memory=worst_seed_memory(seed_memory),
+        )
 
     async def run_forever(
         self,

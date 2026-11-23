@@ -16439,7 +16439,8 @@ class HarnessMemoryObservation(Base):
     cgroup's ``memory.peak``; ``p50_bytes`` / ``p95_bytes`` are time-weighted
     percentiles of ``memory.current``. Reported unsigned by the validator with
     the score or the failed-ticket hand-back; one row per lease, upserted, so a
-    replayed report never double-counts. Never published, and drives no policy.
+    replayed report never double-counts. Drives no policy; each agent's runs are
+    published on its public pipeline without failure detail.
     The migration ``2026_11_22_add_harness_memory_observations`` owns it.
     """
 

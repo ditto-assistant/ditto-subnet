@@ -3671,7 +3671,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List harness memory',
       description:
-        'Read per-agent harness memory (SN-500), heaviest P95 first. Each run reports the harness cgroup memory.peak and time-weighted P50/P95 of memory.current; rows roll up per agent version: runs, scored_runs, failed_runs, oom_runs (harness_oom or harness_oom_grace), peak_bytes_max, p50/p95 medians, p95_bytes_max, limit_bytes_max; page with offset while has_more. Coverage starts with the release that added the telemetry; an absent agent was not measured. Operator-only: never shown to miners and feeds no scoring. Requires backroom:read and changes nothing.',
+        'Read per-agent harness memory (SN-500), heaviest P95 first. Each run reports the harness cgroup memory.peak and time-weighted P50/P95 of memory.current; rows roll up per agent version: runs, scored_runs, failed_runs, oom_runs (harness_oom or harness_oom_grace), peak_bytes_max, p50/p95 medians, p95_bytes_max, limit_bytes_max; page with offset while has_more. Coverage starts with the release that added the telemetry; an absent agent was not measured. Feeds no scoring; miners see their own runs on the public pipeline. Requires backroom:read and changes nothing.',
       inputSchema: {
         limit: z.number().int().min(1).max(200).default(50),
         offset: z.number().int().min(0).max(100_000).default(0),
@@ -3686,7 +3686,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get agent harness memory',
       description:
-        'Read one agent version\'s harness memory (SN-500): the rollup (null when no run reported memory) and its newest runs, each with validator_hotkey, bench_version, lease_issued_at, outcome, failure reason/detail, peak/P50/P95 bytes, samples, sampled_seconds and limit_bytes. P50/P95 are time-weighted over memory.current at 1 MiB resolution; peak is the kernel high-water mark. Operator-only: never shown to miners. Requires backroom:read and changes nothing.',
+        'Read one agent version\'s harness memory (SN-500): the rollup (null when no run reported memory) and its newest runs, each with validator_hotkey, bench_version, lease_issued_at, outcome, failure reason/detail, peak/P50/P95 bytes, samples, sampled_seconds and limit_bytes. P50/P95 are time-weighted over memory.current at 1 MiB resolution; peak is the kernel high-water mark. Miners see their own runs, without failure reason/detail, on the public pipeline. Requires backroom:read and changes nothing.',
       inputSchema: {
         agentId: z.string().uuid(),
         limit: z.number().int().min(1).max(200).default(50),
