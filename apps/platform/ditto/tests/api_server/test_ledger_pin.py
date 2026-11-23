@@ -93,6 +93,29 @@ def _snapshot(entries: list[LedgerEntry], **overrides: Any) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
+def _previous_pin(
+    champion: LedgerEntry,
+    *,
+    entries: tuple[LedgerEntry, ...],
+    served: dict[str, Any] | None = None,
+) -> LedgerPin:
+    """The previous epoch's pin, which crowned ``champion``."""
+    return LedgerPin(
+        netuid=118,
+        epoch_index=25_028,
+        last_epoch_block=9_033_109,
+        pinned_block=9_033_111,
+        pinned_block_hash="0x" + "cd" * 32,
+        pinned_at=_NOW - timedelta(hours=1),
+        bench_version=12,
+        entries=entries,
+        context={"served": {"crown_mode": "incumbent", **(served or {})}},
+        ledger_digest="0" * 64,
+        champion_agent_id=champion.agent_id,
+        incumbent_agent_id=champion.agent_id,
+    )
+
+
 class TestDigest:
     def test_is_deterministic_and_covers_served_markers(self) -> None:
         entries = [_entry(_HOTKEY_A, 0.8, first_seen=_NOW)]
@@ -166,6 +189,109 @@ class TestBuildPinDraft:
         assert old_version.agent_id != new_version.agent_id
         assert draft.incumbent_agent_id == new_version.agent_id
         assert draft.context["served"]["crown_mode"] == "incumbent"
+
+    def test_incumbent_survives_an_owner_root_move(self) -> None:
+        """#2991: an owner-link moves the family's root string, not its crown.
+
+        The root is recomputed on every read as the family's smallest node, so
+        linking a hotkey whose coldkey sorts lower renames it. The previous
+        champion is still in the ledger and still the same family.
+        """
+        champion = _entry(_HOTKEY_A, 0.80, first_seen=_NOW - timedelta(days=1))
+        # Senior and inside the band: the classic walk would crown it.
+        senior = _entry(_HOTKEY_B, 0.802, first_seen=_NOW - timedelta(days=2))
+        previous = _previous_pin(champion, entries=(champion, senior))
+        draft = build_pin_draft(
+            _schedule(25_029),
+            snapshot=_snapshot(
+                [senior, champion],
+                crown_mode="incumbent",
+                owner_roots={
+                    champion.agent_id: "coldkey:5Cnewlinked",
+                    senior.agent_id: f"owner:{_HOTKEY_B}",
+                },
+            ),
+            previous_pin=previous,
+            previous_champion_owner_root="coldkey:5Gchampold",
+            now=_NOW,
+        )
+        assert draft.incumbent_agent_id == champion.agent_id
+        assert draft.champion_agent_id == champion.agent_id
+        # The next pin carries the family under its current name.
+        assert draft.champion_owner_root == "coldkey:5Cnewlinked"
+
+    def test_new_generation_inherits_after_the_root_moves(self) -> None:
+        """The champion's generation left the ledger and the root moved.
+
+        A same-hotkey generation is the same family whatever the family is
+        called now, so it inherits the crown.
+        """
+        champion = _entry(_HOTKEY_A, 0.80, first_seen=_NOW - timedelta(days=1))
+        new_version = _entry(_HOTKEY_A, 0.79, first_seen=_NOW - timedelta(hours=1))
+        senior = _entry(_HOTKEY_B, 0.795, first_seen=_NOW - timedelta(days=2))
+        draft = build_pin_draft(
+            _schedule(25_029),
+            snapshot=_snapshot(
+                [senior, new_version],
+                crown_mode="incumbent",
+                owner_roots={
+                    new_version.agent_id: "coldkey:5Cnewlinked",
+                    senior.agent_id: f"owner:{_HOTKEY_B}",
+                },
+            ),
+            previous_pin=_previous_pin(champion, entries=(champion, senior)),
+            previous_champion_owner_root="coldkey:5Gchampold",
+            now=_NOW,
+        )
+        assert draft.incumbent_agent_id == new_version.agent_id
+
+    def test_the_champion_identity_outranks_a_stale_root_string(self) -> None:
+        """A revoked link splits the family: the crown stays with the champion.
+
+        The stored root string now names the other half. The champion's own
+        current root is authoritative, so the stale string cannot hand it over.
+        """
+        champion = _entry(_HOTKEY_A, 0.80, first_seen=_NOW - timedelta(days=1))
+        other_half = _entry(_HOTKEY_B, 0.802, first_seen=_NOW - timedelta(days=2))
+        draft = build_pin_draft(
+            _schedule(25_029),
+            snapshot=_snapshot(
+                [other_half, champion],
+                crown_mode="incumbent",
+                owner_roots={
+                    champion.agent_id: f"owner:{_HOTKEY_A}",
+                    other_half.agent_id: "owner:shared",
+                },
+            ),
+            previous_pin=_previous_pin(champion, entries=(champion, other_half)),
+            previous_champion_owner_root="owner:shared",
+            now=_NOW,
+        )
+        assert draft.incumbent_agent_id == champion.agent_id
+
+    def test_legacy_pin_without_root_carries_only_the_exact_agent(self) -> None:
+        champion = _entry(_HOTKEY_A, 0.80, first_seen=_NOW - timedelta(days=1))
+        new_version = _entry(_HOTKEY_A, 0.79, first_seen=_NOW - timedelta(hours=1))
+        senior = _entry(_HOTKEY_B, 0.795, first_seen=_NOW - timedelta(days=2))
+        previous = _previous_pin(champion, entries=(champion, senior))
+
+        kept = build_pin_draft(
+            _schedule(25_029),
+            snapshot=_snapshot([senior, champion], crown_mode="incumbent"),
+            previous_pin=previous,
+            previous_champion_owner_root=None,
+            now=_NOW,
+        )
+        assert kept.incumbent_agent_id == champion.agent_id
+
+        moved_on = build_pin_draft(
+            _schedule(25_029),
+            snapshot=_snapshot([senior, new_version], crown_mode="incumbent"),
+            previous_pin=previous,
+            previous_champion_owner_root=None,
+            now=_NOW,
+        )
+        assert moved_on.incumbent_agent_id is None
 
     def test_lineage_gone_leaves_no_incumbent(self) -> None:
         rival = _entry(_HOTKEY_B, 0.81, first_seen=_NOW - timedelta(days=1))
@@ -455,6 +581,7 @@ class TestProvisionalIncumbent:
         withheld: list[LedgerEntry],
         *,
         previous_root: str | None = f"owner:{_HOTKEY_A}",
+        previous_pin: LedgerPin | None = None,
         **overrides: Any,
     ) -> Any:
         values: dict[str, Any] = {
@@ -470,7 +597,7 @@ class TestProvisionalIncumbent:
         return build_pin_draft(
             _schedule(25_029),
             snapshot=_snapshot(payable, **values),
-            previous_pin=None,
+            previous_pin=previous_pin,
             previous_champion_owner_root=previous_root,
             now=_NOW,
         )
@@ -580,6 +707,26 @@ class TestProvisionalIncumbent:
             pytest.approx(0.2, abs=1e-12)
         )
         assert pin_expected_burn(0.2, None) == pytest.approx(0.2, abs=1e-12)
+
+    def test_a_held_incumbent_keeps_the_crown_after_its_root_moves(self) -> None:
+        """#2991 on the protocol-28 path: the held family is found by identity."""
+        held, runner_up = self._pair()
+        draft = self._draft(
+            [runner_up],
+            [held],
+            previous_root="coldkey:5Gchampold",
+            previous_pin=_previous_pin(held, entries=(held, runner_up)),
+            owner_roots={
+                held.agent_id: "coldkey:5Cnewlinked",
+                runner_up.agent_id: f"owner:{_HOTKEY_B}",
+            },
+        )
+        assert draft.incumbent_agent_id == held.agent_id
+        assert (
+            draft.context["served"]["provisional_incumbent"]
+            == (canonical_entries([held])[0])
+        )
+        assert draft.champion_owner_root == "coldkey:5Cnewlinked"
 
     def test_only_the_incumbent_owner_can_be_provisional(self) -> None:
         held, runner_up = self._pair()
