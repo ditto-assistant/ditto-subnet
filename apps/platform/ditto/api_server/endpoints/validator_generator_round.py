@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
@@ -59,6 +59,9 @@ from ditto.api_models.generator_round_validator import (
     GeneratorRoundJobResponse,
     GeneratorRoundScoreRequest,
     GeneratorRoundScoreResponse,
+)
+from ditto.api_models.inference_concurrency_settings import (
+    InferenceConcurrencySettings,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.dueling_season_commitments import (
@@ -137,6 +140,17 @@ router = APIRouter(prefix="/validator", tags=["validator"])
 # A round panel run is a few generator columns of memory cases, far shorter
 # than a full benchmark; this bounds a lease the validator never answers.
 ROUND_TICKET_TTL = timedelta(minutes=90)
+
+
+def _generator_round_runtime(settings: InferenceConcurrencySettings) -> dict[str, Any]:
+    """The lease runtime for a generator-round run, with no memory factor.
+
+    SN-500 step 2's P95 memory factor scores a miner's harness. A generator
+    round measures a generator's pack, so its runs record and apply nothing.
+    """
+    return settings.benchmark_runtime.model_copy(
+        update={"memory_factor_posture": "off"}
+    ).model_dump(mode="json")
 
 
 def round_ticket_seed(row: GeneratorRound | GeneratorPrescreen) -> int:
@@ -429,9 +443,7 @@ async def _lease_panel_job(
             case_count=len(round_case_ids(row)),
             minimum_screening_policy_version=contract.minimum_screening_policy_version,
             requires_screened_image=contract.requires_screened_image,
-            benchmark_runtime=inference_settings.benchmark_runtime.model_dump(
-                mode="json"
-            ),
+            benchmark_runtime=_generator_round_runtime(inference_settings),
             inference=v._inference_grant_offer(
                 request=request, grant=grant, bench_version=bench_version
             ),
@@ -546,9 +558,7 @@ async def _lease_prescreen_job(
             case_count=case_count,
             minimum_screening_policy_version=contract.minimum_screening_policy_version,
             requires_screened_image=contract.requires_screened_image,
-            benchmark_runtime=inference_settings.benchmark_runtime.model_dump(
-                mode="json"
-            ),
+            benchmark_runtime=_generator_round_runtime(inference_settings),
             inference=v._inference_grant_offer(
                 request=request, grant=grant, bench_version=row.bench_version
             ),
@@ -714,9 +724,7 @@ async def _lease_oracle_job(
             oracle_case_ids=candidates,
             minimum_screening_policy_version=contract.minimum_screening_policy_version,
             requires_screened_image=contract.requires_screened_image,
-            benchmark_runtime=inference_settings.benchmark_runtime.model_dump(
-                mode="json"
-            ),
+            benchmark_runtime=_generator_round_runtime(inference_settings),
             inference=v._inference_grant_offer(
                 request=request, grant=grant, bench_version=bench_version
             ),

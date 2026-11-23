@@ -5401,6 +5401,9 @@ describe('Backroom MCP tools', () => {
       relay_delay_fingerprint_min_ms: 25,
       relay_delay_fingerprint_max_ms: 250,
       sandbox_memory_limit_mib: 6144,
+      memory_factor_posture: 'shadow',
+      memory_factor_free_mib: 512,
+      memory_factor_floor_bps: 9000,
     },
   }
 

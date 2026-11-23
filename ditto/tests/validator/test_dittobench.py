@@ -1391,6 +1391,10 @@ async def test_v10_submit_forwards_platform_stamped_runtime_policy() -> None:
         relay_delay_fingerprint_mode="shadow",
         relay_delay_fingerprint_min_ms=40,
         relay_delay_fingerprint_max_ms=160,
+        # SN-500: the lease's memory-factor policy must reach the scorer.
+        memory_factor_posture="enforce",
+        memory_factor_free_mib=256,
+        memory_factor_floor_bps=9_500,
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
@@ -1406,6 +1410,11 @@ async def test_v10_submit_forwards_platform_stamped_runtime_policy() -> None:
         )
 
     assert seen["benchmark_runtime"] == runtime.model_dump(mode="json")
+    forwarded = seen["benchmark_runtime"]
+    assert isinstance(forwarded, dict)
+    assert forwarded["memory_factor_posture"] == "enforce"
+    assert forwarded["memory_factor_free_mib"] == 256
+    assert forwarded["memory_factor_floor_bps"] == 9_500
 
 
 @pytest.mark.asyncio

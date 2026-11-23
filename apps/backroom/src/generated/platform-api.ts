@@ -19930,6 +19930,22 @@ export interface components {
              */
             case_concurrency: number;
             /**
+             * Memory Factor Floor Bps
+             * @default 9000
+             */
+            memory_factor_floor_bps: number;
+            /**
+             * Memory Factor Free Mib
+             * @default 512
+             */
+            memory_factor_free_mib: number;
+            /**
+             * Memory Factor Posture
+             * @default shadow
+             * @enum {string}
+             */
+            memory_factor_posture: "off" | "shadow" | "enforce";
+            /**
              * Relay Delay Fingerprint Max Ms
              * @default 250
              */
@@ -37307,8 +37323,23 @@ export interface components {
              */
             generator_sum: number;
             /**
+             * Memory Factor
+             * @description ``memory_factor_applied_factor_bps / 10000``, when applied.
+             */
+            memory_factor?: number | null;
+            /**
+             * Memory Factor Applied Factor Bps
+             * @description The P95 harness-memory factor inside ``datagen_gate`` when it is applied. Null when no memory factor changed this score.
+             */
+            memory_factor_applied_factor_bps?: number | null;
+            /**
+             * Memory Factor P95 Bytes
+             * @description The run's time-weighted P95 harness memory, when applied.
+             */
+            memory_factor_p95_bytes?: number | null;
+            /**
              * Other Gate Factor
-             * @description ``datagen_gate / priced_cost_factor``: every other gate combined. Null when the run recorded no priced cost or its factor is 0.
+             * @description ``datagen_gate / (priced_cost_factor x memory_factor)``: every other gate combined (``memory_factor`` is 1 when not applied). Null when the run recorded no priced cost or a factor is 0.
              */
             other_gate_factor?: number | null;
             /**

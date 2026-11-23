@@ -1432,6 +1432,11 @@ type RunDetails struct {
 	// inference priced at the contract's locked public rates and the cost
 	// factor it maps to (priced_cost.go). nil for every earlier contract.
 	PricedCost *PricedCostSummary `json:"priced_cost,omitempty"`
+	// MemoryFactor (bench_version >= MemoryFactorMinBenchVersion) is the run's
+	// P95 harness memory and the composite factor it maps to
+	// (memory_factor.go). nil for every earlier contract and when the posture
+	// is off.
+	MemoryFactor *MemoryFactorSummary `json:"memory_factor,omitempty"`
 	// RunBudget (bench_version >= RunBudgetMinBenchVersion) is the run's
 	// priced-cost budget and where it stopped the run (run_budget.go). nil for
 	// every earlier contract.

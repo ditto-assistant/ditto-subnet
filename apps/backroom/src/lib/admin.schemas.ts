@@ -3638,6 +3638,10 @@ export const MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
 export const MIN_SANDBOX_MEMORY_LIMIT_MIB = 512
 export const MAX_SANDBOX_MEMORY_LIMIT_MIB = 32_768
 export const DEFAULT_SANDBOX_MEMORY_LIMIT_MIB = 6_144
+// SN-500 step 2: the P95 harness-memory factor policy stamped on each lease.
+export const DEFAULT_MEMORY_FACTOR_FREE_MIB = 512
+export const DEFAULT_MEMORY_FACTOR_FLOOR_BPS = 9_000
+export const MIN_MEMORY_FACTOR_FLOOR_BPS = 5_000
 
 export const benchmarkRuntimeSettingsSchema = z
   .object({
@@ -3653,6 +3657,22 @@ export const benchmarkRuntimeSettingsSchema = z
       .min(MIN_SANDBOX_MEMORY_LIMIT_MIB)
       .max(MAX_SANDBOX_MEMORY_LIMIT_MIB)
       .default(DEFAULT_SANDBOX_MEMORY_LIMIT_MIB),
+    // SN-500 step 2. Shadow records the factor without changing scores;
+    // enforce applies it. Defaults so a Platform that predates the fields
+    // still parses.
+    memory_factor_posture: z.enum(['off', 'shadow', 'enforce']).default('shadow'),
+    memory_factor_free_mib: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_SANDBOX_MEMORY_LIMIT_MIB)
+      .default(DEFAULT_MEMORY_FACTOR_FREE_MIB),
+    memory_factor_floor_bps: z
+      .number()
+      .int()
+      .min(MIN_MEMORY_FACTOR_FLOOR_BPS)
+      .max(10_000)
+      .default(DEFAULT_MEMORY_FACTOR_FLOOR_BPS),
   })
   .refine(
     (value) => value.relay_delay_fingerprint_min_ms <= value.relay_delay_fingerprint_max_ms,
@@ -3668,6 +3688,9 @@ export const DEFAULT_BENCHMARK_RUNTIME_SETTINGS = {
   relay_delay_fingerprint_min_ms: 25,
   relay_delay_fingerprint_max_ms: 250,
   sandbox_memory_limit_mib: DEFAULT_SANDBOX_MEMORY_LIMIT_MIB,
+  memory_factor_posture: 'shadow' as const,
+  memory_factor_free_mib: DEFAULT_MEMORY_FACTOR_FREE_MIB,
+  memory_factor_floor_bps: DEFAULT_MEMORY_FACTOR_FLOOR_BPS,
 }
 
 // The dark decision-model lane (TypeSafe Jev via OpenRouter System One). Off by

@@ -92,14 +92,30 @@ def public_dueling_breakdown(
     inner = share * report.datagen_raw + generator
 
     priced = None
+    memory = None
     stored = stored_gate_evidence(gate_evidence)
     if stored is not None:
         priced = stored.priced_cost
+        memory = stored.memory_factor
     applied_bps = priced.applied_factor_bps if priced is not None else None
     factor = applied_bps / 10_000 if applied_bps is not None else None
+    # SN-500 step 2: a memory factor is shown only once it changed the score.
+    # In shadow it stays operator evidence and divides out as 1.
+    memory_applied = (
+        memory
+        if memory is not None
+        and memory.applied
+        and memory.applied_factor_bps is not None
+        else None
+    )
+    memory_bps = memory_applied.applied_factor_bps if memory_applied else None
+    memory_mult = memory_bps / 10_000 if memory_bps is not None else 1.0
     other = (
-        _unit(report.datagen_gate / factor)
-        if factor is not None and factor > 0 and math.isfinite(report.datagen_gate)
+        _unit(report.datagen_gate / (factor * memory_mult))
+        if factor is not None
+        and factor > 0
+        and memory_mult > 0
+        and math.isfinite(report.datagen_gate)
         else None
     )
     try:
@@ -127,6 +143,11 @@ def public_dueling_breakdown(
             priced_cost_posture=priced.posture if priced is not None else None,
             priced_cost_result=priced.result if priced is not None else None,
             priced_cost_window=priced.window if priced is not None else None,
+            memory_factor_applied_factor_bps=memory_bps,
+            memory_factor=memory_mult if memory_bps is not None else None,
+            memory_factor_p95_bytes=(
+                memory_applied.p95_bytes if memory_applied is not None else None
+            ),
             other_gate_factor=other,
             columns=columns,
         )
