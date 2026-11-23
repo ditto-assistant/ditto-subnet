@@ -1155,6 +1155,32 @@ describe("async agent evidence", () => {
     expect(section.textContent).toContain("Scored");
   });
 
+  it("shows a reported zero reading as 0 MiB and a missing one as a dash", async () => {
+    stubPipelineFetch(() =>
+      Promise.resolve(
+        pipelineResponse({
+          harness_memory: {
+            runs: 1,
+            peak_bytes_max: 0,
+            p50_bytes_median: 0,
+            p95_bytes_median: 0,
+            p95_bytes_max: 0,
+            limit_bytes_max: null,
+            last_recorded_at: "2026-07-31T13:55:00Z",
+            recent_runs: [],
+          },
+        }),
+      ),
+    );
+    render(() => <AgentEvidence entry={summary} />);
+    await waitFor(() => expect(document.getElementById("pipeline-harness-memory")).toBeTruthy());
+    const section = document
+      .getElementById("pipeline-harness-memory")
+      ?.closest("section") as HTMLElement;
+    expect(section.textContent).toContain("P95 0 MiB median");
+    expect(section.textContent).toContain("peak 0 MiB · cap — · 1 run");
+  });
+
   it("omits the harness memory section for an unmeasured agent", async () => {
     stubPipelineFetch(() => Promise.resolve(pipelineResponse({ harness_memory: null })));
     render(() => <AgentEvidence entry={summary} />);

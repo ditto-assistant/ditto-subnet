@@ -889,7 +889,8 @@ function InferenceRuns(props: { runs: InferenceRun[] }): JSX.Element {
 
 function formatMib(bytes: number | null | undefined): string {
   const value = Number(bytes);
-  if (!Number.isFinite(value) || value <= 0) return "—";
+  // Missing is "—"; a reported zero is a reading and shows as 0 MiB.
+  if (bytes == null || !Number.isFinite(value) || value < 0) return "—";
   return Math.round(value / 1048576).toLocaleString() + " MiB";
 }
 
