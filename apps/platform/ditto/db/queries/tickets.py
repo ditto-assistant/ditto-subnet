@@ -1506,15 +1506,24 @@ async def get_open_ticket(
 ) -> ValidatorTicket | None:
     """Return the validator's live ticket matching the signed lease.
 
-    ``bench_version=None`` is reserved for signed heartbeat progress, where the
-    exact lease deadline identifies work across benchmark versions. The
-    one-issued-ticket-per-validator index keeps that cross-version lookup
-    unambiguous.
+    ``bench_version=None`` is the cross-version lookup used by signed heartbeat
+    progress and ``fail_job``, which name a lease only by agent and deadline.
+    Nothing in the schema makes that unique: ``(agent, bench_version,
+    validator)`` is the primary key and
+    ``validator_tickets_one_issued_per_validator_slot_idx`` is unique on
+    ``(validator_hotkey, slot_id)``, so one validator can hold issued rows at
+    two versions on two slots (an unswept overdue lease beside a fresh one, or
+    any pair that predates the issuer-side refusal). The signed deadline is
+    therefore part of the SQL predicate, not a check on whichever row the
+    database happened to return first, and a lookup that still matches more
+    than one row resolves to nothing rather than to an arbitrary lease.
     """
     statement = select(ValidatorTicket).where(
         ValidatorTicket.agent_id == agent_id,
         ValidatorTicket.validator_hotkey == validator_hotkey,
         ValidatorTicket.status == TicketStatus.ISSUED,
+        ValidatorTicket.deadline == _as_utc(deadline),
+        ValidatorTicket.deadline > now,
     )
     if bench_version is not None:
         statement = statement.where(ValidatorTicket.bench_version == bench_version)
@@ -1522,14 +1531,10 @@ async def get_open_ticket(
         statement = statement.where(ValidatorTicket.slot_id == slot_id)
     if for_update:
         statement = statement.with_for_update()
-    ticket = await session.scalar(statement)
-    if (
-        ticket is None
-        or _as_utc(ticket.deadline) <= now
-        or _as_utc(ticket.deadline) != _as_utc(deadline)
-    ):
+    matches = (await session.scalars(statement.limit(2))).all()
+    if len(matches) != 1:
         return None
-    return ticket
+    return matches[0]
 
 
 async def get_live_slot_ticket(

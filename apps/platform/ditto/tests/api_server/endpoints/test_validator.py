@@ -6528,6 +6528,60 @@ class TestFailJob:
             assert ticket.failure_reason == "infrastructure"
             assert ticket.failure_detail == "sandbox_network_unavailable"
 
+    @pytest.mark.parametrize("stale_first", [True, False])
+    async def test_fail_job_resolves_its_own_lease_beside_an_unswept_one(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        stale_first: bool,
+    ) -> None:
+        # #2962: fail_job names its lease only by (agent, deadline). An overdue
+        # lease at another version that the sweep has not flipped yet is still
+        # `issued` on another slot, and must not shadow the caller's live one:
+        # that left the failed lease ISSUED until its own deadline spent an
+        # attempt in the overdue sweep.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        now = datetime.now(UTC)
+        rows = [
+            (_BENCH_VERSION, "slot-0", now - timedelta(minutes=5)),
+            (_BENCH_VERSION + 1, "slot-1", _TICKET_DEADLINE),
+        ]
+        for version, slot, deadline in rows if stale_first else rows[::-1]:
+            await _seed_ticket(
+                session_maker,
+                agent_id,
+                bench_version=version,
+                slot_id=slot,
+                deadline=deadline,
+                issued_at=now - timedelta(hours=2),
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="infrastructure",
+                failure_detail="sandbox_network_unavailable",
+            ),
+        )
+        assert failed.status_code == 200, failed.text
+        async with session_maker() as s:
+            resolved = await s.get(
+                ValidatorTicket, (agent_id, _BENCH_VERSION + 1, _VALIDATOR_HOTKEY)
+            )
+            untouched = await s.get(
+                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert resolved is not None and untouched is not None
+            assert resolved.status != TicketStatus.ISSUED
+            assert resolved.failure_detail == "sandbox_network_unavailable"
+            assert untouched.status == TicketStatus.ISSUED
+            assert untouched.failure_detail is None
+
     async def test_overlong_failure_detail_is_rejected(
         self,
         app: FastAPI,
