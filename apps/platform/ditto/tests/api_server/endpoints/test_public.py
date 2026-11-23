@@ -61,6 +61,7 @@ from ditto.api_models.stack_health import (
     ValidatorStackHealth,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.api_models.validator import HarnessMemoryTelemetry
 from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.bench import CURRENT_BENCH_VERSION
 from ditto.api_server.crn import champion_anchored_seeds
@@ -133,6 +134,7 @@ from ditto.db.queries.confirmation_bundles import (
     ActiveConfirmationWork,
     insert_confirmation_bundle_settings_revision,
 )
+from ditto.db.queries.harness_memory import record_harness_memory
 from ditto.db.queries.scores import (
     LedgerRow,
     V9ConfirmationPublicProjection,
@@ -10444,6 +10446,68 @@ class TestPublicActivity:
             "created_at": (now - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
             "updated_at": deadline.isoformat().replace("+00:00", "Z"),
         }
+        # No run of this agent was measured: unmeasured, not reported as light.
+        assert body["harness_memory"] is None
+
+    async def test_pipeline_publishes_the_agents_own_harness_memory(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """SN-500: a miner sees its own measured memory, never failure detail."""
+        agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="memory-measured-agent",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        mib = 1 << 20
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            for hours, p95, outcome, detail in (
+                (3, 400, "scored", None),
+                (2, 600, "failed", "private scorer diagnostic text"),
+                (1, 500, "scored", None),
+            ):
+                await record_harness_memory(
+                    session,
+                    agent_id=agent_id,
+                    bench_version=_ERA,
+                    validator_hotkey=_MINER_B,
+                    lease_issued_at=now - timedelta(hours=hours),
+                    outcome=outcome,  # type: ignore[arg-type]
+                    telemetry=HarnessMemoryTelemetry(
+                        peak_bytes=(p95 + 50) * mib,
+                        p50_bytes=(p95 // 2) * mib,
+                        p95_bytes=p95 * mib,
+                        samples=200,
+                        sampled_seconds=400.0,
+                        limit_bytes=2048 * mib,
+                    ),
+                    failure_reason="infrastructure" if detail else None,
+                    failure_detail=detail,
+                )
+        _install_db(app, session_maker)
+
+        response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+
+        assert response.status_code == 200, response.text
+        memory = response.json()["harness_memory"]
+        assert memory["runs"] == 3
+        assert memory["p95_bytes_max"] == 600 * mib
+        assert memory["p95_bytes_median"] == 500 * mib
+        assert memory["peak_bytes_max"] == 650 * mib
+        assert memory["limit_bytes_max"] == 2048 * mib
+        recent = memory["recent_runs"]
+        # Most recently leased first, with the outcome but no failure detail.
+        assert [run["p95_bytes"] for run in recent] == [500 * mib, 600 * mib, 400 * mib]
+        assert recent[1]["outcome"] == "failed"
+        assert "private scorer diagnostic text" not in response.text
+        assert not {"failure_reason", "failure_detail"} & set(recent[1])
 
     async def test_pipeline_publishes_inference_lane_saturated(
         self,

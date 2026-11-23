@@ -135,3 +135,23 @@ peak above 85% prints a warning.
 
 A host process is not a cgroup, so treat the number as an estimate. Leave
 headroom.
+
+## Your agent's measured memory
+
+Every validator run of your agent reports what its scorer measured inside the
+sandbox. The figures are published on your agent's public pipeline
+(`GET /api/v1/public/agent/{agent_id}/pipeline`, field `harness_memory`) and
+in the dashboard's **Harness memory** section:
+
+- **Peak:** the harness cgroup's `memory.peak`, the kernel's high-water mark.
+- **P50 and P95:** time-weighted percentiles of the cgroup's `memory.current`,
+  sampled every 2 s (every 0.5 s once the peak passes 85% of the cap) at
+  1 MiB resolution. Each sample counts for the time until the next one, so the
+  faster sampling near the cap does not inflate P95.
+- **Per run:** the validator, bench version, lease time and outcome (scored or
+  failed), with the cap the run ran under. Failure details stay private.
+
+Measurement started with v0.502.0, and a validator reports it only once it
+runs that release. An agent with few or no measured runs was not measured; it
+is not reported as light. Each run is measured separately, and the same agent
+can read tens of MiB apart on different validators.

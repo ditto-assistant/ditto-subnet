@@ -6326,6 +6326,90 @@ class TestConfirmAndSubmit:
         assert out is None
         platform.submit_score.assert_not_awaited()
 
+    async def test_multi_seed_submit_carries_the_worst_seeds_memory(self) -> None:
+        """SN-500: the submission reports the heaviest seed, failed or not."""
+        agent_id = uuid4()
+        mib = 1 << 20
+
+        def _memory(p95: int, peak: int) -> HarnessMemoryTelemetry:
+            return HarnessMemoryTelemetry(
+                peak_bytes=peak * mib,
+                p50_bytes=100 * mib,
+                p95_bytes=p95 * mib,
+                samples=10,
+                sampled_seconds=20.0,
+                limit_bytes=2048 * mib,
+            )
+
+        by_run = {"run-10": _memory(300, 320), "run-20": _memory(500, 520)}
+        failed = worker_mod.DittobenchError("seed 30 died")
+        failed.harness_memory = _memory(900, 1000)
+
+        async def _score(**kw: Any) -> ScoreReport:
+            if kw["seed"] == 30:
+                raise failed
+            composite = {10: 0.8, 20: 0.7}[kw["seed"]]
+            return self._seeded_report(kw["seed"], composite).model_copy(
+                update={"bench_version": 8, "details": {"bench_version": 8}}
+            )
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(side_effect=_score)
+        # Consumes like the real client: once, then None.
+        dittobench.take_harness_memory = MagicMock(
+            side_effect=lambda run_id: by_run.pop(run_id, None)
+        )
+        dittobench.last_details = None
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.get_artifact = AsyncMock(
+            return_value=ArtifactResponse(
+                agent_id=agent_id,
+                sha256="ab" * 32,
+                download_url="https://signed.example/x.tar.gz",
+                expires_at=datetime.now(UTC),
+                bench_version=8,
+                screening_policy_version=9,
+                screened_image_url="https://signed.example/image.tar",
+                screened_image_sha256="12" * 32,
+                screened_image_size_bytes=123,
+                screened_image_id="sha256:" + "34" * 32,
+                screened_image_ref=(
+                    "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+                ),
+            )
+        )
+        w = await self._worker(dittobench, platform)
+        await w._confirm_and_submit(
+            agent_id,
+            "ab" * 32,
+            "5Miner" + "x" * 42,
+            bench_version=8,
+            seeds=[10, 20, 30],
+        )
+
+        assert platform.submit_score.await_count == 1
+        submitted = platform.submit_score.await_args.kwargs["harness_memory"]
+        assert submitted.p95_bytes == 900 * mib
+        # Every scored seed's cached entry was consumed, not left to evict.
+        assert by_run == {}
+
+    def test_worst_seed_memory_orders_by_p95_then_peak(self) -> None:
+        mib = 1 << 20
+
+        def _memory(p95: int, peak: int) -> HarnessMemoryTelemetry:
+            return HarnessMemoryTelemetry(
+                peak_bytes=peak * mib,
+                p50_bytes=50 * mib,
+                p95_bytes=p95 * mib,
+                samples=1,
+                sampled_seconds=1.0,
+            )
+
+        assert worker_mod.worst_seed_memory([]) is None
+        tie = [_memory(400, 410), _memory(400, 450), _memory(300, 900)]
+        worst = worker_mod.worst_seed_memory(tie)
+        assert worst is not None and worst.peak_bytes == 450 * mib
+
 
 class TestPooledConfirmationStderr:
     def test_none_below_two_seeds(self) -> None:

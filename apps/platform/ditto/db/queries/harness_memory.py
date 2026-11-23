@@ -1,8 +1,10 @@
 """Per-run harness memory observations and their per-agent rollup (SN-500).
 
-Operator observability only: nothing here feeds dispatch, scoring or any
-public surface. Rows arrive unsigned from validators with the score or the
-failed-ticket hand-back; there is no history before this table existed.
+Observability only: nothing here feeds dispatch or scoring. Operators read
+every field through the admin routes; each agent's own runs are also on its
+public pipeline, without failure reason or detail. Rows arrive unsigned from
+validators with the score or the failed-ticket hand-back; there is no history
+before this table existed.
 """
 
 from __future__ import annotations
