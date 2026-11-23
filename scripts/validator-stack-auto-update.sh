@@ -172,7 +172,7 @@ is_prunable_managed_image() {
 }
 
 retained_release_images() {
-  local dir descriptor key image
+  local dir descriptor key image pending
   for dir in "$CURRENT_DIR" "$PREVIOUS_DIR"; do
     if [ "$dir" = "$CURRENT_DIR" ]; then
       [ -d "$dir" ] || return 1
@@ -189,6 +189,43 @@ retained_release_images() {
       printf '%s\n' "$image"
     done < <(release_image_keys "$dir")
   done
+  # The pending candidate is retained too, so a no-op tick between staging and
+  # promotion cannot discard what prefetch just warmed. Only a complete marker
+  # vouches for it; anything else retains nothing and is discarded by the
+  # caller, which leaves the next prefetch to re-verify the candidate.
+  if pending="$(prefetched_release_images)"; then printf '%s\n' "$pending"; fi
+}
+
+# Print the prefetched candidate's descriptor and component digests. The marker
+# is written only after prefetch authenticated the descriptor, validated its
+# manifest, and verified every component's labels. A marker that does not name
+# a newer same-major release with every component of its shape is refused.
+prefetched_release_images() {
+  local candidate version current_version key image legacy=false
+  [ -f "$PREFETCHED_FILE" ] && [ ! -L "$PREFETCHED_FILE" ] || return 1
+  candidate="$(manifest_value "$PREFETCHED_FILE" CANDIDATE_RELEASE)"
+  version="$(manifest_value "$PREFETCHED_FILE" CANDIDATE_VERSION)"
+  is_descriptor_digest "$candidate" || return 1
+  [ "$candidate" != "$(manifest_value "$MANAGED_FILE" STACK_RELEASE 2>/dev/null || true)" ] || return 1
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  current_version="$(manifest_value "$CURRENT_DIR/manifest.env" STACK_VERSION 2>/dev/null || true)"
+  [[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  semver_greater_same_major "$version" "$current_version" || return 1
+  [ -z "$(manifest_value "$PREFETCHED_FILE" CANDIDATE_MODEL_RELAY_IMAGE)" ] || legacy=true
+  printf '%s\n' "$candidate"
+  for key in PYLON_IMAGE SANDBOX_DOCKER_IMAGE MODEL_RELAY_IMAGE OLLAMA_IMAGE DITTOBENCH_API_IMAGE VALIDATOR_IMAGE; do
+    case "$key" in MODEL_RELAY_IMAGE|OLLAMA_IMAGE) [ "$legacy" = true ] || continue;; esac
+    image="$(manifest_value "$PREFETCHED_FILE" "CANDIDATE_$key")"
+    is_image_digest "$image" && validate_image_repository "$key" "$image" || return 1
+    printf '%s\n' "$image"
+  done
+}
+
+# Keep the prefetch marker only while it still names a pending candidate.
+discard_settled_prefetch() {
+  [ -f "$PREFETCHED_FILE" ] || return 0
+  prefetched_release_images >/dev/null 2>&1 && return 0
+  rm -f "$PREFETCHED_FILE"
 }
 
 prune_obsolete_managed_images() {
@@ -739,14 +776,17 @@ semver_greater_same_major() {
 }
 
 prefetch_release() {
-  local candidate_ref="$1" previous_ref current_version candidate_version temporary
+  local candidate_ref="$1" previous_ref current_version candidate_version temporary key
   previous_ref="$(managed_release)"
   if [ "$candidate_ref" = "$previous_ref" ]; then
     rm -f "$PREFETCHED_FILE"
     log "candidate channel still points at the installed release"
     return 0
   fi
-  if [ "$(manifest_value "$PREFETCHED_FILE" CANDIDATE_RELEASE 2>/dev/null || true)" = "$candidate_ref" ]; then
+  # A marker from an older updater carries no component digests, so cleanup
+  # cannot retain its images. Prefetch it once more to record them.
+  if [ "$(manifest_value "$PREFETCHED_FILE" CANDIDATE_RELEASE 2>/dev/null || true)" = "$candidate_ref" ] && \
+    prefetched_release_images >/dev/null 2>&1; then
     log "candidate already prefetched: $candidate_ref"
     return 0
   fi
@@ -760,8 +800,14 @@ prefetch_release() {
   fi
   pull_release_images "$STAGED_DIR" || die "prefetch component verification failed"
   temporary="$PREFETCHED_FILE.tmp"
-  printf 'CANDIDATE_RELEASE=%s\nCANDIDATE_VERSION=%s\n' \
-    "$candidate_ref" "$candidate_version" >"$temporary"
+  {
+    printf 'CANDIDATE_RELEASE=%s\nCANDIDATE_VERSION=%s\n' "$candidate_ref" "$candidate_version"
+    # Component digests from the authenticated manifest, so image cleanup can
+    # retain the pending candidate until it is installed or superseded.
+    while IFS= read -r key; do
+      printf 'CANDIDATE_%s=%s\n' "$key" "$(manifest_value "$STAGED_DIR/manifest.env" "$key")"
+    done < <(release_image_keys "$STAGED_DIR")
+  } >"$temporary"
   mv "$temporary" "$PREFETCHED_FILE"
   rm -rf -- "$STAGED_DIR"
   log "prefetched authenticated complete stack $candidate_version ($candidate_ref)"
@@ -1000,7 +1046,8 @@ perform_update() {
   resume_and_verify "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || die "candidate may be working; committed journal retained"
   record_managed "$candidate_ref"
   printf 'PREVIOUS_RELEASE=%s\nCURRENT_RELEASE=%s\nCURRENT_VERSION=%s\nUPDATED_AT=%s\n' "$previous_ref" "$candidate_ref" "$candidate_version" "$(date +%s)" >"$LAST_UPDATE_FILE"
-  rm -f "$FAILED_CANDIDATE_FILE" "$PREFETCHED_FILE" "$TRANSACTION_FILE"
+  rm -f "$FAILED_CANDIDATE_FILE" "$TRANSACTION_FILE"
+  discard_settled_prefetch
   prune_obsolete_managed_images
   log "updated complete validator stack $current_version -> $candidate_version"
 }
@@ -1247,7 +1294,7 @@ if [ "$candidate" = "$(managed_release)" ]; then
     log "installed Pylon is unhealthy; draining before same-release repair"
     repair_unhealthy_pylon "$CURRENT_DIR" || die "unhealthy Pylon could not be repaired; validator resume attempted"
   fi
-  rm -f "$PREFETCHED_FILE"
+  discard_settled_prefetch
   prune_obsolete_managed_images
   log "already running stack release $candidate"
   exit 0

@@ -29,8 +29,11 @@ latency. The release workflow advances it after assembling and signing the
 complete descriptor, while the remaining release smoke tests continue. The
 prefetch timer resolves and authenticates the immutable descriptor digest, then
 pulls and validates every component image. It never drains, recreates, or
-resumes a service. Only the stable `compat-2` channel can start an update, and
-that channel advances only after all release gates pass.
+resumes a service. Image cleanup retains the prefetched candidate's descriptor
+and component digests until that candidate is installed or superseded, so the
+warm cache survives the stage-to-promote window. Only the stable `compat-2`
+channel can start an update, and that channel advances only after all release
+gates pass.
 
 The host-side launcher, systemd unit, Docker Engine, wallet directory, and
 `.env` are deliberately outside the signed bundle so a candidate workload can

@@ -61,6 +61,14 @@ def _images() -> dict[str, str]:
     }
 
 
+def _candidate_images() -> dict[str, str]:
+    """Component digests of the fixture's 0.10.1 candidate release."""
+    return {
+        key: value.rsplit(":", 1)[0] + ":" + "e" * 64
+        for key, value in _images().items()
+    }
+
+
 def _release_images() -> dict[str, str]:
     return {
         key: f"{repository}@sha256:{index:064x}"
@@ -971,10 +979,7 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
     old_release = tmp_path / "old-release"
     new_release = tmp_path / "new-release"
     old_images = _images()
-    new_images = {
-        key: value.rsplit(":", 1)[0] + ":" + "e" * 64
-        for key, value in old_images.items()
-    }
+    new_images = _candidate_images()
     _write_release(old_release, "0.10.0", old_images)
     _write_release(new_release, "0.10.1", new_images)
     image_ids = {
@@ -1264,6 +1269,7 @@ def test_candidate_prefetch_authenticates_and_warms_without_draining(
     assert prefetched == {
         "CANDIDATE_RELEASE": STACK_DIGEST,
         "CANDIDATE_VERSION": "0.10.1",
+        **{f"CANDIDATE_{key}": image for key, image in _candidate_images().items()},
     }
     assert not (state_dir / "staged").exists()
     final = json.loads(state_path.read_text())
@@ -1306,6 +1312,98 @@ def test_repeated_candidate_prefetch_reuses_authenticated_warm_state(
         ],
     ]
     assert final["compose_calls"] == []
+
+
+def _prefetch_candidate(env: dict[str, str], env_file: Path) -> None:
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+    prefetched = _run_updater(env, "prefetch")
+    assert prefetched.returncode == 0, prefetched.stderr
+
+
+def _set_channel(state_path: Path, digest: str) -> None:
+    state = json.loads(state_path.read_text())
+    state["channel_digest"] = digest
+    state["calls"] = []
+    state_path.write_text(json.dumps(state))
+
+
+def test_noop_run_tick_keeps_the_prefetched_candidate(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    """#2980: candidate-compat-2 is staged while compat-2 still names the
+    installed release, so every run tick is a no-op until promotion."""
+    env, state_path, state_dir, env_file = stack_updater_env
+    _prefetch_candidate(env, env_file)
+    obsolete = "ghcr.io/ditto-assistant/ditto-subnet-validator@sha256:" + "8" * 64
+    state = json.loads(state_path.read_text())
+    state["image_inventory"].append(obsolete)
+    state_path.write_text(json.dumps(state))
+    _set_channel(state_path, OLD_STACK_DIGEST)
+
+    tick = _run_updater(env, "run")
+
+    assert tick.returncode == 0, tick.stderr
+    assert "already running stack release" in tick.stderr
+    assert (state_dir / "prefetched-release.env").exists()
+    removed = json.loads(state_path.read_text()).get("removed_images", [])
+    assert removed == [obsolete]
+
+    _set_channel(state_path, STACK_DIGEST)
+    repeated = _run_updater(env, "prefetch")
+
+    assert repeated.returncode == 0, repeated.stderr
+    assert "candidate already prefetched" in repeated.stderr
+    pulls = [
+        call[1]
+        for call in json.loads(state_path.read_text())["calls"]
+        if call[0] == "pull"
+    ]
+    assert pulls == ["ghcr.io/ditto-assistant/ditto-subnet-stack:candidate-compat-2"]
+
+
+def test_noop_run_tick_discards_a_prefetch_marker_for_the_installed_release(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    _prefetch_candidate(env, env_file)
+    marker = state_dir / "prefetched-release.env"
+    marker.write_text(marker.read_text().replace(STACK_DIGEST, OLD_STACK_DIGEST))
+    _set_channel(state_path, OLD_STACK_DIGEST)
+
+    tick = _run_updater(env, "run")
+
+    assert tick.returncode == 0, tick.stderr
+    assert not marker.exists()
+    removed = set(json.loads(state_path.read_text()).get("removed_images", []))
+    assert removed == {STACK_DIGEST, *_candidate_images().values()}
+
+
+def test_legacy_prefetch_marker_is_reverified_with_component_digests(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    """A marker written by an older updater names no components, so cleanup
+    cannot retain them. It is discarded and the next prefetch rewrites it."""
+    env, state_path, state_dir, env_file = stack_updater_env
+    _prefetch_candidate(env, env_file)
+    marker = state_dir / "prefetched-release.env"
+    marker.write_text(f"CANDIDATE_RELEASE={STACK_DIGEST}\nCANDIDATE_VERSION=0.10.1\n")
+    _set_channel(state_path, STACK_DIGEST)
+
+    refreshed = _run_updater(env, "prefetch")
+
+    assert refreshed.returncode == 0, refreshed.stderr
+    assert "candidate already prefetched" not in refreshed.stderr
+    candidate_validator = _candidate_images()["VALIDATOR_IMAGE"]
+    assert _manifest(marker)["CANDIDATE_VALIDATOR_IMAGE"] == candidate_validator
+
+    marker.write_text(f"CANDIDATE_RELEASE={STACK_DIGEST}\nCANDIDATE_VERSION=0.10.1\n")
+    _set_channel(state_path, OLD_STACK_DIGEST)
+    tick = _run_updater(env, "run")
+
+    assert tick.returncode == 0, tick.stderr
+    assert not marker.exists()
 
 
 def test_supervised_adoption_binds_every_running_service(
