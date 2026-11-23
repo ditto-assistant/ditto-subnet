@@ -336,6 +336,12 @@ class BenchmarkRuntimeSettings(BaseModel):
     relay_delay_fingerprint_max_ms: Annotated[int, Field(ge=0, le=5_000)] = 250
     # Platform-issued harness memory cap, applied identically by every scorer.
     sandbox_memory_limit_mib: Annotated[int, Field(ge=512, le=32_768)] = 6_144
+    # SN-500 step 2: the P95 harness-memory factor policy, forwarded verbatim
+    # to the scorer. Defaults match Platform's: shadow, 512 MiB free, x0.90 at
+    # the cap. A validator that drops these leaves its scorer on shadow.
+    memory_factor_posture: Literal["off", "shadow", "enforce"] = "shadow"
+    memory_factor_free_mib: Annotated[int, Field(ge=0, le=32_768)] = 512
+    memory_factor_floor_bps: Annotated[int, Field(ge=5_000, le=10_000)] = 9_000
 
     @model_validator(mode="after")
     def _delay_range_is_ordered(self) -> BenchmarkRuntimeSettings:

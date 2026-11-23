@@ -920,6 +920,13 @@ func TestRunSizeJobRunsTheSliceAfterTheDatagenHalf(t *testing.T) {
 		pc.Result != "insufficient_evidence" || pc.AppliedFactorBPS != 10000 {
 		t.Fatalf("details.priced_cost = %+v", report.Details.PricedCost)
 	}
+	// SN-500: the memory factor is recorded on every dueling run. A run with
+	// no sandbox sampler is unmeasured: shadow, no telemetry, applied 10000,
+	// so the gate above is untouched.
+	if mf := report.Details.MemoryFactor; mf == nil || mf.Posture != "shadow" || mf.Applied ||
+		mf.Result != "no_telemetry" || mf.AppliedFactorBPS != 10000 {
+		t.Fatalf("details.memory_factor = %+v", report.Details.MemoryFactor)
+	}
 	aggs := duelingAggregates(d.Columns)
 	self := challenge.DuelingComposite(challenge.DuelingDetailsWeighting(*d), d.DatagenRaw, d.DatagenGate, aggs, map[string]bool{d.OwnerKey: true})
 	if math.Abs(report.Composite-self) > 1e-6 {

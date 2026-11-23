@@ -559,6 +559,35 @@ class PublicDuelingBreakdown(BaseModel):
     priced_cost_posture: str | None = None
     priced_cost_result: str | None = None
     priced_cost_window: Annotated[str | None, Field(default=None, max_length=32)] = None
+    memory_factor_applied_factor_bps: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            le=10_000,
+            description=(
+                "The P95 harness-memory factor inside ``datagen_gate`` when it "
+                "is applied. Null when no memory factor changed this score."
+            ),
+        ),
+    ] = None
+    memory_factor: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description="``memory_factor_applied_factor_bps / 10000``, when applied.",
+        ),
+    ] = None
+    memory_factor_p95_bytes: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description="The run's time-weighted P95 harness memory, when applied.",
+        ),
+    ] = None
     other_gate_factor: Annotated[
         float | None,
         Field(
@@ -566,9 +595,9 @@ class PublicDuelingBreakdown(BaseModel):
             ge=0.0,
             le=1.0,
             description=(
-                "``datagen_gate / priced_cost_factor``: every other gate "
-                "combined. Null when the run recorded no priced cost or its "
-                "factor is 0."
+                "``datagen_gate / (priced_cost_factor x memory_factor)``: every "
+                "other gate combined (``memory_factor`` is 1 when not applied). "
+                "Null when the run recorded no priced cost or a factor is 0."
             ),
         ),
     ] = None

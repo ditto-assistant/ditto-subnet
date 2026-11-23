@@ -230,6 +230,52 @@ def test_shadow_priced_cost_reports_a_neutral_applied_factor() -> None:
     assert breakdown.other_gate_factor == pytest.approx(0.79832)
 
 
+def _with_memory_factor(*, applied_bps: int | None) -> dict[str, Any]:
+    evidence = priced_gate_evidence()
+    evidence["memory_factor"] = {
+        "posture": "enforce" if applied_bps is not None else "shadow",
+        "applied": applied_bps is not None,
+        "result": "measured",
+        "p95_bytes": 1280 << 20,
+        "peak_bytes": 1400 << 20,
+        "limit_bytes": 2048 << 20,
+        "free_bytes": 512 << 20,
+        "samples": 300,
+        "floor_bps": 9000,
+        "factor_bps": 9500,
+        "applied_factor_bps": applied_bps if applied_bps is not None else 10_000,
+    }
+    return evidence
+
+
+def test_shadow_memory_factor_stays_off_the_public_breakdown() -> None:
+    """SN-500: a shadow factor is operator evidence, not public arithmetic."""
+    breakdown = public_dueling_breakdown(
+        bench_version=16,
+        dueling=dueling_report(),
+        gate_evidence=_with_memory_factor(applied_bps=None),
+    )
+    assert breakdown is not None
+    assert breakdown.memory_factor_applied_factor_bps is None
+    assert breakdown.memory_factor is None
+    assert breakdown.memory_factor_p95_bytes is None
+    assert breakdown.other_gate_factor == pytest.approx(0.85)
+
+
+def test_applied_memory_factor_is_shown_and_divided_out_of_other_gates() -> None:
+    breakdown = public_dueling_breakdown(
+        bench_version=16,
+        dueling=dueling_report(),
+        gate_evidence=_with_memory_factor(applied_bps=9500),
+    )
+    assert breakdown is not None
+    assert breakdown.memory_factor_applied_factor_bps == 9500
+    assert breakdown.memory_factor == pytest.approx(0.95)
+    assert breakdown.memory_factor_p95_bytes == 1280 << 20
+    # datagen_gate = priced x memory x every other gate.
+    assert breakdown.other_gate_factor == pytest.approx(0.79832 / (0.9392 * 0.95))
+
+
 @pytest.mark.parametrize(
     ("bench_version", "dueling", "gate_evidence"),
     [

@@ -833,6 +833,27 @@
             "minimum": 1,
             "type": "integer"
           },
+          "memory_factor_floor_bps": {
+            "default": 9000,
+            "maximum": 10000,
+            "minimum": 5000,
+            "type": "integer"
+          },
+          "memory_factor_free_mib": {
+            "default": 512,
+            "maximum": 32768,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_factor_posture": {
+            "default": "shadow",
+            "enum": [
+              "off",
+              "shadow",
+              "enforce"
+            ],
+            "type": "string"
+          },
           "relay_delay_fingerprint_max_ms": {
             "default": 250,
             "maximum": 5000,

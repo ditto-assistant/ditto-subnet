@@ -306,6 +306,9 @@ export function InferenceConcurrencyControlPanel({
             embedding_global_requests_per_minute: parsed.embedding_global_requests_per_minute,
             danilabs_percent: parsedDaniPercent,
             benchmark_runtime: {
+              // Keep the fields this panel does not edit (the SN-500 memory
+              // factor policy): a revision is never a diff.
+              ...effective.settings.benchmark_runtime,
               case_concurrency: parsedCaseConcurrency,
               relay_delay_fingerprint_mode: delayMode,
               relay_delay_fingerprint_min_ms: parsedDelayMinMs,

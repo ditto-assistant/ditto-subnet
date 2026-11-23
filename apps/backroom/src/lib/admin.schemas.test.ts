@@ -173,6 +173,9 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
         sandbox_memory_limit_mib: 6144,
+        memory_factor_posture: 'shadow',
+        memory_factor_free_mib: 512,
+        memory_factor_floor_bps: 9000,
       },
     }
     expect(MAX_CHAT_REQUEST_BUDGET).toBe(32768)
@@ -205,6 +208,9 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
         sandbox_memory_limit_mib: 6144,
+        memory_factor_posture: 'shadow',
+        memory_factor_free_mib: 512,
+        memory_factor_floor_bps: 9000,
       },
     }
     expect(MAX_CHAT_TOKEN_BUDGET).toBe(200_000_000)
@@ -237,6 +243,9 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
         sandbox_memory_limit_mib: 6144,
+        memory_factor_posture: 'shadow',
+        memory_factor_free_mib: 512,
+        memory_factor_floor_bps: 9000,
       },
     }
     expect(MAX_CHAT_CONCURRENCY).toBe(512)
@@ -272,6 +281,9 @@ describe('admin API schemas', () => {
       relay_delay_fingerprint_min_ms: 25,
       relay_delay_fingerprint_max_ms: 250,
       sandbox_memory_limit_mib: 6144,
+      memory_factor_posture: 'shadow',
+      memory_factor_free_mib: 512,
+      memory_factor_floor_bps: 9000,
     })
     expect(() =>
       setInferenceConcurrencySettingsInputSchema.parse({
@@ -300,6 +312,9 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
         sandbox_memory_limit_mib: 6144,
+        memory_factor_posture: 'shadow',
+        memory_factor_free_mib: 512,
+        memory_factor_floor_bps: 9000,
       },
     }
     const write = (extra: Record<string, unknown>) =>
