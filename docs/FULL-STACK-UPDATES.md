@@ -103,7 +103,9 @@ drain and are bounded separately by `VALIDATOR_AUTO_UPDATE_PULL_TIMEOUT_SECONDS`
 validator left drained with no transaction journal is resumed on the next run
 tick, so drain it by hand only with the timers disabled. Crashes recover
 from the journal, and once `USR2` may have fired the updater refuses to
-recreate the validator without a new drained acknowledgement. Named volumes
+recreate the validator without a new drained acknowledgement. That includes an
+interrupted rollback: a restored previous stack that already resumed is kept,
+a drained one is resumed in place, and an ambiguous one keeps its journal. Named volumes
 and the wallet bind survive the transaction; unrelated containers are never
 touched; no managed update ever builds from source.
 

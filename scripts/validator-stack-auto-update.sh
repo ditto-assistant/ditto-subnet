@@ -969,6 +969,38 @@ resume_stray_drain() {
   resume_and_verify "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || die "drained validator did not resume"
 }
 
+# rollback_ready is journaled once the restored previous stack is drained and
+# healthy, just before its USR2. The resume may already have landed, and the
+# previous tree may already have been promoted to current, so recover like a
+# committed transaction: finish a resumed stack, resume a drained one, and
+# recreate it only when its validator is not running at all.
+recover_rollback_ready() {
+  local previous_ref="$1" dir container state
+  if [ "$(cat "$CURRENT_DIR/.descriptor-ref" 2>/dev/null || true)" = "$previous_ref" ]; then
+    dir="$CURRENT_DIR"
+  elif [ -d "$PREVIOUS_DIR" ] && [ "$(cat "$PREVIOUS_DIR/.descriptor-ref" 2>/dev/null || true)" = "$previous_ref" ]; then
+    dir="$PREVIOUS_DIR"
+  else
+    die "rollback journal names no installed release tree; refusing an unsafe recovery"
+  fi
+  container="$(service_container "$dir" ditto-subnet)"; state="$(runtime_state "$container")"
+  if state_ready "$state" "$container" && stack_services_healthy "$dir" && assert_stack_matches "$dir"; then
+    log "restored previous validator already resumed; completing the rollback"
+  elif wait_stack_quiescent "$dir" "$ready_timeout" "$check_seconds"; then
+    resume_and_verify "$dir" "$ready_timeout" "$check_seconds" || die "restored previous validator may be working; refusing to recreate it"
+  else
+    [ "$(docker_bounded inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)" != true ] || state_drained "$state" "$container" || \
+      die "restored previous validator state is ambiguous; refusing to recreate a possibly working stack"
+    if [ "$dir" = "$CURRENT_DIR" ]; then
+      restore_release "$CURRENT_DIR" || die "could not recover the previous complete stack"
+    else
+      rollback_to_previous "$previous_ref" || die "could not recover the previous complete stack"
+    fi
+  fi
+  promote_previous_after_rollback "$previous_ref" || die "could not promote the restored previous release"
+  record_managed "$previous_ref"
+}
+
 recover_transaction() {
   local phase previous candidate container state
   [ -f "$TRANSACTION_FILE" ] || return 0
@@ -987,8 +1019,12 @@ recover_transaction() {
         restore_release "$CURRENT_DIR" || die "previous complete stack stopped and could not be restored"
       fi
       ;;
-    old_stopped|candidate_started|rollback_pending|rollback_ready)
+    old_stopped|candidate_started|rollback_pending)
       rollback_to_previous "$previous" || die "could not recover the previous complete stack"
+      record_failed_candidate "$candidate" transaction_interrupted
+      ;;
+    rollback_ready)
+      recover_rollback_ready "$previous"
       record_failed_candidate "$candidate" transaction_interrupted
       ;;
     committed)

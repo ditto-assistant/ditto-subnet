@@ -2397,7 +2397,7 @@ def test_legacy_validator_only_state_is_not_silently_adopted(
 
 
 @pytest.mark.parametrize(
-    "phase", ["old_stopped", "candidate_started", "rollback_pending"]
+    "phase", ["old_stopped", "candidate_started", "rollback_pending", "rollback_ready"]
 )
 def test_recover_restores_the_complete_previous_stack_after_crash_phase(
     stack_updater_env: tuple[dict[str, str], Path, Path, Path],
@@ -2430,6 +2430,111 @@ def test_recover_restores_the_complete_previous_stack_after_crash_phase(
     assert all(container["running"] for container in final["containers"].values())
     assert final["runtime_state"]["state"] == "working"
     assert len([call for call in final["compose_calls"] if "up" in call]) == 2
+
+
+def _journal_rollback_ready(
+    env: dict[str, str],
+    state_path: Path,
+    state_dir: Path,
+    *,
+    promoted: bool,
+    runtime: dict[str, object],
+) -> None:
+    """Leave the journal where a rollback died after recording rollback_ready.
+
+    ``promoted=False`` is the committed-candidate rollback before promotion:
+    the failed candidate is still the current tree and the restored release is
+    the previous one. ``promoted=True`` is after promotion, or a rollback from
+    an earlier phase, where the current tree is already the restored release.
+    """
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    if promoted:
+        shutil.copytree(state_dir / "current", state_dir / "previous")
+    else:
+        (state_dir / "current").rename(state_dir / "previous")
+        state = json.loads(state_path.read_text())
+        shutil.copytree(state["descriptor_dirs"][STACK_DIGEST], state_dir / "current")
+        (state_dir / "current/.descriptor-ref").write_text(STACK_DIGEST + "\n")
+    (state_dir / "transaction.env").write_text(
+        f"PHASE=rollback_ready\nPREVIOUS_RELEASE={OLD_STACK_DIGEST}\n"
+        f"CANDIDATE_RELEASE={STACK_DIGEST}\n"
+    )
+    state = json.loads(state_path.read_text())
+    state["runtime_state"].update(runtime)
+    state["calls"] = []
+    state["compose_calls"] = []
+    state_path.write_text(json.dumps(state))
+
+
+@pytest.mark.parametrize("promoted", [False, True])
+def test_rollback_ready_recovery_keeps_a_resumed_working_stack(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+    promoted: bool,
+) -> None:
+    """#2983: the restored validator resumed before the journal was cleared."""
+    env, state_path, state_dir, _ = stack_updater_env
+    _journal_rollback_ready(
+        env, state_path, state_dir, promoted=promoted, runtime={"state": "working"}
+    )
+
+    result = _run_updater(env, "recover")
+
+    assert result.returncode == 0, result.stderr
+    final = json.loads(state_path.read_text())
+    assert not any("up" in call for call in final["compose_calls"])
+    assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
+    assert not (state_dir / "transaction.env").exists()
+    assert _manifest(state_dir / "managed-release.env") == {
+        "STACK_RELEASE": OLD_STACK_DIGEST
+    }
+    current = (state_dir / "current/.descriptor-ref").read_text().strip()
+    assert current == OLD_STACK_DIGEST
+    assert _manifest(state_dir / "failed-candidate")["CANDIDATE"] == STACK_DIGEST
+
+
+def test_rollback_ready_recovery_resumes_a_drained_stack_without_recreating(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    _journal_rollback_ready(
+        env, state_path, state_dir, promoted=False, runtime={"state": "drained"}
+    )
+
+    result = _run_updater(env, "recover")
+
+    assert result.returncode == 0, result.stderr
+    final = json.loads(state_path.read_text())
+    assert not any("up" in call for call in final["compose_calls"])
+    assert ["kill", "--signal=USR2", "ditto-subnet-container"] in final["calls"]
+    assert final["runtime_state"]["state"] == "working"
+    assert not (state_dir / "transaction.env").exists()
+    current = (state_dir / "current/.descriptor-ref").read_text().strip()
+    assert current == OLD_STACK_DIGEST
+
+
+def test_rollback_ready_recovery_refuses_an_ambiguous_running_validator(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    """A running validator that is neither freshly accepted nor drained may be
+    working; recovery keeps the journal instead of recreating under it."""
+    env, state_path, state_dir, _ = stack_updater_env
+    _journal_rollback_ready(
+        env,
+        state_path,
+        state_dir,
+        promoted=False,
+        runtime={"state": "working", "platform_accepted": False},
+    )
+
+    result = _run_updater(env, "recover")
+
+    assert result.returncode != 0
+    assert "state is ambiguous" in result.stderr
+    final = json.loads(state_path.read_text())
+    assert not any("up" in call for call in final["compose_calls"])
+    assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
+    assert (state_dir / "transaction.env").exists()
 
 
 def test_reconfigure_recreates_the_current_release_from_host_environment(
