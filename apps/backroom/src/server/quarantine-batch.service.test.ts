@@ -106,6 +106,77 @@ describe('screening quarantine batch execution', () => {
     expect(result.items[2].message).toContain('submission status changed')
   })
 
+  it('fails a decision Platform cannot find and reports no ruling for unconfirmed rows', async () => {
+    const ruling = {
+      agent_status: 'rejected',
+      artifact_sha256: 'ab'.repeat(32),
+      ath_review_id: null,
+      ath_action_id: null,
+      ath_resolved_at: null,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(timeout)
+      .mockResolvedValueOnce(
+        Response.json({
+          preview_token: 'fresh',
+          expires_at: '2026-11-24T23:00:00Z',
+          items: [
+            previewItem(ids[0], 'not_found', 'quarantine not found'),
+            {
+              ...previewItem(ids[1], 'ready', 'will close the orphaned quarantine'),
+              terminal_reconciliation: true,
+              terminal_ruling: ruling,
+            },
+          ],
+          ready_count: 1,
+          already_applied_count: 0,
+          blocked_count: 1,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await executeScreeningQuarantineBatch(
+      { ...input, decisions: decisions.slice(0, 2) },
+      'operator@example.com',
+    )
+
+    expect(result).toMatchObject({ failed_count: 1, unconfirmed_count: 1, already_applied_count: 0 })
+    expect(result.items[0]).toMatchObject({ status: 'failed', message: 'Not applied: quarantine not found' })
+    // The preview's ruling belongs to the proposed decision, not an outcome.
+    expect(result.items[1]).toMatchObject({
+      status: 'unconfirmed',
+      terminal_reconciliation: false,
+      terminal_ruling: null,
+    })
+  })
+
+  it('reads back after a gateway timeout answer', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('upstream request timeout', { status: 504 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          preview_token: 'fresh',
+          expires_at: '2026-11-24T23:00:00Z',
+          items: [previewItem(ids[0], 'already_applied', 'this exact operator decision is already recorded')],
+          ready_count: 0,
+          already_applied_count: 1,
+          blocked_count: 0,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await executeScreeningQuarantineBatch(
+      { ...input, decisions: decisions.slice(0, 1) },
+      'operator@example.com',
+    )
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({ reconciled_after: 'gateway', already_applied_count: 1 })
+    expect(result.items[0].message).toContain('timed out')
+  })
+
   it('keeps the uncertainty when the read-back fails too', async () => {
     const fetchMock = vi.fn().mockImplementation(timeout)
     vi.stubGlobal('fetch', fetchMock)

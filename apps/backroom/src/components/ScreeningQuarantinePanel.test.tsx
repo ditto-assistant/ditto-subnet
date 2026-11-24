@@ -706,7 +706,7 @@ describe('ScreeningQuarantinePanel', () => {
       screen.getByRole('button', { name: 'Confirm and execute reviewed decisions' }),
     )
     await waitFor(() =>
-      expect(screen.getByText(/read back from Platform: 1 recorded, 1 not confirmed/)).toBeTruthy(),
+      expect(screen.getByText(/read back from Platform: 1 recorded, 0 failed, 1 not confirmed/)).toBeTruthy(),
     )
     expect(screen.getByText(/aaaaaaaa…: Not confirmed after the batch request timed out/)).toBeTruthy()
     // The unconfirmed row stays selected for the next preview; the recorded one leaves.

@@ -461,7 +461,7 @@ export function ScreeningQuarantinePanel({
       await refresh()
       setNotice(
         result.reconciled_after
-          ? `The batch request ${result.reconciled_after === 'timeout' ? 'timed out' : 'lost its answer'}; read back from Platform: ${result.already_applied_count} recorded, ${result.unconfirmed_count} not confirmed. Preview again before executing the rest.`
+          ? `The batch request ${result.reconciled_after === 'timeout' ? 'timed out' : result.reconciled_after === 'gateway' ? 'got a gateway error' : 'lost its answer'}; read back from Platform: ${result.already_applied_count} recorded, ${result.failed_count} failed, ${result.unconfirmed_count} not confirmed. Preview again before executing the rest.`
           : `${result.applied_count} applied, ${result.already_applied_count} already recorded, ${result.failed_count} failed.`,
       )
       if (result.failed_count > 0 || result.unconfirmed_count > 0) {

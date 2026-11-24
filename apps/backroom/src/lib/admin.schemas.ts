@@ -6940,7 +6940,7 @@ export const screeningQuarantineBatchExecuteResponseSchema = z.object({
   unconfirmed_count: z.number().int().nonnegative().default(0),
   // Set when the batch request's answer was lost and these rows are a
   // read-back of what Platform recorded, not its answer to the batch.
-  reconciled_after: z.enum(['timeout', 'transport']).nullable().default(null),
+  reconciled_after: z.enum(['timeout', 'transport', 'gateway']).nullable().default(null),
 })
 
 export const quarantineContextInputSchema = z.object({
