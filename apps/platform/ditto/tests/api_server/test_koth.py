@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -200,6 +204,45 @@ def test_wire_projection_uses_modern_continual_history_for_the_crown() -> None:
     decision = _dethrone_decision(lifted[1], lifted[0])
     assert decision.method == "paired"
     assert decision.dethrones
+
+
+_LEGACY_LEDGER = json.loads(
+    (
+        Path(__file__).resolve().parents[5]
+        / "ditto/tests/fixtures/legacy_confirmation_ledger.json"
+    ).read_text()
+)["cases"]
+
+
+@pytest.mark.parametrize(
+    "case", _LEGACY_LEDGER, ids=[case["name"] for case in _LEGACY_LEDGER]
+)
+def test_pin_folds_legacy_confirmation_arrays_as_the_validator_does(
+    case: dict[str, Any],
+) -> None:
+    """#2990: legacy in-row arrays with no modern history are a median, not
+    completed waves. ``ditto/tests/validator/test_dethrone_band.py`` folds these
+    exact served bytes through the validator and asserts the same shares."""
+    from ditto.api_models import LedgerEntry
+    from ditto.api_server.ledger_pin import pin_expected_shares
+
+    for item in case["entries"]:
+        assert LedgerEntry.model_validate(item).model_dump(mode="json") == item
+    pin = SimpleNamespace(
+        entries=case["entries"], context={"served": {}}, incumbent_agent_id=None
+    )
+    projection = project_koth(
+        koth_entries_from_ledger(
+            [LedgerEntry.model_validate(item) for item in case["entries"]]
+        )
+    )
+    shares = pin_expected_shares(pin)
+
+    assert projection is not None
+    assert projection.champion.miner_hotkey == case["champion"]
+    assert shares is not None
+    assert sorted(shares, key=lambda hotkey: -shares[hotkey]) == case["order"]
+    assert shares == pytest.approx(case["expected_miner_shares"])
 
 
 @pytest.mark.parametrize("bench_version", [9, 14])

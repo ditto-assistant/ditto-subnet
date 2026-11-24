@@ -7,14 +7,23 @@ max(fixed composite-point margin, z·√(se_c² + se_champ²)). With no per-entr
 
 from __future__ import annotations
 
+import json
 import math
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
 import pytest
 
+from ditto.api_models.validator import LedgerEntry
+from ditto.validator.config import (
+    KOTH_DETHRONE_Z,
+    KOTH_MARGIN,
+    KOTH_RANK_SHARES,
+    KOTH_TAIL_SIZE,
+)
 from ditto.validator.crn import confirmation_seeds
 from ditto.validator.weights import (
     _beats,
@@ -1710,3 +1719,38 @@ class TestCrownIncumbency:
             )[0].agent_id
             == holder.agent_id
         )
+
+
+_LEGACY_LEDGER = json.loads(
+    (
+        Path(__file__).resolve().parents[1] / "fixtures/legacy_confirmation_ledger.json"
+    ).read_text()
+)["cases"]
+
+
+@pytest.mark.parametrize(
+    "case", _LEGACY_LEDGER, ids=[case["name"] for case in _LEGACY_LEDGER]
+)
+def test_legacy_confirmation_arrays_fold_as_their_median(case: dict[str, Any]) -> None:
+    """#2990: the served bytes Platform's pin projection folds in
+    ``apps/platform/ditto/tests/api_server/test_koth.py``. Legacy in-row arrays
+    without modern history are a median, never completed continual waves, so
+    the champion and shares here are the ones the epoch pin must record."""
+    entries = [LedgerEntry.model_validate(item) for item in case["entries"]]
+
+    champion = select_champion(entries, margin=KOTH_MARGIN, dethrone_z=KOTH_DETHRONE_Z)
+    weights = compute_weights(
+        entries,
+        margin=KOTH_MARGIN,
+        tail_size=KOTH_TAIL_SIZE,
+        rank_shares=KOTH_RANK_SHARES,
+        dethrone_z=KOTH_DETHRONE_Z,
+    )
+    total = sum(weights.values())
+
+    assert champion is not None
+    assert champion.miner_hotkey == case["champion"]
+    assert sorted(weights, key=lambda hotkey: -weights[hotkey]) == case["order"]
+    assert {hotkey: weight / total for hotkey, weight in weights.items()} == (
+        pytest.approx(case["expected_miner_shares"])
+    )

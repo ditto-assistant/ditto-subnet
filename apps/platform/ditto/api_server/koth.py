@@ -174,24 +174,28 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
     for entry in entries:
         receipt = entry.v9_confirmation
         history = _confirmation_history(entry)
+        # Without modern history the legacy in-row arrays travel unpaired, as
+        # the validator reads them: ``_confirmations`` folds their median for
+        # the continual aggregate, and ``_seed_composites`` refuses a seed
+        # list that is missing or misaligned before any paired comparison.
         confirmations = (
             tuple(history.values())
             if history is not None
-            else entry.confirmation_composites
+            else (
+                None
+                if entry.confirmation_composites is None
+                else tuple(entry.confirmation_composites)
+            )
         )
         seeds = (
-            tuple(history.keys()) if history is not None else entry.confirmation_seeds
+            tuple(history.keys())
+            if history is not None
+            else (
+                None
+                if entry.confirmation_seeds is None
+                else tuple(entry.confirmation_seeds)
+            )
         )
-        paired_composites: tuple[float, ...] | None = None
-        paired_seeds: tuple[int, ...] | None = None
-        if (
-            confirmations is not None
-            and seeds is not None
-            and len(confirmations) == len(seeds)
-            and len(confirmations) >= 2
-        ):
-            paired_composites = tuple(confirmations)
-            paired_seeds = tuple(seeds)
         lifted.append(
             KothEntry(
                 miner_hotkey=entry.miner_hotkey,
@@ -210,22 +214,20 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
                     if receipt is not None
                     else tuple(proof.composite for proof in entry.score_proofs)
                 ),
+                # Only modern history under the activation marker is a set of
+                # completed waves. Legacy in-row arrays (the stale-champion
+                # sweep, the contested-dethrone rescore) fold as their median,
+                # exactly as the validator's ``_continual_composite`` does
+                # (#2990).
                 completed_wave_composites=(
-                    ()
-                    if receipt is not None
-                    else (
-                        tuple(history.values())
-                        if history is not None
-                        and entry.continual_aggregate_method == "mean_after_quorum"
-                        else (
-                            ()
-                            if entry.confirmation_composites is None
-                            else tuple(entry.confirmation_composites)
-                        )
-                    )
+                    tuple(history.values())
+                    if receipt is None
+                    and history is not None
+                    and entry.continual_aggregate_method == "mean_after_quorum"
+                    else ()
                 ),
-                confirmation_composites=paired_composites,
-                confirmation_seeds=paired_seeds,
+                confirmation_composites=confirmations,
+                confirmation_seeds=seeds,
                 efficiency_bonus=entry.efficiency_bonus,
                 efficiency_factor=entry.efficiency_factor,
                 efficiency_curve_version=entry.efficiency_curve_version,

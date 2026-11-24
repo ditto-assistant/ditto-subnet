@@ -1,0 +1,711 @@
+{
+  "_comment": "Served /scoring/scores entries with legacy in-row confirmation arrays and no confirmation_history (#2990). The Platform pin projection (apps/platform/ditto/tests/api_server/test_koth.py) and the validator fold (ditto/tests/validator/test_dethrone_band.py) parse these exact bytes and must crown the same champion and pay the same shares: legacy arrays fold as their median, never as completed continual waves.",
+  "cases": [
+    {
+      "champion": "5Alphaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "entries": [
+        {
+          "agent_id": "00000000-0000-0000-0000-000000000001",
+          "bench_version": 14,
+          "composite": 0.9,
+          "composite_stderr": 0.002,
+          "confirmation_composites": null,
+          "confirmation_history": null,
+          "confirmation_seeds": null,
+          "continual_aggregate_method": "mean_after_quorum",
+          "effective_composite": null,
+          "efficiency_bonus": null,
+          "efficiency_curve_version": null,
+          "efficiency_factor": null,
+          "first_seen": "2026-09-20T12:00:00Z",
+          "miner_hotkey": "5Alphaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "n": 114,
+          "run_id": "run-Alpha",
+          "score_proofs": [
+            {
+              "bench_version": 14,
+              "composite": 0.9,
+              "run_id": "run-Alpha-0",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.9,
+              "run_id": "run-Alpha-1",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.9,
+              "run_id": "run-Alpha-2",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vcccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          ],
+          "seed": 42,
+          "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+          "signature": null,
+          "size_bytes": null,
+          "status": "scored",
+          "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "agent_id": "00000000-0000-0000-0000-000000000002",
+          "bench_version": 14,
+          "composite": 0.8,
+          "composite_stderr": 0.002,
+          "confirmation_composites": [
+            0.7,
+            0.71,
+            0.69
+          ],
+          "confirmation_history": null,
+          "confirmation_seeds": [
+            101,
+            102,
+            103
+          ],
+          "continual_aggregate_method": "mean_after_quorum",
+          "effective_composite": null,
+          "efficiency_bonus": null,
+          "efficiency_curve_version": null,
+          "efficiency_factor": null,
+          "first_seen": "2026-09-20T13:00:00Z",
+          "miner_hotkey": "5Bravoxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "n": 114,
+          "run_id": "run-Bravo",
+          "score_proofs": [
+            {
+              "bench_version": 14,
+              "composite": 0.8,
+              "run_id": "run-Bravo-0",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.8,
+              "run_id": "run-Bravo-1",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.8,
+              "run_id": "run-Bravo-2",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vcccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          ],
+          "seed": 42,
+          "sha256": "0202020202020202020202020202020202020202020202020202020202020202",
+          "signature": null,
+          "size_bytes": null,
+          "status": "scored",
+          "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "agent_id": "00000000-0000-0000-0000-000000000003",
+          "bench_version": 14,
+          "composite": 0.74,
+          "composite_stderr": 0.002,
+          "confirmation_composites": null,
+          "confirmation_history": null,
+          "confirmation_seeds": null,
+          "continual_aggregate_method": "mean_after_quorum",
+          "effective_composite": null,
+          "efficiency_bonus": null,
+          "efficiency_curve_version": null,
+          "efficiency_factor": null,
+          "first_seen": "2026-09-20T14:00:00Z",
+          "miner_hotkey": "5Charliexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "n": 114,
+          "run_id": "run-Charlie",
+          "score_proofs": [
+            {
+              "bench_version": 14,
+              "composite": 0.74,
+              "run_id": "run-Charlie-0",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.74,
+              "run_id": "run-Charlie-1",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.74,
+              "run_id": "run-Charlie-2",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vcccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          ],
+          "seed": 42,
+          "sha256": "0303030303030303030303030303030303030303030303030303030303030303",
+          "signature": null,
+          "size_bytes": null,
+          "status": "scored",
+          "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "expected_miner_shares": {
+        "5Alphaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": 0.7303370786516854,
+        "5Bravoxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": 0.11235955056179776,
+        "5Charliexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": 0.15730337078651688
+      },
+      "name": "tail: legacy arrays, mean_after_quorum marker, no history",
+      "order": [
+        "5Alphaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "5Charliexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "5Bravoxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    {
+      "champion": "5Alphaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "entries": [
+        {
+          "agent_id": "00000000-0000-0000-0000-000000000001",
+          "bench_version": 14,
+          "composite": 0.9,
+          "composite_stderr": 0.002,
+          "confirmation_composites": null,
+          "confirmation_history": null,
+          "confirmation_seeds": null,
+          "continual_aggregate_method": null,
+          "effective_composite": null,
+          "efficiency_bonus": null,
+          "efficiency_curve_version": null,
+          "efficiency_factor": null,
+          "first_seen": "2026-09-20T12:00:00Z",
+          "miner_hotkey": "5Alphaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "n": 114,
+          "run_id": "run-Alpha",
+          "score_proofs": [
+            {
+              "bench_version": 14,
+              "composite": 0.9,
+              "run_id": "run-Alpha-0",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.9,
+              "run_id": "run-Alpha-1",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.9,
+              "run_id": "run-Alpha-2",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vcccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          ],
+          "seed": 42,
+          "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+          "signature": null,
+          "size_bytes": null,
+          "status": "scored",
+          "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "agent_id": "00000000-0000-0000-0000-000000000002",
+          "bench_version": 14,
+          "composite": 0.8,
+          "composite_stderr": 0.002,
+          "confirmation_composites": [
+            0.7,
+            0.71,
+            0.69
+          ],
+          "confirmation_history": null,
+          "confirmation_seeds": [
+            101,
+            102,
+            103
+          ],
+          "continual_aggregate_method": null,
+          "effective_composite": null,
+          "efficiency_bonus": null,
+          "efficiency_curve_version": null,
+          "efficiency_factor": null,
+          "first_seen": "2026-09-20T13:00:00Z",
+          "miner_hotkey": "5Bravoxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "n": 114,
+          "run_id": "run-Bravo",
+          "score_proofs": [
+            {
+              "bench_version": 14,
+              "composite": 0.8,
+              "run_id": "run-Bravo-0",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.8,
+              "run_id": "run-Bravo-1",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.8,
+              "run_id": "run-Bravo-2",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vcccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          ],
+          "seed": 42,
+          "sha256": "0202020202020202020202020202020202020202020202020202020202020202",
+          "signature": null,
+          "size_bytes": null,
+          "status": "scored",
+          "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "agent_id": "00000000-0000-0000-0000-000000000003",
+          "bench_version": 14,
+          "composite": 0.74,
+          "composite_stderr": 0.002,
+          "confirmation_composites": null,
+          "confirmation_history": null,
+          "confirmation_seeds": null,
+          "continual_aggregate_method": null,
+          "effective_composite": null,
+          "efficiency_bonus": null,
+          "efficiency_curve_version": null,
+          "efficiency_factor": null,
+          "first_seen": "2026-09-20T14:00:00Z",
+          "miner_hotkey": "5Charliexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "n": 114,
+          "run_id": "run-Charlie",
+          "score_proofs": [
+            {
+              "bench_version": 14,
+              "composite": 0.74,
+              "run_id": "run-Charlie-0",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.74,
+              "run_id": "run-Charlie-1",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.74,
+              "run_id": "run-Charlie-2",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vcccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          ],
+          "seed": 42,
+          "sha256": "0303030303030303030303030303030303030303030303030303030303030303",
+          "signature": null,
+          "size_bytes": null,
+          "status": "scored",
+          "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "expected_miner_shares": {
+        "5Alphaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": 0.7303370786516854,
+        "5Bravoxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": 0.11235955056179776,
+        "5Charliexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": 0.15730337078651688
+      },
+      "name": "tail: legacy arrays without the marker",
+      "order": [
+        "5Alphaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "5Charliexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "5Bravoxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    {
+      "champion": "5Alphaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "entries": [
+        {
+          "agent_id": "00000000-0000-0000-0000-000000000001",
+          "bench_version": 14,
+          "composite": 0.9,
+          "composite_stderr": 0.002,
+          "confirmation_composites": null,
+          "confirmation_history": null,
+          "confirmation_seeds": null,
+          "continual_aggregate_method": "mean_after_quorum",
+          "effective_composite": null,
+          "efficiency_bonus": null,
+          "efficiency_curve_version": null,
+          "efficiency_factor": null,
+          "first_seen": "2026-09-20T12:00:00Z",
+          "miner_hotkey": "5Alphaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "n": 114,
+          "run_id": "run-Alpha",
+          "score_proofs": [
+            {
+              "bench_version": 14,
+              "composite": 0.9,
+              "run_id": "run-Alpha-0",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.9,
+              "run_id": "run-Alpha-1",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.9,
+              "run_id": "run-Alpha-2",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vcccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          ],
+          "seed": 42,
+          "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+          "signature": null,
+          "size_bytes": null,
+          "status": "scored",
+          "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "agent_id": "00000000-0000-0000-0000-000000000002",
+          "bench_version": 14,
+          "composite": 0.8,
+          "composite_stderr": 0.002,
+          "confirmation_composites": [
+            0.7,
+            0.71,
+            0.69
+          ],
+          "confirmation_history": null,
+          "confirmation_seeds": null,
+          "continual_aggregate_method": "mean_after_quorum",
+          "effective_composite": null,
+          "efficiency_bonus": null,
+          "efficiency_curve_version": null,
+          "efficiency_factor": null,
+          "first_seen": "2026-09-20T13:00:00Z",
+          "miner_hotkey": "5Bravoxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "n": 114,
+          "run_id": "run-Bravo",
+          "score_proofs": [
+            {
+              "bench_version": 14,
+              "composite": 0.8,
+              "run_id": "run-Bravo-0",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.8,
+              "run_id": "run-Bravo-1",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.8,
+              "run_id": "run-Bravo-2",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vcccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          ],
+          "seed": 42,
+          "sha256": "0202020202020202020202020202020202020202020202020202020202020202",
+          "signature": null,
+          "size_bytes": null,
+          "status": "scored",
+          "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "agent_id": "00000000-0000-0000-0000-000000000003",
+          "bench_version": 14,
+          "composite": 0.74,
+          "composite_stderr": 0.002,
+          "confirmation_composites": null,
+          "confirmation_history": null,
+          "confirmation_seeds": null,
+          "continual_aggregate_method": "mean_after_quorum",
+          "effective_composite": null,
+          "efficiency_bonus": null,
+          "efficiency_curve_version": null,
+          "efficiency_factor": null,
+          "first_seen": "2026-09-20T14:00:00Z",
+          "miner_hotkey": "5Charliexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "n": 114,
+          "run_id": "run-Charlie",
+          "score_proofs": [
+            {
+              "bench_version": 14,
+              "composite": 0.74,
+              "run_id": "run-Charlie-0",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.74,
+              "run_id": "run-Charlie-1",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.74,
+              "run_id": "run-Charlie-2",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vcccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          ],
+          "seed": 42,
+          "sha256": "0303030303030303030303030303030303030303030303030303030303030303",
+          "signature": null,
+          "size_bytes": null,
+          "status": "scored",
+          "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "expected_miner_shares": {
+        "5Alphaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": 0.7303370786516854,
+        "5Bravoxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": 0.11235955056179776,
+        "5Charliexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": 0.15730337078651688
+      },
+      "name": "tail: legacy composites served without seeds",
+      "order": [
+        "5Alphaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "5Charliexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "5Bravoxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    {
+      "champion": "5Seniorxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "entries": [
+        {
+          "agent_id": "00000000-0000-0000-0000-000000000001",
+          "bench_version": 14,
+          "composite": 0.8,
+          "composite_stderr": 0.002,
+          "confirmation_composites": null,
+          "confirmation_history": null,
+          "confirmation_seeds": null,
+          "continual_aggregate_method": "mean_after_quorum",
+          "effective_composite": null,
+          "efficiency_bonus": null,
+          "efficiency_curve_version": null,
+          "efficiency_factor": null,
+          "first_seen": "2026-09-20T12:00:00Z",
+          "miner_hotkey": "5Seniorxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "n": 114,
+          "run_id": "run-Senior",
+          "score_proofs": [
+            {
+              "bench_version": 14,
+              "composite": 0.8,
+              "run_id": "run-Senior-0",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.8,
+              "run_id": "run-Senior-1",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.8,
+              "run_id": "run-Senior-2",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vcccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          ],
+          "seed": 42,
+          "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+          "signature": null,
+          "size_bytes": null,
+          "status": "scored",
+          "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "agent_id": "00000000-0000-0000-0000-000000000002",
+          "bench_version": 14,
+          "composite": 0.95,
+          "composite_stderr": 0.002,
+          "confirmation_composites": [
+            0.7,
+            0.71,
+            0.69
+          ],
+          "confirmation_history": null,
+          "confirmation_seeds": [
+            201,
+            202,
+            203
+          ],
+          "continual_aggregate_method": "mean_after_quorum",
+          "effective_composite": null,
+          "efficiency_bonus": null,
+          "efficiency_curve_version": null,
+          "efficiency_factor": null,
+          "first_seen": "2026-09-20T13:00:00Z",
+          "miner_hotkey": "5Xrayxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "n": 114,
+          "run_id": "run-Xray",
+          "score_proofs": [
+            {
+              "bench_version": 14,
+              "composite": 0.95,
+              "run_id": "run-Xray-0",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.95,
+              "run_id": "run-Xray-1",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
+              "bench_version": 14,
+              "composite": 0.95,
+              "run_id": "run-Xray-2",
+              "seed": 42,
+              "signature": null,
+              "ticket_deadline": null,
+              "transcript_sha256": null,
+              "validator_hotkey": "5Vcccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          ],
+          "seed": 42,
+          "sha256": "0202020202020202020202020202020202020202020202020202020202020202",
+          "signature": null,
+          "size_bytes": null,
+          "status": "scored",
+          "validator_hotkey": "5Vaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "expected_miner_shares": {
+        "5Seniorxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": 0.8227848101265822,
+        "5Xrayxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": 0.17721518987341772
+      },
+      "name": "champion: legacy arrays must not lift a challenger over the king",
+      "order": [
+        "5Seniorxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "5Xrayxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    }
+  ]
+}
