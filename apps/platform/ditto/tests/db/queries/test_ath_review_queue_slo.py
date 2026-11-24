@@ -352,7 +352,9 @@ class TestMixedQueue:
             ath_thresholds=QueueAgeThresholds(
                 max_actionable_age_seconds=5 * 3600, p95_age_seconds=3600
             ),
-            copy_thresholds=QueueAgeThresholds(max_actionable_age_seconds=3 * 3600),
+            class_thresholds={
+                "copy": QueueAgeThresholds(max_actionable_age_seconds=3 * 3600)
+            },
         )
 
         assert snapshot.ath.backlog_count == 5

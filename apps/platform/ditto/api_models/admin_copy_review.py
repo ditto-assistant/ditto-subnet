@@ -32,6 +32,20 @@ class AdminDeferredReviewEvidence(BaseModel):
     review_audit: ScreenReviewAudit | None = None
 
 
+class AdminCopyReviewReferenceRelease(BaseModel):
+    """Publication of a copy hold's reference, relative to the held upload."""
+
+    reference_agent_id: UUID
+    published_at: datetime | None = None
+    """Earliest public release of the reference's exact artifact. It can
+    postdate the held upload."""
+    public_before_upload: bool
+    """``published_at`` is at or before the held agent's upload."""
+    source: Literal["recorded", "derived"]
+    """``recorded`` at hold open, or ``derived`` at read time for a hold
+    opened before the fact was recorded."""
+
+
 class AdminCopyReviewEvidence(BaseModel):
     review_kind: Literal[
         "copy", "benchmark_overfit", "deferred_source_review", "anomalous_score"
@@ -90,6 +104,11 @@ class AdminCopyReviewEvidence(BaseModel):
     Same caveat as ``AdminCopyReviewItem.miner_coldkey``: one signal, not proof."""
     duplicate_of_submitted_at: datetime | None = None
     deferred_review: AdminDeferredReviewEvidence | None = None
+    reference_public_release: AdminCopyReviewReferenceRelease | None = None
+    """Whether ``duplicate_of`` was publicly released when the held agent
+    uploaded (SN-499). ``None`` when the hold names no reference. Evidence
+    for queue priority only; the copy gate's alibi test still decides whether
+    the release explains the match."""
 
 
 class AdminCopySimilarityEvidence(BaseModel):
@@ -222,6 +241,11 @@ class AdminCopyReviewList(BaseModel):
         | None
     ) = None
     """Echo of the applied ``review_kind`` filter; ``None`` means every kind."""
+
+    order: Literal["oldest", "public_reference_first"] = "oldest"
+    """Echo of the applied order. ``public_reference_first`` lists holds whose
+    reference was public before the held upload first, each tier oldest first
+    (SN-499)."""
 
     generation: Literal["active", "rollout", "history", "all"]
     active_bench_version: int = Field(ge=1)

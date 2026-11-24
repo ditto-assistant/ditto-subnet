@@ -98,6 +98,10 @@ from ditto.api_server.koth import (
     koth_entries_from_ledger,
     project_koth,
 )
+from ditto.api_server.ledger_pin import (
+    crown_family_root,
+    pin_row_champion_hotkey,
+)
 from ditto.api_server.storage.errors import (
     ObjectDownloadFailedError,
     ObjectNotFoundError,
@@ -230,6 +234,7 @@ class BoardSnapshot:
     app_state: Any
     anchor_owner_root: str | None
     anchor_agent_id: UUID | None
+    anchor_hotkey: str | None
     pin_context: str
     excluded_agent_ids: frozenset[UUID]
     restored_agent_ids: frozenset[UUID]
@@ -256,6 +261,7 @@ class BoardSnapshot:
         app_state: Any,
         anchor_owner_root: str | None,
         anchor_agent_id: UUID | None,
+        anchor_hotkey: str | None,
         pin_context: str,
         excluded_agent_ids: frozenset[UUID],
         restored_agent_ids: frozenset[UUID],
@@ -276,6 +282,7 @@ class BoardSnapshot:
             app_state=app_state,
             anchor_owner_root=anchor_owner_root,
             anchor_agent_id=anchor_agent_id,
+            anchor_hotkey=anchor_hotkey,
             pin_context=pin_context,
             excluded_agent_ids=excluded_agent_ids,
             restored_agent_ids=restored_agent_ids,
@@ -387,6 +394,7 @@ async def read_board_snapshot_for_state(
         read_at=read_at,
         anchor_owner_root=pin.champion_owner_root if pin else None,
         anchor_agent_id=pin.champion_agent_id if pin else None,
+        anchor_hotkey=pin_row_champion_hotkey(pin) if pin else None,
         pin_context=(
             f"{pin.epoch_index}:{pin.ledger_digest}:{pin.champion_owner_root}:{pin.champion_agent_id}"
             if pin
@@ -405,6 +413,7 @@ async def _project_board(
     read_at: datetime,
     anchor_owner_root: str | None,
     anchor_agent_id: UUID | None,
+    anchor_hotkey: str | None,
     pin_context: str,
     excluded_agent_ids: frozenset[UUID],
     restored_agent_ids: frozenset[UUID],
@@ -423,11 +432,22 @@ async def _project_board(
     incumbent = None
     provisional = None
     if snapshot.crown_mode == "incumbent":
+        # Resolved per hypothetical membership, exactly as ``build_pin_draft``
+        # will resolve it for the membership the ruling leaves behind.
+        family = crown_family_root(
+            stored_root=anchor_owner_root,
+            champion_agent_id=anchor_agent_id,
+            champion_hotkey=anchor_hotkey,
+            members=(
+                (entry.agent_id, entry.miner_hotkey, owner_roots.get(entry.agent_id))
+                for entry in (*snapshot.entries, *(snapshot.withheld_entries or ()))
+            ),
+        )
 
         def matches(entry: Any) -> bool:
             return (
-                owner_roots.get(entry.agent_id) == anchor_owner_root
-                if anchor_owner_root is not None
+                owner_roots.get(entry.agent_id) == family
+                if family is not None
                 else anchor_agent_id is not None and entry.agent_id == anchor_agent_id
             )
 
@@ -458,6 +478,7 @@ async def _project_board(
         app_state=app_state,
         anchor_owner_root=anchor_owner_root,
         anchor_agent_id=anchor_agent_id,
+        anchor_hotkey=anchor_hotkey,
         pin_context=pin_context,
         excluded_agent_ids=excluded_agent_ids,
         restored_agent_ids=restored_agent_ids,
@@ -496,6 +517,7 @@ async def _crown_effect(
         read_at=board.read_at,
         anchor_owner_root=board.anchor_owner_root,
         anchor_agent_id=board.anchor_agent_id,
+        anchor_hotkey=board.anchor_hotkey,
         pin_context=board.pin_context,
         excluded_agent_ids=(
             board.excluded_agent_ids | {agent.agent_id}

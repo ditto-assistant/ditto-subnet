@@ -98,6 +98,8 @@ from ditto.api_models import (
     PublicEfficiencySnapshotResponse,
     PublicEfficiencyStatus,
     PublicEmissionRecipient,
+    PublicHarnessMemory,
+    PublicHarnessMemoryRun,
     PublicHealthResponse,
     PublicHostSpecs,
     PublicInferenceRun,
@@ -320,9 +322,11 @@ from ditto.api_server.koth import (
 )
 from ditto.api_server.ledger_pin import (
     classify_vector_against_pins,
+    crown_family_root,
     pin_expected_shares,
     pin_generator_fraction,
     pin_provisional_incumbent,
+    pin_row_champion_hotkey,
     served_crown_gate,
     served_rank_shares,
 )
@@ -433,6 +437,7 @@ from ditto.db.queries.emission_eligibility import (
     AgentReviewPosture,
     load_review_postures,
 )
+from ditto.db.queries.harness_memory import agent_harness_memory
 from ditto.db.queries.heartbeats import (
     ActiveValidatorAssignment,
     ActiveValidatorWork,
@@ -542,6 +547,9 @@ from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
 from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 logger = logging.getLogger(__name__)
+
+# Recent harness memory runs published per agent on the pipeline (SN-500).
+_PUBLIC_HARNESS_MEMORY_RUNS = 20
 
 router = APIRouter(prefix="/public", tags=["public"])
 
@@ -4689,7 +4697,9 @@ async def build_public_leaderboard(
         # next pin still carries the crown through the owner family, so the
         # projection must too, or it opens a classic first-seen walk and names
         # a senior rival the fleet will never crown.
-        emission_incumbent_id = _pin_crown_heir(eligibility_pin, emission_rows)
+        emission_incumbent_id = _pin_crown_heir(
+            eligibility_pin, emission_rows, family_rows=finalized_generations
+        )
     entries = []
     for i, row in enumerate(finalized_rows, start=1):
         settled, rolling, rolling_count = rollout_states.get(
@@ -5034,19 +5044,34 @@ def _ledger_pin_model(
     )
 
 
-def _pin_crown_heir(pin: LedgerEpochSnapshot, rows: Sequence[LedgerRow]) -> UUID | None:
+def _pin_crown_heir(
+    pin: LedgerEpochSnapshot,
+    rows: Sequence[LedgerRow],
+    *,
+    family_rows: Sequence[LedgerRow] | None = None,
+) -> UUID | None:
     """The row the next pin hands ``pin``'s crown to, as ``build_pin_draft`` does.
 
     The owner family's representative in ``rows`` inherits the crown; a legacy
-    pin without an owner root only carries it to the exact same agent.
+    pin without an owner root only carries it to the exact same agent. The
+    family is resolved through the champion's identity over ``family_rows``
+    (including withheld generations, matching ``build_pin_draft``) by the same
+    :func:`crown_family_root` the next pin uses, so a family renamed by an
+    owner link since ``pin`` was taken keeps its crown here too (#2991).
     """
     if pin.champion_owner_root is not None:
-        return next(
-            (
-                row.agent_id
-                for row in rows
-                if row.emission_owner_root == pin.champion_owner_root
+        member_rows = rows if family_rows is None else family_rows
+        family = crown_family_root(
+            stored_root=pin.champion_owner_root,
+            champion_agent_id=pin.champion_agent_id,
+            champion_hotkey=pin_row_champion_hotkey(pin),
+            members=(
+                (row.agent_id, row.miner_hotkey, row.emission_owner_root)
+                for row in member_rows
             ),
+        )
+        return next(
+            (row.agent_id for row in rows if row.emission_owner_root == family),
             None,
         )
     return next(
@@ -9009,6 +9034,11 @@ async def agent_pipeline(
             )
         )
     )
+    # SN-500: miners see their own harness memory beside their inference
+    # spend. Bounded: one indexed rollup and at most 20 recent runs.
+    memory_rollup, memory_runs = await agent_harness_memory(
+        session, agent_id=agent_id, limit=_PUBLIC_HARNESS_MEMORY_RUNS
+    )
     inference_grants = list(
         await session.scalars(
             select(InferenceGrant)
@@ -9585,6 +9615,34 @@ async def agent_pipeline(
             )
             for grant in inference_grants
         ],
+        harness_memory=(
+            PublicHarnessMemory(
+                runs=memory_rollup.runs,
+                peak_bytes_max=memory_rollup.peak_bytes_max,
+                p50_bytes_median=memory_rollup.p50_bytes_median,
+                p95_bytes_median=memory_rollup.p95_bytes_median,
+                p95_bytes_max=memory_rollup.p95_bytes_max,
+                limit_bytes_max=memory_rollup.limit_bytes_max,
+                last_recorded_at=memory_rollup.last_recorded_at,
+                recent_runs=[
+                    PublicHarnessMemoryRun(
+                        validator_hotkey=run.validator_hotkey,
+                        bench_version=run.bench_version,
+                        lease_issued_at=run.lease_issued_at,
+                        outcome="scored" if run.outcome == "scored" else "failed",
+                        peak_bytes=run.peak_bytes,
+                        p50_bytes=run.p50_bytes,
+                        p95_bytes=run.p95_bytes,
+                        samples=run.samples,
+                        sampled_seconds=run.sampled_seconds,
+                        limit_bytes=run.limit_bytes,
+                    )
+                    for run in memory_runs
+                ],
+            )
+            if memory_rollup is not None
+            else None
+        ),
         dispute=_public_dispute(dispute) if dispute is not None else None,
     )
 

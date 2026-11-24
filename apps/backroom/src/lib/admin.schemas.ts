@@ -3638,6 +3638,10 @@ export const MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
 export const MIN_SANDBOX_MEMORY_LIMIT_MIB = 512
 export const MAX_SANDBOX_MEMORY_LIMIT_MIB = 32_768
 export const DEFAULT_SANDBOX_MEMORY_LIMIT_MIB = 6_144
+// SN-500 step 2: the P95 harness-memory factor policy stamped on each lease.
+export const DEFAULT_MEMORY_FACTOR_FREE_MIB = 512
+export const DEFAULT_MEMORY_FACTOR_FLOOR_BPS = 9_000
+export const MIN_MEMORY_FACTOR_FLOOR_BPS = 5_000
 
 export const benchmarkRuntimeSettingsSchema = z
   .object({
@@ -3653,6 +3657,22 @@ export const benchmarkRuntimeSettingsSchema = z
       .min(MIN_SANDBOX_MEMORY_LIMIT_MIB)
       .max(MAX_SANDBOX_MEMORY_LIMIT_MIB)
       .default(DEFAULT_SANDBOX_MEMORY_LIMIT_MIB),
+    // SN-500 step 2. Shadow records the factor without changing scores;
+    // enforce applies it. Defaults so a Platform that predates the fields
+    // still parses.
+    memory_factor_posture: z.enum(['off', 'shadow', 'enforce']).default('shadow'),
+    memory_factor_free_mib: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_SANDBOX_MEMORY_LIMIT_MIB)
+      .default(DEFAULT_MEMORY_FACTOR_FREE_MIB),
+    memory_factor_floor_bps: z
+      .number()
+      .int()
+      .min(MIN_MEMORY_FACTOR_FLOOR_BPS)
+      .max(10_000)
+      .default(DEFAULT_MEMORY_FACTOR_FLOOR_BPS),
   })
   .refine(
     (value) => value.relay_delay_fingerprint_min_ms <= value.relay_delay_fingerprint_max_ms,
@@ -3668,6 +3688,9 @@ export const DEFAULT_BENCHMARK_RUNTIME_SETTINGS = {
   relay_delay_fingerprint_min_ms: 25,
   relay_delay_fingerprint_max_ms: 250,
   sandbox_memory_limit_mib: DEFAULT_SANDBOX_MEMORY_LIMIT_MIB,
+  memory_factor_posture: 'shadow' as const,
+  memory_factor_free_mib: DEFAULT_MEMORY_FACTOR_FREE_MIB,
+  memory_factor_floor_bps: DEFAULT_MEMORY_FACTOR_FLOOR_BPS,
 }
 
 // The dark decision-model lane (TypeSafe Jev via OpenRouter System One). Off by
@@ -8406,6 +8429,13 @@ export const athReviewKindSchema = z.enum([
 
 export type AthReviewKind = z.infer<typeof athReviewKindSchema>
 
+export const copyReviewReferenceReleaseSchema = z.object({
+  reference_agent_id: z.string().uuid(),
+  published_at: z.string().nullable(),
+  public_before_upload: z.boolean(),
+  source: z.enum(['recorded', 'derived']),
+})
+
 export const copyReviewOriginalSchema = z.object({
   review_kind: athReviewKindSchema.default('copy'),
   duplicate_of: z.string().uuid().nullable(),
@@ -8442,6 +8472,14 @@ export const copyReviewOriginalSchema = z.object({
   // Public-safe score trigger and terminal screener evidence only. Source,
   // prompts, responses and private rules never enter this admin projection.
   deferred_review: deferredReviewEvidenceSchema.nullish().default(null),
+  // SN-499: whether duplicate_of was publicly released at or before the held
+  // upload. Queue-priority evidence only; the copy gate's alibi test still
+  // decides whether the release explains the match. `recorded` at hold open,
+  // `derived` at read time for an older hold. Null when the hold names no
+  // reference or the platform predates the field.
+  reference_public_release: copyReviewReferenceReleaseSchema
+    .nullish()
+    .default(null),
 })
 
 export const copyReviewItemSchema = z.object({
@@ -8479,6 +8517,10 @@ export const copyReviewListSchema = z.object({
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
   review_kind: athReviewKindSchema.nullish().default(null),
+  order: z
+    .enum(['oldest', 'public_reference_first'])
+    .nullish()
+    .default('oldest'),
   generation: z.enum(['active', 'rollout', 'history', 'all']),
   active_bench_version: z.number().int().positive(),
   rollout_bench_version: z.number().int().positive().nullable().default(null),
@@ -9874,6 +9916,10 @@ export const publicDuelingBreakdownSchema = z.object({
   priced_cost_posture: z.string().nullish().default(null),
   priced_cost_result: z.string().nullish().default(null),
   priced_cost_window: z.string().max(32).nullish().default(null),
+  // SN-500: present only once a P95 memory factor changed the score.
+  memory_factor_applied_factor_bps: gateBps.nullish().default(null),
+  memory_factor: z.number().min(0).max(1).nullish().default(null),
+  memory_factor_p95_bytes: z.number().int().nonnegative().nullish().default(null),
   other_gate_factor: z.number().min(0).max(1).nullish().default(null),
   columns: z.array(duelingColumnAggregateSchema.extend({
     grading_bench_version: z.number().int().positive().nullish().default(null),
@@ -10531,8 +10577,9 @@ export type ConfirmationSeedAnchorList = z.infer<
 >
 
 // Ordinary (pre-score) source-review queue-age SLO, ditto-subnet#2042 slice 1.
-// Read-only observability: overdue_count and p95_exceeds_threshold are null
-// until an operator configures a threshold, and this board enforces nothing.
+// Read-only observability. Platform ships thresholds (SN-499), so
+// overdue_count and p95_exceeds_threshold are null only when an operator turns
+// a threshold off. This board enforces nothing.
 // Copy, ATH, and top-five double-check review report through
 // athReviewQueueSloSchema below; human escalation is a later clock.
 export const sourceReviewQueueSloSchema = z.object({
@@ -10564,7 +10611,7 @@ export type SourceReviewQueueSlo = z.infer<typeof sourceReviewQueueSloSchema>
 
 // ATH-hold queue-age SLO, ditto-subnet#2042 slice 2: every pending ath_reviews
 // hold, one clock per class (copy review included), and stranded-hold ghosts.
-// Read-only; thresholds report null until an operator configures them.
+// Read-only; each clock ships its own threshold (SN-499), null when turned off.
 type GeneratedAthReviewQueueStats = PlatformComponents['schemas']['AthReviewQueueStats']
 type GeneratedAthReviewQueueSlo = PlatformComponents['schemas']['AthReviewQueueSlo']
 

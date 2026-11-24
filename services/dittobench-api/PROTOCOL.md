@@ -128,6 +128,40 @@ a call whose relay response body cannot be read. A transport failure with no
 response is not charged. A practice run with no broker session
 meters nothing and names no `source`.
 
+### Bench 16+ P95 harness-memory factor (`details.memory_factor`, SN-500)
+
+From bench 16 every run also records its own time-weighted P95 harness memory
+(the cgroup `memory.current` histogram the sandbox sampler keeps; see
+`internal/sandbox/memory_watch.go`) and the factor it maps to
+(`internal/scoregates/memory_factor.go`, mirrored by
+`ditto_screening_protocol.memory_factor`):
+
+```
+P95 <= free             -> 10000 bps
+free < P95 < cap        -> 10000 - (10000 - floor) x (P95 - free) / (cap - free)
+P95 >= cap              -> floor
+```
+
+`cap` is the harness memory limit the run ran under. `free` and `floor` come
+from the lease's `benchmark_runtime` (`memory_factor_free_mib`, default 512;
+`memory_factor_floor_bps`, default 9000). A run that exceeds its cap is an
+OOM, which is a failed run with no score, so the floor is the lowest factor a
+scored run can carry. A run whose sampler read no `memory.current` (no
+sandbox, or an image the sampler could not exec into) reports
+`result: "no_telemetry"` and keeps 10000.
+
+**Posture.** `memory_factor_posture` on the lease decides it, never the
+scorer's environment, so every validator on one quorum applies the same rule.
+`shadow` (the default, and how any unknown value reads) records the block and
+applies 10000. `enforce` multiplies the factor into the composite gate beside
+priced cost, inside `details.dueling.datagen_gate`, so dethrone and title-duel
+recomputations carry it with no fold change. `off` records nothing.
+Generator-round leases always stamp `off`. Turning `enforce` on is an operator
+settings change. Make it at a season boundary, once the fleet runs a release
+that forwards the policy: a validator or scorer that predates it scores in
+shadow. Unlike priced cost, P95 cannot be recomputed from the report: it is
+the scorer's own measurement, and Platform re-derives only the factor from it.
+
 The report adds:
 
 ```jsonc

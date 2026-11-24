@@ -1,7 +1,8 @@
 """Operator models for per-agent harness memory (SN-500 step 1).
 
 Backroom-only. Built from validator-reported, unsigned scorer telemetry; it
-schedules nothing, scores nothing, and is never published to miners.
+schedules nothing and scores nothing. The public per-agent view is
+``harness_memory`` on the agent's pipeline.
 """
 
 from __future__ import annotations

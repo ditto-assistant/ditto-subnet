@@ -274,6 +274,9 @@ _NESTED_FIELDS: dict[str, tuple[str, ...]] = {
         "relay_delay_fingerprint_min_ms",
         "relay_delay_fingerprint_max_ms",
         "sandbox_memory_limit_mib",
+        "memory_factor_posture",
+        "memory_factor_free_mib",
+        "memory_factor_floor_bps",
     ),
     "decision_lane": (
         "enabled",

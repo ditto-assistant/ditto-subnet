@@ -14,7 +14,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1042,6 +1044,98 @@ func TestConfirmationChatSettlementExhaustsSpentBudget(t *testing.T) {
 	expectEnvelope(t, w, 429, relayhttp.CodeHTTPException, "confirmation inference declined: budget_exhausted")
 }
 
+// A completed call whose real cost lands exactly on the remaining budget is
+// within budget: it is delivered and spends the grant.
+func TestConfirmationChatCostLandingOnBudgetIsDeliveredAndExhausts(t *testing.T) {
+	upstream := fakeConfirmationUpstream(t, nil)
+	defer upstream.Close()
+	f := newConfirmationFixture(t, chatTestConfig(t, upstream.URL), "judge", confirmationTestModel, "openrouter")
+	// The fake upstream bills 2100 µUSD per call.
+	testutil.SeedSQL(t, f.pool,
+		`UPDATE confirmation_inference_grants SET cost_microusd = cost_budget_microusd - 2100 WHERE grant_id = $1`, f.grantID)
+
+	body := []byte(confirmationChatBody())
+	w := serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, uuid.New(), body)))
+	if w.Code != 200 {
+		t.Fatalf("a call that lands on the budget must be delivered: %d %s", w.Code, w.Body.String())
+	}
+	var status string
+	var cost, budget int64
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT status, cost_microusd, cost_budget_microusd FROM confirmation_inference_grants WHERE grant_id = $1`,
+		f.grantID).Scan(&status, &cost, &budget); err != nil {
+		t.Fatalf("read grant: %v", err)
+	}
+	if status != "exhausted" || cost != budget {
+		t.Fatalf("grant after a budget-exact call: %s cost=%d budget=%d", status, cost, budget)
+	}
+}
+
+// #2971: a completed call that overshoots the cost budget was billed upstream.
+// It is refused, but the ledger books its real usage and the grant is
+// exhausted, so no further call is sent upstream and billed.
+func TestConfirmationChatCostOvershootIsBookedAndExhaustsGrant(t *testing.T) {
+	var calls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"gen-c3","object":"chat.completion","created":1755000000,
+			"model":"` + confirmationTestModel + `","provider":"deepinfra",
+			"choices":[{"index":0,"finish_reason":"stop","logprobs":null,
+				"message":{"role":"assistant","content":"verdict"}}],
+			"usage":{"prompt_tokens":12,"completion_tokens":5,"cost":0.0021,"total_tokens":17}
+		}`))
+	}))
+	defer upstream.Close()
+	f := newConfirmationFixture(t, chatTestConfig(t, upstream.URL), "judge", confirmationTestModel, "openrouter")
+	// 1000 µUSD left; the fake upstream bills 2100 µUSD per call.
+	testutil.SeedSQL(t, f.pool,
+		`UPDATE confirmation_inference_grants SET cost_microusd = cost_budget_microusd - 1000 WHERE grant_id = $1`, f.grantID)
+
+	body := []byte(confirmationChatBody())
+	nonce := uuid.New()
+	w := serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, nonce, body)))
+	expectEnvelope(t, w, 409, relayhttp.CodeHTTPException, "confirmation grant is no longer live")
+
+	ctx := t.Context()
+	var requestStatus string
+	var failureKind *string
+	var prompt, completion, cost int64
+	if err := f.pool.QueryRow(ctx,
+		`SELECT status, failure_kind, prompt_tokens, completion_tokens, cost_microusd
+		 FROM confirmation_inference_requests WHERE grant_id = $1 AND nonce = $2`,
+		f.grantID, nonce).Scan(&requestStatus, &failureKind, &prompt, &completion, &cost); err != nil {
+		t.Fatalf("read request: %v", err)
+	}
+	if requestStatus != "failed" || failureKind == nil || *failureKind != confirmationFailureSettleRejected ||
+		prompt != 12 || completion != 5 || cost != 2100 {
+		t.Fatalf("overshoot settle must book the billed usage: %s kind=%v %d/%d cost=%d",
+			requestStatus, failureKind, prompt, completion, cost)
+	}
+	var grantStatus string
+	var grantPrompt, grantCompletion, grantCost, budget int64
+	var requestCount, active int
+	if err := f.pool.QueryRow(ctx,
+		`SELECT status, request_count, active_requests, prompt_tokens, completion_tokens, cost_microusd, cost_budget_microusd
+		 FROM confirmation_inference_grants WHERE grant_id = $1`, f.grantID).
+		Scan(&grantStatus, &requestCount, &active, &grantPrompt, &grantCompletion, &grantCost, &budget); err != nil {
+		t.Fatalf("read grant: %v", err)
+	}
+	if grantStatus != "exhausted" || requestCount != 1 || active != 0 ||
+		grantPrompt != 12 || grantCompletion != 5 || grantCost != budget+1100 {
+		t.Fatalf("grant after overshoot: %s count=%d active=%d %d/%d cost=%d budget=%d",
+			grantStatus, requestCount, active, grantPrompt, grantCompletion, grantCost, budget)
+	}
+
+	// The exhausted grant declines before dispatch: no second upstream bill.
+	w = serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, uuid.New(), body)))
+	expectEnvelope(t, w, 429, relayhttp.CodeHTTPException, "confirmation inference declined: budget_exhausted")
+	if calls != 1 {
+		t.Fatalf("upstream calls after the overshoot: got %d want 1", calls)
+	}
+}
+
 func TestConfirmationEmbeddingsFullFlow(t *testing.T) {
 	vector := make([]byte, 768)
 	for i := range vector {
@@ -1106,6 +1200,64 @@ func TestConfirmationEmbeddingsFullFlow(t *testing.T) {
 	}
 	if requestCount != 1 || active != 0 || grantPrompt != 500 {
 		t.Fatalf("grant embedding accounting: %d %d %d", requestCount, active, grantPrompt)
+	}
+}
+
+// The broker forwards confirmation embeddings with the same fixed 100 s
+// client as scored ones (forwardPlatformEmbedding), so the direct route and
+// its OpenRouter fall-through share one TimeoutSeconds budget here too
+// (#2973). A receipt-free direct 429 that arrives after half the budget is
+// returned as the direct rejection, without an OpenRouter dispatch that
+// could only end in an ambiguous timeout.
+func TestConfirmationEmbeddingsSkipFallThroughThatCannotFit(t *testing.T) {
+	const budget = 2 * time.Second
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(budget * 6 / 10):
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited","type":"request_rate_limit_exceeded"}}`))
+	}))
+	defer direct.Close()
+	var routerCalls atomic.Int32
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		routerCalls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": config.PinnedEmbeddingModel,
+			"data":  []any{map[string]any{"index": 0, "embedding": make([]float64, 768)}},
+			"usage": map[string]any{"prompt_tokens": 5},
+		})
+	}))
+	defer router.Close()
+	cfg := testConfig(t, map[string]string{
+		"PERPLEXITY_API_KEY":              "test-pplx-key",
+		"DITTO_INFERENCE_TIMEOUT_SECONDS": strconv.Itoa(int(budget / time.Second)),
+	})
+	cfg.Inference.EmbeddingFallbackURL = direct.URL
+	cfg.Inference.EmbeddingUpstreamURL = router.URL
+	f := newConfirmationFixture(t, cfg, "embedding", config.PinnedEmbeddingModel, strings.ToLower(config.PinnedEmbeddingProvider))
+
+	nonce := uuid.New()
+	body := []byte(`{"model":"perplexity/pplx-embed-v1-0.6b","input":["` +
+		strings.Repeat("hello memory ", 50) + `"],"dimensions":768,"encoding_format":"float"}`)
+	w := serve(f.deps, proxyRequest(confirmationEmbPath, string(body), f.signedHeaders(1, nonce, body)))
+	if routerCalls.Load() != 0 {
+		t.Fatalf("fall-through dispatched %d OpenRouter calls past half the budget", routerCalls.Load())
+	}
+	expectEnvelope(t, w, 502, relayhttp.CodeHTTPException, "embedding provider unavailable")
+	var status string
+	var prompt, cost int64
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT status, prompt_tokens, cost_microusd FROM confirmation_inference_requests
+		 WHERE grant_id = $1 AND nonce = $2`, f.grantID, nonce).Scan(&status, &prompt, &cost); err != nil {
+		t.Fatalf("read request: %v", err)
+	}
+	// The direct rejection is receipt-free, so nothing is charged.
+	if status != "failed" || prompt != 0 || cost != 0 {
+		t.Fatalf("settle: status=%s prompt=%d cost=%d", status, prompt, cost)
 	}
 }
 

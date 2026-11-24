@@ -80,11 +80,11 @@ interpolation as PostgreSQL's ``percentile_cont``, so slice 1 and this slice
 report comparable numbers. The age and breach math stays pure and
 unit-testable.
 
-Thresholds are inputs and default to unset, as in slice 1. An unset
-threshold reports ``overdue_count`` and ``p95_exceeds_threshold`` as
-``None``, never ``0`` or "healthy". The ATH aggregate and the copy class each
-take their own thresholds. The other classes report null thresholds. Nothing
-here alerts or escalates. Both remain #2042 follow-ups.
+Thresholds are inputs. An unset threshold reports ``overdue_count`` and
+``p95_exceeds_threshold`` as ``None``, never ``0`` or "healthy". The ATH
+aggregate and every class each take their own thresholds (SN-499); the
+shipped values live in :mod:`ditto.api_server.ath_review_queue_slo_config`.
+Nothing here alerts or escalates.
 """
 
 from __future__ import annotations
@@ -388,16 +388,21 @@ def build_ath_review_queue_slo_snapshot(
     held_without_review_ghost_count: int,
     throughput_window_hours: int = DEFAULT_THROUGHPUT_WINDOW_HOURS,
     ath_thresholds: QueueAgeThresholds | None = None,
-    copy_thresholds: QueueAgeThresholds | None = None,
+    class_thresholds: Mapping[AthQueueClass, QueueAgeThresholds] | None = None,
 ) -> AthReviewQueueSloSnapshot:
-    """Assemble the snapshot from classified rows. This is pure and has no I/O."""
+    """Assemble the snapshot from classified rows. This is pure and has no I/O.
+
+    ``class_thresholds`` gives each class its own clock. A class missing from
+    the mapping reports null thresholds.
+    """
+    per_class = class_thresholds or {}
     classes = tuple(
         summarize_ath_queue(
             rows,
             queue_class=queue_class,
             throughput_completed_count=throughput_by_class.get(queue_class, 0),
             throughput_window_hours=throughput_window_hours,
-            thresholds=copy_thresholds if queue_class == "copy" else None,
+            thresholds=per_class.get(queue_class),
         )
         for queue_class in ATH_QUEUE_CLASSES
     )
@@ -499,7 +504,7 @@ async def load_ath_review_queue_slo_snapshot(
     *,
     throughput_window_hours: int = DEFAULT_THROUGHPUT_WINDOW_HOURS,
     ath_thresholds: QueueAgeThresholds | None = None,
-    copy_thresholds: QueueAgeThresholds | None = None,
+    class_thresholds: Mapping[AthQueueClass, QueueAgeThresholds] | None = None,
 ) -> AthReviewQueueSloSnapshot:
     """One bounded read over the pending ATH-hold queue's current state."""
     rows = await _load_pending_hold_rows(session, agent_id=None)
@@ -519,7 +524,7 @@ async def load_ath_review_queue_slo_snapshot(
         held_without_review_ghost_count=held_without_review,
         throughput_window_hours=throughput_window_hours,
         ath_thresholds=ath_thresholds,
-        copy_thresholds=copy_thresholds,
+        class_thresholds=class_thresholds,
     )
 
 

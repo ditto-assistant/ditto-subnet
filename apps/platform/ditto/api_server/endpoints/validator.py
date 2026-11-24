@@ -337,6 +337,10 @@ from ditto.db.queries.confirmation_scores import (
     confirmation_history_by_agent,
     fold_eligible_seeds_by_agent,
 )
+from ditto.db.queries.copy_hold_reference import (
+    PROVENANCE_KEY as COPY_HOLD_REFERENCE_PROVENANCE_KEY,
+)
+from ditto.db.queries.copy_hold_reference import derive_reference_public_release
 from ditto.db.queries.desired_era_backlog import desired_era_work_outstanding
 from ditto.db.queries.harness_memory import record_harness_memory
 from ditto.db.queries.heartbeats import (
@@ -8131,6 +8135,18 @@ async def submit_score(
                 if decision.held:
                     await preserve_desired_authority(session, now=audit_now)
                     reference_provenance = reference_corpus_provenance()
+                    # SN-499: record whether the matched agent was already
+                    # public at upload, so the operator queue can rule forks
+                    # of a public release first. Evidence only.
+                    reference_release = (
+                        await derive_reference_public_release(
+                            session,
+                            reference_agent_id=decision.duplicate_of,
+                            held_uploaded_at=submitted_at_utc,
+                        )
+                        if decision.duplicate_of is not None
+                        else None
+                    )
                     agent.status = AgentStatus.ATH_PENDING_REVIEW
                     agent.duplicate_of = decision.duplicate_of
                     agent.review_reason = decision.reason
@@ -8176,6 +8192,15 @@ async def submit_score(
                                 **(
                                     {"trigger": "unreleased_copy"}
                                     if unreleased_copy_hold
+                                    else {}
+                                ),
+                                **(
+                                    {
+                                        COPY_HOLD_REFERENCE_PROVENANCE_KEY: (
+                                            reference_release.as_provenance()
+                                        )
+                                    }
+                                    if reference_release is not None
                                     else {}
                                 ),
                             },

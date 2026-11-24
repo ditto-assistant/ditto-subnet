@@ -339,20 +339,24 @@ async def finish_confirmation_inference_request(
         provider_matches = upstream_provider is None or (
             isinstance(upstream_provider, str) and 1 <= len(upstream_provider) <= 120
         )
-    cost_fits = grant.cost_microusd + cost_microusd <= grant.cost_budget_microusd
     usage_valid = (
         prompt_tokens >= 0
         and completion_tokens >= 0
         and cost_microusd >= 0
         and prompt_tokens + completion_tokens <= request.max_chargeable_tokens
         and provider_matches
-        and cost_fits
     )
-    delivered = status == "completed" and usage_valid
-    if not delivered:
+    cost_fits = grant.cost_microusd + cost_microusd <= grant.cost_budget_microusd
+    delivered = status == "completed" and usage_valid and cost_fits
+    # A completed call with a valid receipt was billed upstream even when it
+    # overshoots the cost budget. It is not delivered, but its real usage is
+    # booked so the ledger matches provider spend and the exhaustion check
+    # below stops the grant admitting another billed call (#2971).
+    if not (status == "completed" and usage_valid):
         prompt_tokens = 0
         completion_tokens = 0
         cost_microusd = 0
+    if not delivered:
         status = "failed"
     request.status = status
     request.prompt_tokens = prompt_tokens

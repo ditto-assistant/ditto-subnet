@@ -80,6 +80,32 @@ func isProviderRetryStatus(status int) bool {
 // cancellation.
 type sleepFunc func(ctx context.Context, d time.Duration)
 
+// providerLadderContext bounds one scored chat or embedding request's whole
+// provider ladder -- first attempt, Retry-After or gateway wait, and the one
+// receipt-free retry or route fall-through -- by a single TimeoutSeconds
+// budget. The scorer's broker gives the relay one fixed client timeout for the
+// entire request (#2973); granting each attempt a fresh budget let a
+// recovered request finish after the broker had already recorded a timeout,
+// so tokens were charged for a reply nobody received.
+func providerLadderContext(ctx context.Context, timeoutSeconds int) (context.Context, context.CancelFunc, time.Duration) {
+	budget := time.Duration(timeoutSeconds) * time.Second
+	ladderCtx, cancel := context.WithTimeout(ctx, budget)
+	return ladderCtx, cancel, budget
+}
+
+// providerLadderHasRoomFor reports whether another dispatch, started after
+// waiting delay, would still have at least half the ladder budget. A retry is
+// only worth sending with a realistic budget: one that runs out mid-call ends
+// in a timeout, which is ambiguous for billing, whereas declining it returns
+// the clean receipt-free rejection already in hand.
+func providerLadderHasRoomFor(ladderCtx context.Context, delay, budget time.Duration) bool {
+	deadline, ok := ladderCtx.Deadline()
+	if !ok {
+		return true
+	}
+	return time.Until(deadline)-delay >= budget/2
+}
+
 func defaultSleep(ctx context.Context, d time.Duration) {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -1510,6 +1536,11 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 	headers := openrouterHeaders(cfg.OpenRouterAPIKey, true)
 	attachOpenRouterSessionHeader(ctx, headers)
 
+	// Every attempt below shares this one budget; postOnce's per-attempt
+	// timeout can no longer extend the request past it.
+	ladderCtx, cancelLadder, ladderBudget := providerLadderContext(ctx, cfg.TimeoutSeconds)
+	defer cancelLadder()
+
 	totalAttempts := 0
 	routerAttempts := 0
 	lastCode := "provider_unavailable"
@@ -1528,7 +1559,7 @@ phaseLoop:
 		sentPayload, _ := json.Marshal(spec.payload)
 		for safeAttempt := 1; safeAttempt <= providerSafeRetryMaxAttempts; safeAttempt++ {
 			trace := phaseTrace{phase: spec.phase, route: route, payload: sentPayload}
-			result, callErr := postProviderWithRetry(ctx, client, cfg.UpstreamURL, spec.payload, headers,
+			result, callErr := postProviderWithRetry(ladderCtx, client, cfg.UpstreamURL, spec.payload, headers,
 				cfg.ResponseBodyBytes, cfg.TimeoutSeconds, true, "", sleep)
 			if callErr != nil {
 				totalAttempts += callErr.attempts
@@ -1586,9 +1617,10 @@ phaseLoop:
 				} else if providerGatewayIsReceiptFree(result, model) {
 					retryDelay = providerGatewayRetryDelay
 				}
-				if retryDelay > 0 && safeAttempt < providerSafeRetryMaxAttempts {
-					sleep(ctx, retryDelay)
-					if ctx.Err() != nil {
+				if retryDelay > 0 && safeAttempt < providerSafeRetryMaxAttempts &&
+					providerLadderHasRoomFor(ladderCtx, retryDelay, ladderBudget) {
+					sleep(ladderCtx, retryDelay)
+					if ladderCtx.Err() != nil {
 						continue phaseLoop
 					}
 					continue
@@ -1732,8 +1764,16 @@ func perplexityEmbeddingBackpressureIsReceiptFree(result *providerHTTPResult) bo
 // after a possibly cost-bearing provider failure. An explicit backpressure
 // response is receipt-free, so the direct route may safely use the configured
 // OpenRouter path instead of parking an otherwise healthy scored run.
+//
+// Both callers -- the scored /embeddings route and the confirmation embedding
+// lane -- are reached through the scorer broker's fixed 100 s client, so the
+// direct route and its OpenRouter fall-through share one TimeoutSeconds
+// budget, as the chat recovery ladder does (#2973).
 func postEmbeddingProvider(ctx context.Context, client *http.Client, cfg config.InferenceProxyConfig,
 	inputs []string, sleep sleepFunc) (*embeddingProviderResult, *providerCallError) {
+
+	ladderCtx, cancelLadder, ladderBudget := providerLadderContext(ctx, cfg.TimeoutSeconds)
+	defer cancelLadder()
 
 	var direct *providerHTTPResult
 	var directErr *providerCallError
@@ -1746,14 +1786,18 @@ func postEmbeddingProvider(ctx context.Context, client *http.Client, cfg config.
 			"encoding_format": "base64_int8",
 		}
 		directPayloadBytes, _ = json.Marshal(directPayload)
-		direct, directErr = postProviderWithRetry(ctx, client, cfg.EmbeddingFallbackURL,
+		direct, directErr = postProviderWithRetry(ladderCtx, client, cfg.EmbeddingFallbackURL,
 			directPayload,
 			map[string]string{
 				"Authorization": "Bearer " + cfg.PerplexityAPIKey,
 				"Content-Type":  "application/json",
 			},
 			cfg.EmbeddingResponseBodyBytes, cfg.TimeoutSeconds, false, "", sleep)
-		if direct != nil && !perplexityEmbeddingBackpressureIsReceiptFree(direct) {
+		// A receipt-free rejection may fall through to OpenRouter only while
+		// that second dispatch still has a realistic share of the budget;
+		// otherwise the direct rejection is the truthful outcome.
+		if direct != nil && (!perplexityEmbeddingBackpressureIsReceiptFree(direct) ||
+			!providerLadderHasRoomFor(ladderCtx, 0, ladderBudget)) {
 			return &embeddingProviderResult{
 				result: direct, attempts: direct.attempts, direct: true,
 				phases: []embeddingProviderPhase{{route: "direct", payload: directPayloadBytes, result: direct}},
@@ -1775,7 +1819,7 @@ func postEmbeddingProvider(ctx context.Context, client *http.Client, cfg config.
 		},
 	}
 	openRouterPayloadBytes, _ := json.Marshal(openRouterPayload)
-	openrouter, orErr := postProviderWithRetry(ctx, client, cfg.EmbeddingUpstreamURL,
+	openrouter, orErr := postProviderWithRetry(ladderCtx, client, cfg.EmbeddingUpstreamURL,
 		openRouterPayload,
 		openrouterHeaders(cfg.OpenRouterAPIKey, false),
 		cfg.EmbeddingResponseBodyBytes, cfg.TimeoutSeconds, false, "", sleep)

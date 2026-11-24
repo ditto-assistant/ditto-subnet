@@ -2,6 +2,79 @@
 
 <!-- version list -->
 
+## v0.505.1 (2026-11-24)
+
+### Bug Fixes
+
+- **platform**: Keep the crown when the champion family is renamed
+  ([#3625](https://github.com/ditto-assistant/ditto-subnet/pull/3625),
+  [`db0e44c`](https://github.com/ditto-assistant/ditto-subnet/commit/db0e44ca00267de545d379dca99d96df71115a69))
+
+
+## v0.505.0 (2026-11-24)
+
+### Bug Fixes
+
+- **model-relay**: Keep Ditto Router calls off the OpenRouter route
+  ([#3618](https://github.com/ditto-assistant/ditto-subnet/pull/3618),
+  [`fd280a6`](https://github.com/ditto-assistant/ditto-subnet/commit/fd280a6abd87ce887b3a178fe22443b0628d4084))
+
+- **model-relay,platform**: Book confirmation calls that overshoot budget
+  ([#3613](https://github.com/ditto-assistant/ditto-subnet/pull/3613),
+  [`9ec611f`](https://github.com/ditto-assistant/ditto-subnet/commit/9ec611f203295f2bef9023f7ad56ac867afd771f))
+
+- **model-relay,platform**: Bound the provider recovery ladder by one timeout
+  ([#3624](https://github.com/ditto-assistant/ditto-subnet/pull/3624),
+  [`c25b74d`](https://github.com/ditto-assistant/ditto-subnet/commit/c25b74d92a139f96681120bb6d4db79dd4b3a1e4))
+
+- **platform**: Fold legacy confirmation arrays as the validator does
+  ([#3610](https://github.com/ditto-assistant/ditto-subnet/pull/3610),
+  [`a465bf4`](https://github.com/ditto-assistant/ditto-subnet/commit/a465bf4d4ad386ec6c8b7ea5a7f65ec0a17f04ca))
+
+- **platform**: Resolve a cross-version ticket lookup by its signed lease
+  ([#3623](https://github.com/ditto-assistant/ditto-subnet/pull/3623),
+  [`e21b7df`](https://github.com/ditto-assistant/ditto-subnet/commit/e21b7dfa8cd6585f75871aabdbcc48e28a00fffb))
+
+- **screener**: Follow lease renewals through export, upload and health
+  ([#3622](https://github.com/ditto-assistant/ditto-subnet/pull/3622),
+  [`4a52173`](https://github.com/ditto-assistant/ditto-subnet/commit/4a521730df91ff22ec62f78257b089c13bcb4a10))
+
+- **starter-kit**: Stop advertising sessionId on search_memories
+  ([#3620](https://github.com/ditto-assistant/ditto-subnet/pull/3620),
+  [`119673a`](https://github.com/ditto-assistant/ditto-subnet/commit/119673aedd651d3e1585b956fcdd6acfc40ebfed))
+
+### Chores
+
+- Refresh starter-kit anti-copy reference
+  ([#3486](https://github.com/ditto-assistant/ditto-subnet/pull/3486),
+  [`a989352`](https://github.com/ditto-assistant/ditto-subnet/commit/a989352e9337575060c05bbbf551f4e61a1526de))
+
+### Documentation
+
+- **backroom-review**: Record ditto v7 currency restore and router-weights ruling
+  ([#3092](https://github.com/ditto-assistant/ditto-subnet/pull/3092),
+  [`6db541b`](https://github.com/ditto-assistant/ditto-subnet/commit/6db541b5bc18cd672c95fe651cf5b86c6f33281a))
+
+### Features
+
+- **platform,backroom**: Bound copy and ATH review latency with per-class SLOs (SN-499)
+  ([#3598](https://github.com/ditto-assistant/ditto-subnet/pull/3598),
+  [`0a7e9d9`](https://github.com/ditto-assistant/ditto-subnet/commit/0a7e9d9fd28ade5e4ec5ce3273b509fce96d6646))
+
+
+## v0.504.0 (2026-11-23)
+
+### Features
+
+- **scorer,validator,platform,backroom**: P95 harness-memory factor in shadow, with a proposed curve
+  and backtest (SN-500) ([#3617](https://github.com/ditto-assistant/ditto-subnet/pull/3617),
+  [`bb9f3c8`](https://github.com/ditto-assistant/ditto-subnet/commit/bb9f3c8b53385563ea1cd252c552c310a24aba74))
+
+- **validator,platform,backroom**: Show miners their harness memory; record the worst seed (SN-500)
+  ([#3616](https://github.com/ditto-assistant/ditto-subnet/pull/3616),
+  [`8b8f16b`](https://github.com/ditto-assistant/ditto-subnet/commit/8b8f16b6cb97b11ee661b5c2eb730c89dc352ce2))
+
+
 ## v0.503.0 (2026-11-22)
 
 ### Features

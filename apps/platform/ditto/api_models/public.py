@@ -559,6 +559,35 @@ class PublicDuelingBreakdown(BaseModel):
     priced_cost_posture: str | None = None
     priced_cost_result: str | None = None
     priced_cost_window: Annotated[str | None, Field(default=None, max_length=32)] = None
+    memory_factor_applied_factor_bps: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            le=10_000,
+            description=(
+                "The P95 harness-memory factor inside ``datagen_gate`` when it "
+                "is applied. Null when no memory factor changed this score."
+            ),
+        ),
+    ] = None
+    memory_factor: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description="``memory_factor_applied_factor_bps / 10000``, when applied.",
+        ),
+    ] = None
+    memory_factor_p95_bytes: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description="The run's time-weighted P95 harness memory, when applied.",
+        ),
+    ] = None
     other_gate_factor: Annotated[
         float | None,
         Field(
@@ -566,9 +595,9 @@ class PublicDuelingBreakdown(BaseModel):
             ge=0.0,
             le=1.0,
             description=(
-                "``datagen_gate / priced_cost_factor``: every other gate "
-                "combined. Null when the run recorded no priced cost or its "
-                "factor is 0."
+                "``datagen_gate / (priced_cost_factor x memory_factor)``: every "
+                "other gate combined (``memory_factor`` is 1 when not applied). "
+                "Null when the run recorded no priced cost or a factor is 0."
             ),
         ),
     ] = None
@@ -4757,6 +4786,62 @@ class PublicInferenceRun(BaseModel):
     updated_at: datetime
 
 
+class PublicHarnessMemoryRun(BaseModel):
+    """Harness memory the scorer measured for one validator run (SN-500).
+
+    ``peak_bytes`` is the harness cgroup's ``memory.peak``; ``p50_bytes`` and
+    ``p95_bytes`` are time-weighted percentiles of ``memory.current`` at 1 MiB
+    resolution. Reported by the validator alongside the run's score or
+    failure; no failure detail beyond the outcome is published here.
+    """
+
+    validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    bench_version: Annotated[int, Field(ge=1)]
+    lease_issued_at: datetime
+    outcome: Literal["scored", "failed"]
+    peak_bytes: Annotated[int, Field(ge=0)]
+    p50_bytes: Annotated[int, Field(ge=0)]
+    p95_bytes: Annotated[int, Field(ge=0)]
+    samples: Annotated[int, Field(ge=0)]
+    sampled_seconds: Annotated[float, Field(ge=0)]
+    limit_bytes: Annotated[
+        int | None,
+        Field(ge=0, description="The harness memory cap the run ran under."),
+    ] = None
+
+
+class PublicHarnessMemory(BaseModel):
+    """This agent's harness memory across its measured runs (SN-500).
+
+    Measured only since the release that added the telemetry: earlier runs
+    and runs on validators that have not updated carry none, so a short or
+    absent list means unmeasured, not light.
+    """
+
+    runs: Annotated[int, Field(ge=0)]
+    peak_bytes_max: Annotated[
+        int, Field(ge=0, description="Highest per-run `memory.peak`.")
+    ]
+    p50_bytes_median: Annotated[
+        int, Field(ge=0, description="Median of the per-run time-weighted P50s.")
+    ]
+    p95_bytes_median: Annotated[
+        int, Field(ge=0, description="Median of the per-run time-weighted P95s.")
+    ]
+    p95_bytes_max: Annotated[
+        int, Field(ge=0, description="Highest per-run time-weighted P95.")
+    ]
+    limit_bytes_max: Annotated[
+        int | None,
+        Field(ge=0, description="Largest harness cap any measured run ran under."),
+    ] = None
+    last_recorded_at: datetime
+    recent_runs: Annotated[
+        list[PublicHarnessMemoryRun],
+        Field(description="Most recently leased runs first, at most 20."),
+    ] = Field(default_factory=list)
+
+
 class PublicConfirmationScore(BaseModel):
     """One append-only continual retest score, without its reusable seed."""
 
@@ -5268,6 +5353,13 @@ class PublicSubmissionPipeline(BaseModel):
     screening_attempts: list[PublicScreeningAttempt] = Field(default_factory=list)
     validation_attempts: list[PublicValidationAttempt] = Field(default_factory=list)
     inference_runs: list[PublicInferenceRun] = Field(default_factory=list)
+    harness_memory: PublicHarnessMemory | None = Field(
+        default=None,
+        description=(
+            "The harness's measured memory (peak and time-weighted P50/P95) "
+            "across its validator runs; null when no run has been measured."
+        ),
+    )
     dispute: PublicScreeningDispute | None = None
 
 

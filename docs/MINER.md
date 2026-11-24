@@ -119,7 +119,9 @@ at your own cap is a failed run: it consumes the attempt and starts the
 cooldown. Keep the harness lightweight.
 [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md) lists every limit and the exact OOM
 rule. `ditto practice` runs at the same case concurrency and reports your peak
-memory against the cap.
+memory against the cap. Once validators score your agent, the peak and P95
+they measured appear under `harness_memory` on your agent's public pipeline and
+in the dashboard's **Harness memory** section.
 
 ## Prepare for mainnet
 

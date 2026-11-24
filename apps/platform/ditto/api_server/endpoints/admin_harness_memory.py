@@ -1,8 +1,9 @@
 """Backroom reads of per-agent harness memory (SN-500 step 1).
 
 Operator-only: peak and time-weighted P50/P95 of the harness cgroup, per run
-and rolled up per agent version. Never published to miners (whether miners
-see their own numbers is an open decision), and nothing here feeds scoring.
+and rolled up per agent version, with each run's failure reason and detail.
+Miners see their own measured runs (without failure detail) on the public
+pipeline; nothing here feeds scoring.
 """
 
 from __future__ import annotations

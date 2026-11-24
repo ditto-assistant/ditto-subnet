@@ -138,6 +138,10 @@ class TestWrite:
             "relay_delay_fingerprint_max_ms": 160,
             # A non-default cap proves a legacy write carries it forward.
             "sandbox_memory_limit_mib": 8_192,
+            # So does a non-default SN-500 memory-factor policy.
+            "memory_factor_posture": "off",
+            "memory_factor_free_mib": 256,
+            "memory_factor_floor_bps": 9_500,
         }
         decision_lane = {
             **InferenceConcurrencySettings().decision_lane.model_dump(mode="json"),

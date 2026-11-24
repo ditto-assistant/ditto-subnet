@@ -279,6 +279,35 @@ class PricedCostSummary(BaseModel):
     rule_consistent: bool | None = None
 
 
+class MemoryFactorSummary(BaseModel):
+    """Run-level bench v16+ P95 harness-memory factor (``details.memory_factor``).
+
+    SN-500 step 2. The scorer maps the run's own time-weighted P95 harness
+    memory to ``factor_bps``: 10000 at or below ``free_bytes``, falling
+    linearly to ``floor_bps`` at ``limit_bytes``, the cap the run ran under
+    (``ditto_screening_protocol.memory_factor``). ``applied_factor_bps`` is
+    what the composite carries: ``factor_bps`` under ``enforce``, 10000 under
+    ``shadow`` or for an unmeasured run. ``rule_consistent`` is Platform's
+    recomputation of ``factor_bps`` from the block's own inputs. P95 itself is
+    the scorer's measurement and cannot be recomputed from the report.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    posture: Literal["shadow", "enforce"]
+    applied: bool = False
+    result: Literal["measured", "no_telemetry"]
+    p95_bytes: _Count = 0
+    peak_bytes: _Count = 0
+    limit_bytes: _Count = 0
+    free_bytes: _Count = 0
+    samples: _Count = 0
+    floor_bps: _BPS | None = None
+    factor_bps: _BPS | None = None
+    applied_factor_bps: _BPS | None = None
+    rule_consistent: bool | None = None
+
+
 class RunBudgetSummary(BaseModel):
     """Run-level bench v18 per-run cost budget (``details.run_budget``).
 
@@ -347,6 +376,9 @@ class StoredGateEvidence(BaseModel):
     priced_cost: PricedCostSummary | None = None
     run_budget: RunBudgetSummary | None = None
     """Bench v18+; omitted from the stored projection when absent."""
+    memory_factor: MemoryFactorSummary | None = None
+    """Bench v16+ (SN-500 step 2); omitted from the stored projection when
+    absent. Operator evidence: the public gate projection does not carry it."""
     catalog_suppression_rate: _UnitFloat | None = None
     gate_counts: dict[str, int] = Field(default_factory=dict)
     flagged_case_count: _Count = 0
@@ -360,8 +392,11 @@ class StoredGateEvidence(BaseModel):
         # A projection without a budget keeps the pre-v18 shape on every dump,
         # including a round trip of a stored row, not just at build time.
         dumped = handler(self)
-        if isinstance(dumped, dict) and dumped.get("run_budget") is None:
-            dumped.pop("run_budget", None)
+        if isinstance(dumped, dict):
+            # Absent optional run blocks keep every earlier projection's shape.
+            for key in ("run_budget", "memory_factor"):
+                if dumped.get(key) is None:
+                    dumped.pop(key, None)
         return dumped
 
 

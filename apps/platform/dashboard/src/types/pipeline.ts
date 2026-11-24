@@ -303,6 +303,32 @@ export interface InferenceRun {
   updated_at?: string | null;
 }
 
+/** Harness memory one validator's scorer measured for one run (SN-500). */
+export interface HarnessMemoryRun {
+  validator_hotkey?: string;
+  bench_version?: number | null;
+  lease_issued_at?: string | null;
+  outcome?: "scored" | "failed";
+  peak_bytes?: number | null;
+  p50_bytes?: number | null;
+  p95_bytes?: number | null;
+  samples?: number | null;
+  sampled_seconds?: number | null;
+  limit_bytes?: number | null;
+}
+
+/** The agent's measured harness memory across its validator runs (SN-500). */
+export interface HarnessMemory {
+  runs?: number | null;
+  peak_bytes_max?: number | null;
+  p50_bytes_median?: number | null;
+  p95_bytes_median?: number | null;
+  p95_bytes_max?: number | null;
+  limit_bytes_max?: number | null;
+  last_recorded_at?: string | null;
+  recent_runs?: HarnessMemoryRun[];
+}
+
 /** An accepted (provisional/quorum) validator score with its reproducibility
  * evidence. */
 export interface AcceptedScore {
@@ -399,6 +425,7 @@ export interface PipelinePayload {
   confirmation_sample_composites?: number[];
   validation_attempts?: ValidationAttempt[];
   inference_runs?: InferenceRun[];
+  harness_memory?: HarnessMemory | null;
   screening_attempts?: ScreeningAttempt[];
   dispute?: Dispute | null;
   active_benchmarks?: BenchmarkProgress[];

@@ -43,6 +43,7 @@ from ditto.api_models.gate_evidence import (
     ClaimProvenanceSummary,
     GatePosture,
     InferenceCostSummary,
+    MemoryFactorSummary,
     MinerGateNote,
     MinerGateNoteCase,
     MinerGateNotesResponse,
@@ -55,6 +56,10 @@ from ditto.api_models.gate_evidence import (
     TwinPostPassSummary,
 )
 from ditto.api_models.validator import CaseScore, ScoreReport
+from ditto_screening_protocol.memory_factor import (
+    is_memory_factor_bench_version,
+    memory_factor_bps,
+)
 from ditto_screening_protocol.priced_cost import (
     PricedCostReport,
     is_priced_cost_bench_version,
@@ -96,6 +101,7 @@ _RUN_SUMMARIES: dict[str, type[BaseModel]] = {
     "inference_cost": InferenceCostSummary,
     "priced_cost": PricedCostSummary,
     "run_budget": RunBudgetSummary,
+    "memory_factor": MemoryFactorSummary,
 }
 
 
@@ -213,7 +219,45 @@ def _run_summaries(
     # reaches a projection either.
     if bench_version is None or bench_version < RUN_BUDGET_MIN_BENCH_VERSION:
         out["run_budget"] = None
+    # ``memory_factor`` is a bench 16+ term (SN-500 step 2).
+    memory = out.get("memory_factor")
+    if is_memory_factor_bench_version(bench_version) and isinstance(
+        memory, MemoryFactorSummary
+    ):
+        out["memory_factor"] = _with_memory_factor_check(memory)
+    else:
+        out["memory_factor"] = None
     return out
+
+
+def _with_memory_factor_check(summary: MemoryFactorSummary) -> MemoryFactorSummary:
+    """Flag whether the block's factor follows the published curve.
+
+    Only a measured block carries a factor to check; an unmeasured one must
+    carry 10000. A block that disagrees is kept and flagged, never corrected.
+    """
+    if summary.floor_bps is None or summary.factor_bps is None:
+        return summary.model_copy(update={"rule_consistent": False})
+    expected = (
+        memory_factor_bps(
+            summary.p95_bytes,
+            summary.free_bytes,
+            summary.limit_bytes,
+            summary.floor_bps,
+        )
+        if summary.result == "measured"
+        else 10_000
+    )
+    applied_expected = expected if summary.applied else 10_000
+    consistent = (
+        summary.factor_bps == expected
+        and summary.applied_factor_bps == applied_expected
+        and (
+            summary.applied
+            is (summary.posture == "enforce" and summary.result == "measured")
+        )
+    )
+    return summary.model_copy(update={"rule_consistent": consistent})
 
 
 def _with_priced_cost_check(
@@ -329,6 +373,7 @@ def build_gate_evidence(
         inference_cost=summaries["inference_cost"],  # type: ignore[arg-type]
         priced_cost=summaries["priced_cost"],  # type: ignore[arg-type]
         run_budget=summaries["run_budget"],  # type: ignore[arg-type]
+        memory_factor=summaries["memory_factor"],  # type: ignore[arg-type]
         catalog_suppression_rate=(
             catalog_gate.catalog_suppression_rate if catalog_gate is not None else None
         ),

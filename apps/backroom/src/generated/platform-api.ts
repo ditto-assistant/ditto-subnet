@@ -13065,6 +13065,7 @@ export interface components {
             reason_source: "original_hold" | "reconsideration";
             /** Reference Provenance */
             reference_provenance: string;
+            reference_public_release?: components["schemas"]["AdminCopyReviewReferenceRelease"] | null;
             /**
              * Review Kind
              * @default copy
@@ -13146,6 +13147,12 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+            /**
+             * Order
+             * @default oldest
+             * @enum {string}
+             */
+            order: "oldest" | "public_reference_first";
             /** Review Kind */
             review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score") | null;
             /** Rollout Bench Version */
@@ -13244,6 +13251,26 @@ export interface components {
              * @enum {string}
              */
             status: "resolved" | "all";
+        };
+        /**
+         * AdminCopyReviewReferenceRelease
+         * @description Publication of a copy hold's reference, relative to the held upload.
+         */
+        AdminCopyReviewReferenceRelease: {
+            /** Public Before Upload */
+            public_before_upload: boolean;
+            /** Published At */
+            published_at?: string | null;
+            /**
+             * Reference Agent Id
+             * Format: uuid
+             */
+            reference_agent_id: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "recorded" | "derived";
         };
         /** AdminCopyReviewResolveRequest */
         AdminCopyReviewResolveRequest: {
@@ -19929,6 +19956,22 @@ export interface components {
              * @default 4
              */
             case_concurrency: number;
+            /**
+             * Memory Factor Floor Bps
+             * @default 9000
+             */
+            memory_factor_floor_bps: number;
+            /**
+             * Memory Factor Free Mib
+             * @default 512
+             */
+            memory_factor_free_mib: number;
+            /**
+             * Memory Factor Posture
+             * @default shadow
+             * @enum {string}
+             */
+            memory_factor_posture: "off" | "shadow" | "enforce";
             /**
              * Relay Delay Fingerprint Max Ms
              * @default 250
@@ -29955,7 +29998,8 @@ export interface components {
          *     Measured by the scorer from the harness cgroup: ``peak_bytes`` is the
          *     kernel's ``memory.peak`` high-water mark; ``p50_bytes`` and ``p95_bytes``
          *     are time-weighted percentiles of ``memory.current`` at 1 MiB resolution.
-         *     Unsigned operator telemetry: it drives no policy and is never published.
+         *     Unsigned telemetry: it drives no policy. Each agent's own measured runs
+         *     are published on its public pipeline (``harness_memory``).
          */
         HarnessMemoryTelemetry: {
             /** Limit Bytes */
@@ -37307,8 +37351,23 @@ export interface components {
              */
             generator_sum: number;
             /**
+             * Memory Factor
+             * @description ``memory_factor_applied_factor_bps / 10000``, when applied.
+             */
+            memory_factor?: number | null;
+            /**
+             * Memory Factor Applied Factor Bps
+             * @description The P95 harness-memory factor inside ``datagen_gate`` when it is applied. Null when no memory factor changed this score.
+             */
+            memory_factor_applied_factor_bps?: number | null;
+            /**
+             * Memory Factor P95 Bytes
+             * @description The run's time-weighted P95 harness memory, when applied.
+             */
+            memory_factor_p95_bytes?: number | null;
+            /**
              * Other Gate Factor
-             * @description ``datagen_gate / priced_cost_factor``: every other gate combined. Null when the run recorded no priced cost or its factor is 0.
+             * @description ``datagen_gate / (priced_cost_factor x memory_factor)``: every other gate combined (``memory_factor`` is 1 when not applied). Null when the run recorded no priced cost or a factor is 0.
              */
             other_gate_factor?: number | null;
             /**
@@ -38034,6 +38093,93 @@ export interface components {
             submission: components["schemas"]["GeneratorSubmissionSummary"];
             /** Versions */
             versions: components["schemas"]["GeneratorSubmissionSummary"][];
+        };
+        /**
+         * PublicHarnessMemory
+         * @description This agent's harness memory across its measured runs (SN-500).
+         *
+         *     Measured only since the release that added the telemetry: earlier runs
+         *     and runs on validators that have not updated carry none, so a short or
+         *     absent list means unmeasured, not light.
+         */
+        PublicHarnessMemory: {
+            /**
+             * Last Recorded At
+             * Format: date-time
+             */
+            last_recorded_at: string;
+            /**
+             * Limit Bytes Max
+             * @description Largest harness cap any measured run ran under.
+             */
+            limit_bytes_max?: number | null;
+            /**
+             * P50 Bytes Median
+             * @description Median of the per-run time-weighted P50s.
+             */
+            p50_bytes_median: number;
+            /**
+             * P95 Bytes Max
+             * @description Highest per-run time-weighted P95.
+             */
+            p95_bytes_max: number;
+            /**
+             * P95 Bytes Median
+             * @description Median of the per-run time-weighted P95s.
+             */
+            p95_bytes_median: number;
+            /**
+             * Peak Bytes Max
+             * @description Highest per-run `memory.peak`.
+             */
+            peak_bytes_max: number;
+            /**
+             * Recent Runs
+             * @description Most recently leased runs first, at most 20.
+             */
+            recent_runs?: components["schemas"]["PublicHarnessMemoryRun"][];
+            /** Runs */
+            runs: number;
+        };
+        /**
+         * PublicHarnessMemoryRun
+         * @description Harness memory the scorer measured for one validator run (SN-500).
+         *
+         *     ``peak_bytes`` is the harness cgroup's ``memory.peak``; ``p50_bytes`` and
+         *     ``p95_bytes`` are time-weighted percentiles of ``memory.current`` at 1 MiB
+         *     resolution. Reported by the validator alongside the run's score or
+         *     failure; no failure detail beyond the outcome is published here.
+         */
+        PublicHarnessMemoryRun: {
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Lease Issued At
+             * Format: date-time
+             */
+            lease_issued_at: string;
+            /**
+             * Limit Bytes
+             * @description The harness memory cap the run ran under.
+             */
+            limit_bytes?: number | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "scored" | "failed";
+            /** P50 Bytes */
+            p50_bytes: number;
+            /** P95 Bytes */
+            p95_bytes: number;
+            /** Peak Bytes */
+            peak_bytes: number;
+            /** Sampled Seconds */
+            sampled_seconds: number;
+            /** Samples */
+            samples: number;
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /**
          * PublicHealthResponse
@@ -40124,6 +40270,8 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
+            /** @description The harness's measured memory (peak and time-weighted P50/P95) across its validator runs; null when no run has been measured. */
+            harness_memory?: components["schemas"]["PublicHarnessMemory"] | null;
             /** Inference Runs */
             inference_runs?: components["schemas"]["PublicInferenceRun"][];
             /** @description Ordinary source-review clock and reason while the submission is in the pre-score screening pipeline; null once it leaves that pipeline (whichever way). */
@@ -55419,6 +55567,7 @@ export interface operations {
                 include?: "current_comparison" | null;
                 generation?: "active" | "rollout" | "history" | "all";
                 review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score") | null;
+                order?: "oldest" | "public_reference_first";
             };
             header?: {
                 authorization?: string | null;

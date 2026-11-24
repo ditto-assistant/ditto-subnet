@@ -44,6 +44,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/routerledger"
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
+	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 	"github.com/ditto-assistant/dittobench-api/internal/scorer"
 	"github.com/ditto-assistant/dittobench-api/internal/store"
 	"github.com/ditto-assistant/dittobench-datagen/catalog"
@@ -841,6 +842,13 @@ type benchmarkRuntimeSettings struct {
 	// SandboxMemoryLimitMiB is the Platform-issued harness memory cap. Zero
 	// means an older Platform issued none and the host default applies.
 	SandboxMemoryLimitMiB int `json:"sandbox_memory_limit_mib,omitempty"`
+	// MemoryFactorPosture, MemoryFactorFreeMiB and MemoryFactorFloorBPS are
+	// the SN-500 P95 harness-memory factor policy. An empty posture (an older
+	// Platform or validator) means shadow with the published curve; a nil free
+	// allowance or zero floor keeps that default.
+	MemoryFactorPosture  string `json:"memory_factor_posture,omitempty"`
+	MemoryFactorFreeMiB  *int   `json:"memory_factor_free_mib,omitempty"`
+	MemoryFactorFloorBPS int    `json:"memory_factor_floor_bps,omitempty"`
 }
 
 const (
@@ -884,7 +892,37 @@ func (r *benchmarkRuntimeSettings) validate(benchVersion int) error {
 			minSandboxMemoryLimitMiB, maxSandboxMemoryLimitMiB,
 		)
 	}
+	switch r.MemoryFactorPosture {
+	case "", scoregates.MemoryFactorPostureOff, scoregates.MemoryFactorPostureShadow, scoregates.MemoryFactorPostureEnforce:
+	default:
+		return fmt.Errorf("benchmark_runtime.memory_factor_posture must be off, shadow or enforce")
+	}
+	if r.MemoryFactorFreeMiB != nil && (*r.MemoryFactorFreeMiB < 0 || *r.MemoryFactorFreeMiB > maxSandboxMemoryLimitMiB) {
+		return fmt.Errorf("benchmark_runtime.memory_factor_free_mib must be between 0 and %d", maxSandboxMemoryLimitMiB)
+	}
+	if r.MemoryFactorFloorBPS != 0 && (r.MemoryFactorFloorBPS < 5000 || r.MemoryFactorFloorBPS > 10000) {
+		return fmt.Errorf("benchmark_runtime.memory_factor_floor_bps must be between 5000 and 10000")
+	}
 	return nil
+}
+
+// memoryFactorPolicy is the lease's P95 memory-factor policy over the
+// published defaults (shadow, 512 MiB free, 9000 bps at the cap).
+func (r *benchmarkRuntimeSettings) memoryFactorPolicy() scoregates.MemoryFactorPolicy {
+	policy := scoregates.DefaultMemoryFactorPolicy()
+	if r == nil {
+		return policy
+	}
+	if r.MemoryFactorPosture != "" {
+		policy.Posture = r.MemoryFactorPosture
+	}
+	if r.MemoryFactorFreeMiB != nil {
+		policy.FreeMiB = *r.MemoryFactorFreeMiB
+	}
+	if r.MemoryFactorFloorBPS != 0 {
+		policy.FloorBPS = r.MemoryFactorFloorBPS
+	}
+	return policy
 }
 
 func (r *benchmarkRuntimeSettings) delayConfig() delayFingerprintConfig {
@@ -2609,12 +2647,19 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// Bench >= 16 also prices the whole run (v16_priced_cost.go) and carries
 	// the applied cost factor in that same composite gate.
 	pricedCost := s.v16PricedCostFor(req.BenchVersion, v16PricedCostPosture, wholeRunUsage, inferenceSessionID, len(perCase)+len(sliceResult.rows))
+	// SN-500 step 2: the run's own P95 harness memory, mapped to a factor in
+	// the same composite gate. The sampler still runs (Stop is deferred), so
+	// this reads the whole scored run.
+	memoryFactor := memoryFactorFor(req.BenchVersion, req.BenchmarkRuntime, handle)
 	var datagenHalf scorer.DatagenHalf
 	if slice == nil {
-		report = applyPricedCostToReport(report, pricedCost)
+		report = applyMemoryFactorToReport(applyPricedCostToReport(report, pricedCost), memoryFactor)
 	}
 	if slice != nil {
-		datagenHalf = applyPricedCostToHalf(scorer.DatagenHalfForVersion(perCase, req.BenchVersion), pricedCost)
+		datagenHalf = applyMemoryFactorToHalf(
+			applyPricedCostToHalf(scorer.DatagenHalfForVersion(perCase, req.BenchVersion), pricedCost),
+			memoryFactor,
+		)
 		composite, stderr, err := duelingOrdinaryScore(req.BenchVersion, datagenHalf, sliceResult.columns, slice.ownerKey)
 		if err != nil {
 			// CheckDuelingColumns names only column ids and statistics, never
@@ -2710,6 +2755,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	report.Details.TwinPostPass = twinSummary
 	report.Details.InferenceCost = summarizeV13InferenceCostFrom(req.BenchVersion, perCase, sessionTotals.unattributedCost)
 	report.Details.PricedCost = pricedCost
+	report.Details.MemoryFactor = memoryFactor
 	report.Details.RunBudget = budget.summary()
 	report = applyTokenContract(report, req.BenchVersion, req.RunSize, tokenUsage)
 	if injections > 0 {

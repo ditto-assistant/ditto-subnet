@@ -5401,6 +5401,9 @@ describe('Backroom MCP tools', () => {
       relay_delay_fingerprint_min_ms: 25,
       relay_delay_fingerprint_max_ms: 250,
       sandbox_memory_limit_mib: 6144,
+      memory_factor_posture: 'shadow',
+      memory_factor_free_mib: 512,
+      memory_factor_floor_bps: 9000,
     },
   }
 
@@ -5841,6 +5844,21 @@ describe('Backroom MCP tools', () => {
       },
     })
     expect(body).not.toHaveProperty('ath_review_error')
+    // SN-499: every breached clock is summarized first, in hours.
+    expect((body as { overdue_clocks: unknown }).overdue_clocks).toEqual([
+      {
+        clock: 'copy',
+        backlog_count: 2,
+        overdue_count: 1,
+        max_age_threshold_hours: 1,
+        oldest_age_hours: 2.1,
+        oldest_agent_id: '00000000-0000-4000-8000-000000000001',
+        oldest_reason: 'escalation',
+        p95_age_hours: 2,
+        p95_threshold_hours: null,
+        p95_exceeds_threshold: null,
+      },
+    ])
     expect(fetchMock).toHaveBeenCalledTimes(2)
 
     await client.close()
@@ -8676,7 +8694,7 @@ describe('Backroom MCP tools', () => {
     // status and generation are pinned, never taken from the caller: a queue
     // narrowed by review status or scoring cohort is how it went empty.
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/copy-reviews?status=pending&generation=all&limit=12&offset=24&review_kind=deferred_source_review',
+      'https://platform-api.heyditto.ai/api/v1/admin/copy-reviews?status=pending&generation=all&order=public_reference_first&limit=12&offset=24&review_kind=deferred_source_review',
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer platform-admin-token',
@@ -8862,7 +8880,7 @@ describe('Backroom MCP tools', () => {
     // evidence belongs to get_ath_review.
     expect(JSON.stringify(queue)).not.toContain('fingerprint_versions')
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/copy-reviews?status=pending&generation=all&limit=50&offset=0',
+      'https://platform-api.heyditto.ai/api/v1/admin/copy-reviews?status=pending&generation=all&order=public_reference_first&limit=50&offset=0',
       expect.anything(),
     )
 

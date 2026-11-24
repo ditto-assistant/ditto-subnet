@@ -297,7 +297,9 @@ class TestSnapshot:
             throughput_by_class={"copy": 3, "anomalous_score": 1},
             held_without_review_ghost_count=2,
             ath_thresholds=QueueAgeThresholds(max_actionable_age_seconds=250),
-            copy_thresholds=QueueAgeThresholds(max_actionable_age_seconds=150),
+            class_thresholds={
+                "copy": QueueAgeThresholds(max_actionable_age_seconds=150)
+            },
         )
         assert [stats.queue_class for stats in snapshot.classes] == list(
             ATH_QUEUE_CLASSES
