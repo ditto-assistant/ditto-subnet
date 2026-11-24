@@ -730,6 +730,14 @@ export function CopyReviewPanel({
                             submitted {formatDate(selected.original.duplicate_of_submitted_at)}
                           </span>
                         ) : null}
+                        {selected.original.reference_public_release?.public_before_upload ? (
+                          <span
+                            className="ml-2 rounded-full border border-[var(--cyan)]/30 bg-[var(--cyan-dim)] px-2 py-0.5 text-xs text-[var(--cyan)]"
+                            title="Publicly released at or before this upload. Priority evidence only: the copy gate already tested whether the release explains the match."
+                          >
+                            public release
+                          </span>
+                        ) : null}
                         <span className="ml-2 font-mono text-[var(--muted)]">
                           {selected.original.duplicate_of
                             ? short(selected.original.duplicate_of, 12)

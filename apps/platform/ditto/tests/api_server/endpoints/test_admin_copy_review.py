@@ -1198,6 +1198,134 @@ async def test_list_is_bounded_oldest_first_and_private(
     assert "sha256" not in serialized and '"m":' not in serialized
 
 
+async def _publish_reference(
+    maker: async_sessionmaker[AsyncSession], reference_id: UUID, *, at: datetime
+) -> None:
+    """Record an exact-SHA unauthenticated public fetch of ``reference_id``."""
+    async with maker() as session, session.begin():
+        session.add(
+            ArtifactFetchAudit(
+                agent_id=reference_id,
+                artifact_sha256=reference_id.hex * 2,
+                requester_kind="public",
+                requester_id=None,
+                endpoint="public.agent_artifact",
+                fetched_at=at,
+                source_ip="192.0.2.1",
+                detail={},
+            )
+        )
+
+
+async def test_public_reference_holds_sort_first_and_carry_the_release(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """SN-499: a fork of a public release is ruled before older private matches."""
+    oldest_private, _ = await _seed(maker, opened_at=_T0)
+    newer_public, public_reference = await _seed(
+        maker, opened_at=_T0 + timedelta(hours=2)
+    )
+    late_public, late_reference = await _seed(maker, opened_at=_T0 + timedelta(hours=1))
+    await _publish_reference(maker, public_reference, at=_T0 - timedelta(minutes=5))
+    # Published only after the held upload: not public when the miner forked.
+    await _publish_reference(maker, late_reference, at=_T0 + timedelta(hours=3))
+    _install(app, maker)
+
+    ordered = await client.get(
+        "/api/v1/admin/copy-reviews",
+        params={
+            "status": "pending",
+            "generation": "all",
+            "order": "public_reference_first",
+        },
+        headers=_HEADERS,
+    )
+    assert ordered.status_code == 200, ordered.text
+    body = ordered.json()
+    assert body["order"] == "public_reference_first"
+    assert [item["agent_id"] for item in body["items"]] == [
+        str(newer_public),
+        str(oldest_private),
+        str(late_public),
+    ]
+    first = body["items"][0]["original"]["reference_public_release"]
+    assert first["reference_agent_id"] == str(public_reference)
+    assert first["public_before_upload"] is True
+    assert first["source"] == "derived"
+    late = body["items"][2]["original"]["reference_public_release"]
+    assert late["public_before_upload"] is False
+    assert late["published_at"] is not None
+
+    paged = await client.get(
+        "/api/v1/admin/copy-reviews",
+        params={
+            "status": "pending",
+            "generation": "all",
+            "order": "public_reference_first",
+            "limit": 1,
+            "offset": 1,
+        },
+        headers=_HEADERS,
+    )
+    assert [item["agent_id"] for item in paged.json()["items"]] == [str(oldest_private)]
+
+    # The default order is unchanged: oldest first, still annotated.
+    default = await client.get(
+        "/api/v1/admin/copy-reviews?generation=all", headers=_HEADERS
+    )
+    assert [item["agent_id"] for item in default.json()["items"]] == [
+        str(oldest_private),
+        str(late_public),
+        str(newer_public),
+    ]
+    assert default.json()["order"] == "oldest"
+    assert (
+        default.json()["items"][0]["original"]["reference_public_release"][
+            "public_before_upload"
+        ]
+        is False
+    )
+
+
+async def test_recorded_reference_release_wins_over_derivation(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    held, reference = await _seed(maker)
+    async with maker() as session, session.begin():
+        review = await session.scalar(
+            select(AthReview).where(AthReview.agent_id == held)
+        )
+        assert review is not None
+        review.algorithm_provenance = {
+            **review.algorithm_provenance,
+            "reference_public_release": {
+                "reference_agent_id": str(reference),
+                "published_at": (_T0 - timedelta(days=1)).isoformat(),
+                "public_before_upload": True,
+            },
+        }
+    _install(app, maker)
+    response = await client.get(
+        f"/api/v1/admin/copy-reviews/{held}/audit", headers=_HEADERS
+    )
+    assert response.status_code == 200, response.text
+    release = response.json()["review"]["original"]["reference_public_release"]
+    assert release["source"] == "recorded"
+    assert release["public_before_upload"] is True
+
+
+async def test_public_reference_order_is_for_the_pending_queue_only(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    _install(app, maker)
+    response = await client.get(
+        "/api/v1/admin/copy-reviews",
+        params={"status": "all", "order": "public_reference_first"},
+        headers=_HEADERS,
+    )
+    assert response.status_code == 400
+
+
 async def _set_review_kind(
     maker: async_sessionmaker[AsyncSession], *, agent_id: UUID, review_kind: str
 ) -> None:
@@ -1502,6 +1630,66 @@ async def test_list_can_embed_current_comparisons_in_one_request(
     # No fingerprint material leaks through the embedded form either.
     serialized = response.text.lower()
     assert "sha256" not in serialized and '"m":' not in serialized
+
+
+async def test_public_reference_order_embeds_comparisons_for_the_page(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """The ranking scan skips the fingerprint columns; the page reloads them."""
+    comparable, comparable_reference = await _seed_current_comparison(maker)
+    await _seed(maker, opened_at=_T0 + timedelta(hours=1))
+    await _publish_reference(maker, comparable_reference, at=_T0 - timedelta(minutes=5))
+    _install(app, maker)
+    response = await client.get(
+        "/api/v1/admin/copy-reviews",
+        params={
+            "status": "pending",
+            "generation": "all",
+            "order": "public_reference_first",
+            "include": "current_comparison",
+            "limit": 1,
+        },
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    [item] = response.json()["items"]
+    assert item["agent_id"] == str(comparable)
+    assert item["original"]["reference_public_release"]["public_before_upload"]
+    assert item["current_comparison"]["availability"] == "available"
+
+
+async def test_legacy_references_derive_in_one_ledger_read(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Many legacy holds under one release policy cost one release read."""
+    from ditto.db.queries import copy_hold_reference
+
+    for hours in range(4):
+        await _seed(maker, opened_at=_T0 + timedelta(hours=hours))
+    calls: list[int] = []
+    real = copy_hold_reference.list_public_source_releases
+
+    async def counting(session, *, agent_ids, quorum, policy):  # type: ignore[no-untyped-def]
+        calls.append(len(list(agent_ids)))
+        return await real(session, agent_ids=agent_ids, quorum=quorum, policy=policy)
+
+    monkeypatch.setattr(copy_hold_reference, "list_public_source_releases", counting)
+    _install(app, maker)
+    response = await client.get(
+        "/api/v1/admin/copy-reviews",
+        params={
+            "status": "pending",
+            "generation": "all",
+            "order": "public_reference_first",
+        },
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    assert len(response.json()["items"]) == 4
+    assert calls == [4]
 
 
 async def test_embedded_comparison_matches_the_dedicated_endpoint(

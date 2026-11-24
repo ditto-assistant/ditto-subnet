@@ -8166,6 +8166,11 @@ class TestAntiCopyGate:
                 ),
                 "backfilled": False,
                 "opened_at_source": "agent_finalized_audit",
+                "reference_public_release": {
+                    "reference_agent_id": str(incumbent),
+                    "published_at": None,
+                    "public_before_upload": False,
+                },
             }
 
     async def test_resubmission_of_a_rejected_artifact_is_held(
@@ -8362,6 +8367,14 @@ class TestAntiCopyGate:
                 review.algorithm_provenance["opened_at_source"]
                 == "agent_finalized_audit"
             )
+            # SN-499: the hold records whether its reference was public at
+            # upload, so the operator queue can rank forks of a release first.
+            release = review.algorithm_provenance["reference_public_release"]
+            assert release == {
+                "reference_agent_id": str(incumbent),
+                "published_at": None,
+                "public_before_upload": False,
+            }
 
     async def test_near_dup_dethroner_is_held(
         self,

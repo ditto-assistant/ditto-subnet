@@ -8429,6 +8429,13 @@ export const athReviewKindSchema = z.enum([
 
 export type AthReviewKind = z.infer<typeof athReviewKindSchema>
 
+export const copyReviewReferenceReleaseSchema = z.object({
+  reference_agent_id: z.string().uuid(),
+  published_at: z.string().nullable(),
+  public_before_upload: z.boolean(),
+  source: z.enum(['recorded', 'derived']),
+})
+
 export const copyReviewOriginalSchema = z.object({
   review_kind: athReviewKindSchema.default('copy'),
   duplicate_of: z.string().uuid().nullable(),
@@ -8465,6 +8472,14 @@ export const copyReviewOriginalSchema = z.object({
   // Public-safe score trigger and terminal screener evidence only. Source,
   // prompts, responses and private rules never enter this admin projection.
   deferred_review: deferredReviewEvidenceSchema.nullish().default(null),
+  // SN-499: whether duplicate_of was publicly released at or before the held
+  // upload. Queue-priority evidence only; the copy gate's alibi test still
+  // decides whether the release explains the match. `recorded` at hold open,
+  // `derived` at read time for an older hold. Null when the hold names no
+  // reference or the platform predates the field.
+  reference_public_release: copyReviewReferenceReleaseSchema
+    .nullish()
+    .default(null),
 })
 
 export const copyReviewItemSchema = z.object({
@@ -8502,6 +8517,10 @@ export const copyReviewListSchema = z.object({
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
   review_kind: athReviewKindSchema.nullish().default(null),
+  order: z
+    .enum(['oldest', 'public_reference_first'])
+    .nullish()
+    .default('oldest'),
   generation: z.enum(['active', 'rollout', 'history', 'all']),
   active_bench_version: z.number().int().positive(),
   rollout_bench_version: z.number().int().positive().nullable().default(null),
@@ -10558,8 +10577,9 @@ export type ConfirmationSeedAnchorList = z.infer<
 >
 
 // Ordinary (pre-score) source-review queue-age SLO, ditto-subnet#2042 slice 1.
-// Read-only observability: overdue_count and p95_exceeds_threshold are null
-// until an operator configures a threshold, and this board enforces nothing.
+// Read-only observability. Platform ships thresholds (SN-499), so
+// overdue_count and p95_exceeds_threshold are null only when an operator turns
+// a threshold off. This board enforces nothing.
 // Copy, ATH, and top-five double-check review report through
 // athReviewQueueSloSchema below; human escalation is a later clock.
 export const sourceReviewQueueSloSchema = z.object({
@@ -10591,7 +10611,7 @@ export type SourceReviewQueueSlo = z.infer<typeof sourceReviewQueueSloSchema>
 
 // ATH-hold queue-age SLO, ditto-subnet#2042 slice 2: every pending ath_reviews
 // hold, one clock per class (copy review included), and stranded-hold ghosts.
-// Read-only; thresholds report null until an operator configures them.
+// Read-only; each clock ships its own threshold (SN-499), null when turned off.
 type GeneratedAthReviewQueueStats = PlatformComponents['schemas']['AthReviewQueueStats']
 type GeneratedAthReviewQueueSlo = PlatformComponents['schemas']['AthReviewQueueSlo']
 

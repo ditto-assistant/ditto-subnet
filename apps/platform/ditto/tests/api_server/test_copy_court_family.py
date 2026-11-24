@@ -348,6 +348,44 @@ def test_missing_screening_blocks_auto_clear_but_keeps_recommendation() -> None:
     assert "delta read" in verdict.auto_clear_blockers[0]
 
 
+def test_build_only_admission_is_named_but_never_counts_as_a_delta_read() -> None:
+    """SN-440 / SN-499: since 2026-11-07 every attempt is build-only.
+
+    The blocker must say what did pass instead of reading as if screening
+    never ran, and a build-only pass must still never satisfy auto-clear.
+    """
+    facts = attribute_family(
+        held=_HELD, matched=_MATCHED, bases=[PublicBase(_BASE, "declared_by_held", _T0)]
+    )
+    screening = ScreeningEvidence(
+        attempt_id=None,
+        policy_version=None,
+        agent_policy_version=13,
+        lineage_scope=None,
+        open_quarantines=0,
+        build_only_attempt_id="build-only-attempt",
+    )
+    verdict = family_verdict(
+        _context(
+            _HELD,
+            _MATCHED,
+            [_proof(_BASE, proven=True, relation="declared_by_held")],
+            screening=screening,
+        ),
+        facts,
+    )
+    assert verdict.verdict == "clear"
+    assert not verdict.auto_clear_eligible
+    assert (
+        "build-only admission (attempt build-only-attempt)"
+        in (verdict.auto_clear_blockers[0])
+    )
+    assert "delta read" in verdict.auto_clear_blockers[0]
+    evidence = screening.as_evidence()
+    assert evidence["delta_read"] is False
+    assert evidence["build_only_passed_attempt_id"] == "build-only-attempt"
+
+
 def test_same_owner_clears_without_auto_apply() -> None:
     facts = attribute_family(held=_HELD, matched=_MATCHED, bases=[])
     verdict = family_verdict(_context(_HELD, _MATCHED, [], same_owner=True), facts)

@@ -481,12 +481,45 @@ parameter.
   which are the stranded holds described above.
   `held_without_review_ghost_count` counts `ath_pending_review` agents that
   have no pending row.
-- **Thresholds.** All are unset by default, so `overdue_count` and
-  `p95_exceeds_threshold` are null. Set them with
-  `DITTO_ATH_REVIEW_QUEUE_{MAX_AGE,P95_AGE}_THRESHOLD_SECONDS` for the
-  aggregate and `DITTO_COPY_REVIEW_QUEUE_{MAX_AGE,P95_AGE}_THRESHOLD_SECONDS`
-  for copy review. The endpoint only reports: it raises no alerts and takes no
-  escalation action.
+- **Thresholds.** Every clock ships a threshold (SN-499). Until then all were
+  unset, so a ten-day copy hold and a 128-day overfit escalation both read
+  `overdue_count: null`. The shipped values are review-latency targets, not
+  ruling policy:
+
+  | Clock | Max age | p95 | Env stem |
+  |---|---|---|---|
+  | aggregate (`ath`) | 72h | 48h | `DITTO_ATH_REVIEW_QUEUE_` |
+  | `copy` | 48h | 24h | `DITTO_COPY_REVIEW_QUEUE_` |
+  | `benchmark_overfit` | 72h | 48h | `DITTO_ATH_REVIEW_QUEUE_BENCHMARK_OVERFIT_` |
+  | `deferred_source_review` | 48h | 24h | `DITTO_ATH_REVIEW_QUEUE_DEFERRED_SOURCE_REVIEW_` |
+  | `integrity_double_check` | 24h | 12h | `DITTO_ATH_REVIEW_QUEUE_INTEGRITY_DOUBLE_CHECK_` |
+  | `anomalous_score` | 48h | 24h | `DITTO_ATH_REVIEW_QUEUE_ANOMALOUS_SCORE_` |
+
+  Each stem takes `MAX_AGE_THRESHOLD_SECONDS` and `P95_AGE_THRESHOLD_SECONDS`.
+  A positive integer overrides the shipped value and `off` reports null again.
+  The ordinary source-review queue ships 24h / 12h under
+  `DITTO_SOURCE_REVIEW_QUEUE_{MAX_AGE,P95_AGE}_THRESHOLD_SECONDS`. The
+  endpoints only report: they raise no alert and take no escalation action.
+  Backroom's `get_source_review_queue_slo` lists each breached clock first in
+  `overdue_clocks`, and the operator-review page shows the same list above the
+  queue.
+
+## Forks of a public release come first
+
+A score-finalization copy hold records whether its matched agent was publicly
+released at or before the held upload, in
+`algorithm_provenance.reference_public_release` (SN-499). "Public" means what
+the copy gate means: `list_public_source_releases` under the release policy in
+force at that upload. Older holds derive the same fact at read time, and the
+queue row reports which one it used in `original.reference_public_release`
+(`recorded` or `derived`).
+
+`GET /admin/copy-reviews?status=pending&order=public_reference_first` lists
+those holds first, each tier oldest first. Backroom's queue tool always uses
+this order; the console list keeps `order=oldest`. The fact is priority
+evidence only. The copy gate already ran its alibi test against every public
+release, so a held fork of a public agent still matched something the release
+does not explain.
 
 The public pipeline (`/public/agent/{id}/pipeline`) carries `ath_review` for a
 held submission. It includes the reason, the hold age, and the subnet-wide

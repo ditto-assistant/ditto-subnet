@@ -2938,6 +2938,9 @@ export async function fetchAthReviewQueue(
     // queue must not be filterable by review status or scoring generation.
     status: 'pending',
     generation: 'all',
+    // SN-499: holds whose reference was public before the held upload come
+    // first (forks of a public release), each tier oldest first.
+    order: 'public_reference_first',
     limit: String(limit),
     offset: String(offset),
   })

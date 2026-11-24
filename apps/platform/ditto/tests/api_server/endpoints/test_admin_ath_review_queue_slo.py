@@ -13,14 +13,22 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server.ath_review_queue_slo_config import (
+    ATH_REVIEW_QUEUE_MAX_AGE_THRESHOLD_ENV,
+    ATH_REVIEW_QUEUE_P95_AGE_THRESHOLD_ENV,
     COPY_REVIEW_QUEUE_MAX_AGE_THRESHOLD_ENV,
+    DEFAULT_ATH_THRESHOLDS,
+    DEFAULT_CLASS_THRESHOLDS,
     AthReviewQueueSloConfig,
+    class_threshold_env_names,
     parse_ath_review_queue_slo_config_from_env,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.errors import ApiServerConfigError
 from ditto.db.models import Agent, AgentStatus, AthReview
-from ditto.db.queries.ath_review_queue_slo import QueueAgeThresholds
+from ditto.db.queries.ath_review_queue_slo import (
+    ATH_QUEUE_CLASSES,
+    QueueAgeThresholds,
+)
 
 _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
 _HEADERS = {"Authorization": f"Bearer {_ADMIN_TOKEN}"}
@@ -103,6 +111,43 @@ class TestConfig:
         config = parse_ath_review_queue_slo_config_from_env()
         assert config.copy.max_actionable_age_seconds == 86400
 
+    def test_ships_a_threshold_for_every_class(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # SN-499: every class used to report null, which hid a ten-day copy
+        # hold and a 128-day overfit escalation.
+        for name in (
+            ATH_REVIEW_QUEUE_MAX_AGE_THRESHOLD_ENV,
+            ATH_REVIEW_QUEUE_P95_AGE_THRESHOLD_ENV,
+        ):
+            monkeypatch.delenv(name, raising=False)
+        for queue_class in ATH_QUEUE_CLASSES:
+            for name in class_threshold_env_names(queue_class):
+                monkeypatch.delenv(name, raising=False)
+        config = parse_ath_review_queue_slo_config_from_env()
+        assert config.ath == DEFAULT_ATH_THRESHOLDS
+        assert set(config.classes) == set(ATH_QUEUE_CLASSES)
+        for queue_class in ATH_QUEUE_CLASSES:
+            thresholds = config.classes[queue_class]
+            assert thresholds == DEFAULT_CLASS_THRESHOLDS[queue_class]
+            assert thresholds.max_actionable_age_seconds is not None
+            assert thresholds.p95_age_seconds is not None
+        assert config.copy == DEFAULT_CLASS_THRESHOLDS["copy"]
+
+    def test_class_env_overrides_and_off_disables(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        max_env, p95_env = class_threshold_env_names("benchmark_overfit")
+        assert max_env == (
+            "DITTO_ATH_REVIEW_QUEUE_BENCHMARK_OVERFIT_MAX_AGE_THRESHOLD_SECONDS"
+        )
+        monkeypatch.setenv(max_env, "3600")
+        monkeypatch.setenv(p95_env, "off")
+        config = parse_ath_review_queue_slo_config_from_env()
+        assert config.classes["benchmark_overfit"] == QueueAgeThresholds(
+            max_actionable_age_seconds=3600, p95_age_seconds=None
+        )
+
     @pytest.mark.parametrize("raw", ["0", "soon"])
     def test_rejects_unusable_threshold_at_boot(
         self, monkeypatch: pytest.MonkeyPatch, raw: str
@@ -172,7 +217,7 @@ class TestReadsTheQueue:
             app,
             slo_config=AthReviewQueueSloConfig(
                 ath=QueueAgeThresholds(max_actionable_age_seconds=7200),
-                copy=QueueAgeThresholds(max_actionable_age_seconds=60),
+                classes={"copy": QueueAgeThresholds(max_actionable_age_seconds=60)},
             ),
         )
         _install_session(app, session_maker)
@@ -188,3 +233,38 @@ class TestReadsTheQueue:
         assert body["copy_review"]["max_actionable_age_threshold_seconds"] == 60
         assert body["copy_review"]["overdue_count"] == 1
         assert body["copy_review"]["oldest_reason"] == "escalation"
+
+    async def test_every_class_reports_its_own_threshold(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(
+            app,
+            slo_config=AthReviewQueueSloConfig(
+                ath=DEFAULT_ATH_THRESHOLDS, classes=DEFAULT_CLASS_THRESHOLDS
+            ),
+        )
+        _install_session(app, session_maker)
+        await _seed_copy_hold(
+            session_maker, opened_at=datetime.now(UTC) - timedelta(days=10)
+        )
+
+        response = await client.get(_URL, headers=_HEADERS)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        by_class = {entry["queue_class"]: entry for entry in body["classes"]}
+        for queue_class, thresholds in DEFAULT_CLASS_THRESHOLDS.items():
+            entry = by_class[queue_class]
+            assert entry["max_actionable_age_threshold_seconds"] == (
+                thresholds.max_actionable_age_seconds
+            )
+            assert entry["p95_age_threshold_seconds"] == thresholds.p95_age_seconds
+        # The ten-day copy hold from the ticket now reads as overdue.
+        assert by_class["copy"]["overdue_count"] == 1
+        assert by_class["copy"]["p95_exceeds_threshold"] is True
+        # An empty class reports zero overdue, not null.
+        assert by_class["benchmark_overfit"]["overdue_count"] == 0
+        assert by_class["benchmark_overfit"]["p95_exceeds_threshold"] is None
+        assert body["ath"]["overdue_count"] == 1

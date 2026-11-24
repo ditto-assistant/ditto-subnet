@@ -13065,6 +13065,7 @@ export interface components {
             reason_source: "original_hold" | "reconsideration";
             /** Reference Provenance */
             reference_provenance: string;
+            reference_public_release?: components["schemas"]["AdminCopyReviewReferenceRelease"] | null;
             /**
              * Review Kind
              * @default copy
@@ -13146,6 +13147,12 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+            /**
+             * Order
+             * @default oldest
+             * @enum {string}
+             */
+            order: "oldest" | "public_reference_first";
             /** Review Kind */
             review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score") | null;
             /** Rollout Bench Version */
@@ -13244,6 +13251,26 @@ export interface components {
              * @enum {string}
              */
             status: "resolved" | "all";
+        };
+        /**
+         * AdminCopyReviewReferenceRelease
+         * @description Publication of a copy hold's reference, relative to the held upload.
+         */
+        AdminCopyReviewReferenceRelease: {
+            /** Public Before Upload */
+            public_before_upload: boolean;
+            /** Published At */
+            published_at?: string | null;
+            /**
+             * Reference Agent Id
+             * Format: uuid
+             */
+            reference_agent_id: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "recorded" | "derived";
         };
         /** AdminCopyReviewResolveRequest */
         AdminCopyReviewResolveRequest: {
@@ -55540,6 +55567,7 @@ export interface operations {
                 include?: "current_comparison" | null;
                 generation?: "active" | "rollout" | "history" | "all";
                 review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score") | null;
+                order?: "oldest" | "public_reference_first";
             };
             header?: {
                 authorization?: string | null;
