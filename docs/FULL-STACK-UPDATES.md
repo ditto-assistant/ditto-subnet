@@ -31,7 +31,10 @@ prefetch timer resolves and authenticates the immutable descriptor digest, then
 pulls and validates every component image. It never drains, recreates, or
 resumes a service. Image cleanup retains the prefetched candidate's descriptor
 and component digests until that candidate is installed or superseded, so the
-warm cache survives the stage-to-promote window. Only the stable `compat-2`
+warm cache survives the stage-to-promote window. The digests are kept in
+`prefetched-release-images.env`, which names its own release, beside the
+two-key `prefetched-release.env` marker that validator status reporting reads.
+Only the stable `compat-2`
 channel can start an update, and that channel advances only after all release
 gates pass.
 
