@@ -4124,7 +4124,7 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             return min(5.0, remaining) if remaining > 0 else None
 
         try:
-            async with asyncio.timeout_at(give_up_at):
+            async with asyncio.timeout_at(give_up_at) as wall_timeout:
                 while (probe_timeout := call_timeout()) is not None:
                     if probe_container is not None:
                         code, out = await self._request_from_sidecar(
@@ -4164,6 +4164,8 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                     if sleep > 0:
                         await asyncio.sleep(sleep)
         except TimeoutError:
+            if not wall_timeout.expired():
+                raise
             # The wall-clock bound cut a probe short (httpx timeouts are per
             # phase, so one request can outlive its own timeout).
             pass

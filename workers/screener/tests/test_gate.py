@@ -1423,8 +1423,8 @@ async def test_image_upload_follows_lease_renewals(
 
     async def export_image(*args: Any, **kwargs: Any) -> BuiltImageArtifact:
         exported = await original_export(*args, **kwargs)
-        # The upload starts with 0.2s of lease left; heartbeats keep renewing.
-        lease.expires_at = loop.time() + 0.2
+        # The upload starts with 0.5s of lease left; heartbeats keep renewing.
+        lease.expires_at = loop.time() + 0.5
         return exported
 
     async def publish(image: BuiltImageArtifact) -> None:
@@ -1433,7 +1433,7 @@ async def test_image_upload_follows_lease_renewals(
             await asyncio.sleep(0.1)
             if renew:
                 lease.renew(loop.time() + 600)
-            await asyncio.sleep(0.4 if renew else 30)
+            await asyncio.sleep(0.7 if renew else 30)
         except asyncio.CancelledError:
             upload_cancelled = True
             raise
