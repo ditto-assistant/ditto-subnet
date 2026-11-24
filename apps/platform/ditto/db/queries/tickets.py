@@ -1522,8 +1522,8 @@ async def get_open_ticket(
         ValidatorTicket.agent_id == agent_id,
         ValidatorTicket.validator_hotkey == validator_hotkey,
         ValidatorTicket.status == TicketStatus.ISSUED,
-        ValidatorTicket.deadline == _as_utc(deadline),
-        ValidatorTicket.deadline > now,
+        ValidatorTicket.deadline == _as_utc(deadline).astimezone(UTC),
+        ValidatorTicket.deadline > _as_utc(now).astimezone(UTC),
     )
     if bench_version is not None:
         statement = statement.where(ValidatorTicket.bench_version == bench_version)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -4025,6 +4025,32 @@ class TestTicketLifecycle:
         assert ambiguous is None
         assert pinned is not None
         assert pinned.bench_version == _BENCH + 1
+
+    async def test_open_ticket_normalizes_non_utc_aware_deadline(
+        self, session: AsyncSession
+    ) -> None:
+        """An aware non-UTC signed deadline matches the stored UTC lease."""
+        aid = await _seed_evaluating(session)
+        deadline = _NOW + _TTL
+        await self._seed_issued(
+            session,
+            agent_id=aid,
+            bench_version=_BENCH,
+            slot_id="slot-0",
+            deadline=deadline,
+        )
+        plus_two = timezone(timedelta(hours=2))
+        async with session.begin():
+            ticket = await get_open_ticket(
+                session,
+                agent_id=aid,
+                validator_hotkey="5V1",
+                now=_NOW.astimezone(plus_two),
+                deadline=deadline.astimezone(plus_two),
+                bench_version=None,
+            )
+        assert ticket is not None
+        assert ticket.bench_version == _BENCH
 
 
 # SN-334: a generator round's lease shares the canonical ticket row. The round
