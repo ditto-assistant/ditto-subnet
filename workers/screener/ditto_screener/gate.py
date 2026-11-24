@@ -3035,7 +3035,11 @@ class BuildGate:
                 timeout=_IMAGE_EXPORT_TIMEOUT_SECONDS,
                 deadline=deadline,
             )
-            if code == 124 and output.startswith("[lease expired after"):
+            lease_remaining = self._lease_remaining(deadline)
+            if code == 124 and (
+                output.startswith("[lease expired after")
+                or (lease_remaining is not None and lease_remaining <= 0)
+            ):
                 raise _LeaseDeadlineError(f"lease expired during image export {output}")
             if code != 0:
                 raise _ScreenedImageExportError(

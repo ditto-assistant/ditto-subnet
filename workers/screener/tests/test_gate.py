@@ -1518,6 +1518,33 @@ async def test_image_export_follows_lease_renewals(
         await gate._client.aclose()
 
 
+async def test_image_export_timeout_tie_with_expired_lease_raises_lease_error(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """Generic timeout output with an expired lease still classifies as lease expiry."""
+    archive, _, _ = _oci_image_save_archive()
+    gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    loop = asyncio.get_running_loop()
+    lease = LeaseDeadline(loop.time() + 60.0)
+
+    async def run(args: list[str], **_: Any) -> tuple[int, str]:
+        if args[:3] == ["image", "inspect", "--format"]:
+            return 0, str(len(archive))
+        assert args[:3] == ["image", "save", "--output"]
+        # Simulate the fixed 600s export timeout winning the tie as the lease expires.
+        lease.expires_at = loop.time() - 0.1
+        return 124, "[timeout after 600s]"
+
+    gate._run = run  # type: ignore[method-assign]
+    async with gate._client:
+        with pytest.raises(gate_module._LeaseDeadlineError):
+            await gate._export_image(
+                "sha256:" + "34" * 32,
+                image_ref=f"ditto-screen/{_AGENT}:latest",
+                deadline=lease,
+            )
+
+
 async def test_health_wait_is_bounded_by_wall_clock_time(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
