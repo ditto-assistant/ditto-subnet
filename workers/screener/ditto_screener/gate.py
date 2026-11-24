@@ -204,6 +204,8 @@ _MAX_ARCHIVE_MEMBERS = 20_000
 _MAX_SCREENED_IMAGE_BYTES = runtime_envelope().screened_image_bytes
 _IMAGE_EXPORT_DISK_RESERVE_BYTES = 256 * 1024**2
 _IMAGE_HASH_CHUNK_BYTES = 8 * 1024**2
+# Hard cap on one ``docker image save``; the renewable lease bounds it too.
+_IMAGE_EXPORT_TIMEOUT_SECONDS = 600.0
 _MAX_CANARY_RESPONSE_BYTES = 64 * 1024
 # Sidecar exit codes. The probe script maps each failure shape to its own code
 # so a caller can tell a harness HTTP status from a transport failure without
@@ -500,6 +502,43 @@ class _ScreenedImageExportError(RuntimeError):
 
 class _LeaseDeadlineError(TimeoutError):
     """An image export/publication operation exhausted the screening lease."""
+
+
+async def _await_within_lease[T](
+    start: Callable[[], Awaitable[T]], deadline: Deadline, stage: str
+) -> T:
+    """Await ``start()`` until it finishes or the lease expires.
+
+    The expiry is re-read while waiting, so heartbeat renewals of a
+    :class:`LeaseDeadline` extend the stage instead of a budget snapshot taken
+    when it began. Expiry cancels the operation and raises
+    :class:`_LeaseDeadlineError`; an already expired lease never starts it.
+    """
+    if deadline is None:
+        return await start()
+    loop = asyncio.get_running_loop()
+
+    def lease_remaining() -> float:
+        expires_at = (
+            deadline.expires_at if isinstance(deadline, LeaseDeadline) else deadline
+        )
+        return expires_at - loop.time()
+
+    if lease_remaining() <= 0:
+        raise _LeaseDeadlineError(f"lease expired before {stage}")
+    operation = asyncio.ensure_future(start())
+    try:
+        while True:
+            remaining = lease_remaining()
+            if remaining <= 0:
+                raise _LeaseDeadlineError(f"lease expired during {stage}")
+            done, _ = await asyncio.wait({operation}, timeout=min(15.0, remaining))
+            if done:
+                return operation.result()
+    finally:
+        if not operation.done():
+            operation.cancel()
+        await asyncio.gather(operation, return_exceptions=True)
 
 
 @dataclass(frozen=True)
@@ -2269,14 +2308,10 @@ class BuildGate:
                         detail=f"screener error: image export failed: {error}",
                     )
                 try:
-                    remaining = self._lease_remaining(image_deadline)
-                    if remaining is None:
-                        await image_publisher(image)
-                    elif remaining <= 0:
-                        raise _LeaseDeadlineError
-                    else:
-                        async with asyncio.timeout(remaining):
-                            await image_publisher(image)
+                    publisher = image_publisher
+                    await _await_within_lease(
+                        lambda: publisher(image), image_deadline, "image upload"
+                    )
                 except (TimeoutError, _LeaseDeadlineError):
                     if held_source_review:
                         return decision
@@ -2992,11 +3027,16 @@ class BuildGate:
                     "insufficient temporary disk for screened image export "
                     f"(need {required_bytes} bytes, have {free_bytes})"
                 )
-            export_timeout = self._lease_timeout(deadline, 600.0, "image export")
+            # The 600s cap is fixed. The lease is re-read while ``docker save``
+            # runs, so heartbeat renewals extend it past the stage-start budget.
+            self._lease_timeout(deadline, _IMAGE_EXPORT_TIMEOUT_SECONDS, "image export")
             code, output = await self._run(
                 ["image", "save", "--output", path, image_id],
-                timeout=export_timeout,
+                timeout=_IMAGE_EXPORT_TIMEOUT_SECONDS,
+                deadline=deadline,
             )
+            if code == 124 and output.startswith("[lease expired after"):
+                raise _LeaseDeadlineError(f"lease expired during image export {output}")
             if code != 0:
                 raise _ScreenedImageExportError(
                     f"docker image export failed: {_log_tail(output)}"
@@ -4063,47 +4103,66 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
         harness_container: str | None = None,
         timeout: float | None = None,
     ) -> tuple[bool, str]:
-        """Poll the submitted container's health endpoint until the deadline."""
+        """Poll the submitted container's health endpoint until the deadline.
+
+        The deadline is wall-clock time on the monotonic loop clock, so probe
+        and inspect time count against it, and each call is capped at what is
+        left. A hung ``/health`` frees the slot after ``timeout`` seconds.
+        """
         url = f"{harness_base}{self._config.health_path}"
         deadline = self._config.run_timeout_seconds if timeout is None else timeout
-        waited = 0.0
+        loop = asyncio.get_running_loop()
+        give_up_at = loop.time() + deadline
         last = "no response"
-        while waited < deadline:
-            if probe_container is not None:
-                code, out = await self._request_from_sidecar(
-                    probe_container, url, timeout=5.0
-                )
-                if code == 0:
-                    return True, ""
-                last = _log_tail(out) or "unreachable"
-                if harness_container is not None:
-                    inspect_code, lifecycle = await self._run(
-                        [
-                            "container",
-                            "inspect",
-                            "--format",
-                            "{{.State.Status}}",
-                            harness_container,
-                        ],
-                        timeout=5.0,
-                    )
-                    lifecycle = lifecycle.strip().lower()
-                    if inspect_code == 0 and lifecycle in {"dead", "exited"}:
-                        return (
-                            False,
-                            "harness exited before its health endpoint became ready "
-                            f"({last})",
+
+        def call_timeout() -> float | None:
+            remaining = give_up_at - loop.time()
+            return min(5.0, remaining) if remaining > 0 else None
+
+        try:
+            async with asyncio.timeout_at(give_up_at):
+                while (probe_timeout := call_timeout()) is not None:
+                    if probe_container is not None:
+                        code, out = await self._request_from_sidecar(
+                            probe_container, url, timeout=probe_timeout
                         )
-            else:
-                try:
-                    resp = await self._client.get(url, timeout=5.0)
-                    if 200 <= resp.status_code < 300:
-                        return True, ""
-                    last = f"HTTP {resp.status_code}"
-                except httpx.HTTPError as e:
-                    last = type(e).__name__
-            await asyncio.sleep(_PROBE_INTERVAL_SECONDS)
-            waited += _PROBE_INTERVAL_SECONDS
+                        if code == 0:
+                            return True, ""
+                        last = _log_tail(out) or "unreachable"
+                        inspect_timeout = call_timeout()
+                        if harness_container is not None and inspect_timeout:
+                            inspect_code, lifecycle = await self._run(
+                                [
+                                    "container",
+                                    "inspect",
+                                    "--format",
+                                    "{{.State.Status}}",
+                                    harness_container,
+                                ],
+                                timeout=inspect_timeout,
+                            )
+                            lifecycle = lifecycle.strip().lower()
+                            if inspect_code == 0 and lifecycle in {"dead", "exited"}:
+                                return (
+                                    False,
+                                    "harness exited before its health endpoint "
+                                    f"became ready ({last})",
+                                )
+                    else:
+                        try:
+                            resp = await self._client.get(url, timeout=probe_timeout)
+                            if 200 <= resp.status_code < 300:
+                                return True, ""
+                            last = f"HTTP {resp.status_code}"
+                        except httpx.HTTPError as e:
+                            last = type(e).__name__
+                    sleep = min(_PROBE_INTERVAL_SECONDS, give_up_at - loop.time())
+                    if sleep > 0:
+                        await asyncio.sleep(sleep)
+        except TimeoutError:
+            # The wall-clock bound cut a probe short (httpx timeouts are per
+            # phase, so one request can outlive its own timeout).
+            pass
         return False, f"/health never healthy within {deadline:g}s ({last})"
 
     async def _run_v13_runtime_observations(
