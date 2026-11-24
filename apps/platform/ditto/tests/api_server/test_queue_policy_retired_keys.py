@@ -4,9 +4,9 @@
 was retired still carries it. Models ignore unknown fields during rolling
 upgrades, preserving the rest of the operator's policy rather than resetting it.
 
-Production is not exposed to this today: `queue_policy_settings_revisions` is
-empty, so there is no stored revision to misread. Staging and any future
-removal are, which is what these tests are for.
+The same holds for the top-level ``deferred_source_review`` block retired
+with source review: every production revision written before 2026-11-07
+carries it.
 
 Both stored documents and new writes drop the dead key. It cannot become an
 authoritative setting or re-open retired behavior.
@@ -71,3 +71,43 @@ def test_a_genuinely_corrupt_revision_still_fails_open() -> None:
         revision=8, settings=cast(dict[str, object], {"prev_gen_carryover": "nonsense"})
     )
     assert settings_from_row(corrupt) == DEFAULT_SETTINGS
+
+
+# ---------------------------------------------------------------------------
+# deferred_source_review: a whole top-level block retired with source review
+# ---------------------------------------------------------------------------
+
+# Exactly what live revisions written before 2026-11-07 store.
+_RETIRED_DEFERRED_SOURCE_REVIEW = {
+    "mode": "bypass",
+    "integrity_double_check_mode": "enforce",
+    "min_cohort_size": 8,
+    "composite_mad_multiplier": 6.0,
+    "axis_mad_multiplier": 6.0,
+    "min_composite_delta": 0.1,
+    "min_axis_delta": 0.15,
+}
+
+
+def _stored_with_deferred_block(**overrides: object) -> QueuePolicySettingsRevision:
+    payload = QueuePolicySettings().model_dump(mode="json")
+    payload.update(overrides)
+    payload["deferred_source_review"] = dict(_RETIRED_DEFERRED_SOURCE_REVIEW)
+    return QueuePolicySettingsRevision(revision=16, settings=payload)
+
+
+def test_a_revision_carrying_the_deferred_review_block_still_decodes() -> None:
+    decoded = settings_from_row(_stored_with_deferred_block(rescore_cohort_size=8))
+    assert not hasattr(decoded, "deferred_source_review")
+    assert "deferred_source_review" not in decoded.model_dump()
+    # Not a silent reset to the defaults: the operator's real change survives.
+    assert decoded.rescore_cohort_size == 8
+    assert decoded.rescore_cohort_size != DEFAULT_SETTINGS.rescore_cohort_size
+
+
+def test_a_new_write_drops_the_deferred_review_block() -> None:
+    payload = QueuePolicySettings().model_dump(mode="json")
+    payload["deferred_source_review"] = dict(_RETIRED_DEFERRED_SOURCE_REVIEW)
+    assert "deferred_source_review" not in QueuePolicySettings.model_validate(
+        payload
+    ).model_dump(mode="json")

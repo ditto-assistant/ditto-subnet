@@ -122,7 +122,9 @@ average a mixed-looking I4/I7 into a keep when I3 or I5 still fails.
 
 `screening_policy_version=10` is a wire stamp. `deferred-mechanical-admission`
 with L2 off / deferred_source_review bypass means Luna/L2 never reviewed the
-source. ATH still inspects this SHA.
+source. ATH still inspects this SHA. (Both are historical: source review and
+the `deferred_source_review` queue-policy block are retired, so no new hold
+carries them.)
 
 A `deferred_source_review` hold whose reason is the top-five integrity
 double-check (`algorithm_provenance.trigger=integrity_double_check`) already

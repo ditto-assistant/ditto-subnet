@@ -24,9 +24,6 @@ from sqlalchemy.sql.selectable import ScalarSelect
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contracts
-from ditto.api_models.screener_review_settings import (
-    INTEGRITY_DOUBLE_CHECK_SCOPE,
-)
 from ditto.db.models import (
     Agent,
     BenchmarkDataset,
@@ -37,7 +34,6 @@ from ditto.db.models import (
     Score,
     ScoredPolicyRescreenRelease,
     ScreenerHeartbeat,
-    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningRetryOverride,
@@ -1018,18 +1014,6 @@ async def _park_repeatedly_inconclusive(
     agent.status = AgentStatus.SCREENING_FAILED
     agent.screening_reason = _EXHAUSTED_PUBLIC_REASON
     agent.screening_reason_code = _EXHAUSTED_REASON_CODE
-
-
-async def latest_integrity_double_check_posture(
-    session: AsyncSession,
-) -> ScreenerReviewSettingsRevision | None:
-    """Return the reviewer revision a double-check deep pass is pinned to."""
-    return await session.scalar(
-        select(ScreenerReviewSettingsRevision)
-        .where(ScreenerReviewSettingsRevision.scope == INTEGRITY_DOUBLE_CHECK_SCOPE)
-        .order_by(ScreenerReviewSettingsRevision.revision.desc())
-        .limit(1)
-    )
 
 
 async def claim_screening_attempts(
