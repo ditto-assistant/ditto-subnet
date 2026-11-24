@@ -1388,6 +1388,201 @@ async def test_publish_platform_outage_is_fleet_infra(
     assert "initiate rejected (502)" in result.detail
 
 
+def _exportable_run(saved_archive: bytes) -> Callable[..., Any]:
+    async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
+        if args[:2] == ["buildx", "build"]:
+            if stdin is not None:
+                stdin.read()
+            _write_iidfile(args)
+        elif args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
+            return 0, "sha256:" + "34" * 32
+        elif args[:3] == ["image", "inspect", "--format"]:
+            if "Config.Volumes" in args[3]:
+                return 0, ""
+            return 0, str(len(saved_archive))
+        elif args[:3] == ["image", "save", "--output"]:
+            Path(args[3]).write_bytes(saved_archive)
+        return 0, ""
+
+    return run
+
+
+@pytest.mark.parametrize("renew", [True, False])
+async def test_image_upload_follows_lease_renewals(
+    make_config: Callable[..., ScreenerConfig], renew: bool
+) -> None:
+    """#2988: the upload was bounded by the lease left when it started."""
+    tarball = _valid_tar()
+    saved_archive, _, _ = _oci_image_save_archive()
+    gate = _gate_with(make_config(), _exportable_run(saved_archive), tarball=tarball)
+    loop = asyncio.get_running_loop()
+    lease = LeaseDeadline(loop.time() + 600)
+    original_export = gate._export_image
+    uploads: list[str] = []
+    upload_cancelled = False
+
+    async def export_image(*args: Any, **kwargs: Any) -> BuiltImageArtifact:
+        exported = await original_export(*args, **kwargs)
+        # The upload starts with 0.2s of lease left; heartbeats keep renewing.
+        lease.expires_at = loop.time() + 0.2
+        return exported
+
+    async def publish(image: BuiltImageArtifact) -> None:
+        nonlocal upload_cancelled
+        try:
+            await asyncio.sleep(0.1)
+            if renew:
+                lease.renew(loop.time() + 600)
+            await asyncio.sleep(0.4 if renew else 30)
+        except asyncio.CancelledError:
+            upload_cancelled = True
+            raise
+        uploads.append(image.sha256)
+
+    gate._export_image = export_image  # type: ignore[method-assign]
+    async with gate._client:
+        result = await asyncio.wait_for(
+            gate.screen(
+                agent_id=_AGENT,
+                attempt_id=_ATTEMPT,
+                bench_version=12,
+                miner_hotkey=_MINER,
+                sha256=hashlib.sha256(tarball).hexdigest(),
+                download_url=_URL,
+                deadline=lease,
+                publish_image=publish,
+            ),
+            timeout=5,
+        )
+
+    if renew:
+        assert result.outcome == ScreeningOutcome.PASS
+        assert len(uploads) == 1
+    else:
+        assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+        assert result.evidence[-1].code == "lease-budget-exhausted"
+        assert "during image upload" in result.detail
+        assert upload_cancelled
+        assert uploads == []
+
+
+@pytest.mark.parametrize("renew", [True, False])
+async def test_image_export_follows_lease_renewals(
+    make_config: Callable[..., ScreenerConfig], renew: bool
+) -> None:
+    """#2988: ``docker save`` was capped at the lease left when export began."""
+    archive, _, _ = _oci_image_save_archive()
+    gate = _gate_with(
+        make_config(docker_bin=sys.executable), _ok_run(), tarball=_valid_tar()
+    )
+    loop = asyncio.get_running_loop()
+    lease = LeaseDeadline(loop.time() + 0.3)
+
+    async def run(args: list[str], **kwargs: Any) -> tuple[int, str]:
+        if args[:3] == ["image", "inspect", "--format"]:
+            return 0, str(len(archive))
+        assert args[:3] == ["image", "save", "--output"]
+        code, output = await BuildGate._run(
+            gate, ["-c", "import time; time.sleep(0.8)"], **kwargs
+        )
+        if code == 0:
+            Path(args[3]).write_bytes(archive)
+        return code, output
+
+    async def renew_lease() -> None:
+        await asyncio.sleep(0.1)
+        lease.renew(loop.time() + 600)
+
+    gate._run = run  # type: ignore[method-assign]
+    renewal = asyncio.create_task(renew_lease()) if renew else None
+    try:
+        if renew:
+            exported = await gate._export_image(
+                "sha256:" + "34" * 32,
+                image_ref=f"ditto-screen/{_AGENT}:latest",
+                deadline=lease,
+            )
+            os.unlink(exported.path)
+        else:
+            # An unrenewed lease still stops the export as a lease expiry, not
+            # as a host export failure.
+            with pytest.raises(gate_module._LeaseDeadlineError):
+                await gate._export_image(
+                    "sha256:" + "34" * 32,
+                    image_ref=f"ditto-screen/{_AGENT}:latest",
+                    deadline=lease,
+                )
+    finally:
+        if renewal is not None:
+            await renewal
+        await gate._client.aclose()
+
+
+async def test_health_wait_is_bounded_by_wall_clock_time(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """#2988: a hung /health held the slot for probe time on top of ``timeout``."""
+    gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    call_timeouts: list[float] = []
+
+    async def hung_request(
+        _container: str, _url: str, *, timeout: float
+    ) -> tuple[int, str]:
+        call_timeouts.append(timeout)
+        await asyncio.sleep(timeout)
+        return 1, "transport request failed"
+
+    async def hung_inspect(
+        _args: list[str], *, timeout: float, **_: Any
+    ) -> tuple[int, str]:
+        call_timeouts.append(timeout)
+        await asyncio.sleep(timeout)
+        return 124, f"[timeout after {timeout:g}s]"
+
+    gate._request_from_sidecar = hung_request  # type: ignore[method-assign]
+    gate._run = hung_inspect  # type: ignore[method-assign]
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    async with gate._client:
+        healthy, detail = await asyncio.wait_for(
+            gate._wait_healthy(
+                "http://harness:8080",
+                probe_container="gateway",
+                harness_container="harness",
+                timeout=0.3,
+            ),
+            timeout=5,
+        )
+    elapsed = loop.time() - started
+    assert not healthy
+    assert detail.startswith("/health never healthy within 0.3s")
+    assert elapsed < 0.6
+    assert call_timeouts and max(call_timeouts) <= 0.3
+
+
+async def test_health_wait_cuts_a_request_that_outlives_its_timeout(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """httpx timeouts apply per phase, so the wait owns the wall-clock bound."""
+
+    async def hang(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(30)
+        return httpx.Response(200)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(hang)) as client:
+        gate = BuildGate(
+            make_config(),
+            client,
+            policy=PolicyEngine(CORE_ONLY_MANIFEST),
+            journal=ReviewJournal(None),
+        )
+        healthy, detail = await asyncio.wait_for(
+            gate._wait_healthy("http://harness:8080", timeout=0.3), timeout=5
+        )
+    assert not healthy
+    assert "never healthy within 0.3s" in detail
+
+
 async def test_publish_uses_stable_agent_ref_with_attempt_scoped_build(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
