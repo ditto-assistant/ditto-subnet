@@ -678,8 +678,189 @@ the packer.
    should not replace them: it adds generation and its own variance.
 
 **Next on the Mac mini:**
-1. evidence width with a count head;
-2. a second reader size (0.8B) to see how packet value scales with the reader;
+1. evidence width with a count head (done in §10: answer contained 0.790,
+   but null correct falls to 0.748, so the count head suits the history width
+   better);
+2. a second reader size (0.8B), done in §10;
 3. a pinned reader-accuracy number per packet in `eval_multi.py` output.
 
 A bf16 CUDA check still waits for a CUDA host.
+
+## 10. Scaling, the plateau, and whether to rent GPUs or launch an IM
+
+The question: how far does the §9 recipe improve with more compute? Is
+scaling it worth renting GPUs? Is it worth putting a new incentive mechanism
+(IM) on the subnet?
+
+**Recipe, held fixed.**
+- Qwen3.5-0.8B with a LoRA (r 16) and a K = 12 slots head.
+- History gold, set matching and the count head.
+- Memory clipping, and no calibration.
+- 1 epoch unless stated.
+
+**Axes:**
+- **Data:** nested training sets of 2, 4, 6, 12 and 24 generator seeds. Each
+  smaller set is a prefix of the larger, and seed 108 stays reserved.
+- **Training seed:** seeds 0 and 1 at 6 and 12 seeds.
+- **Epochs:** 2 epochs at 6 seeds.
+- **Model size:** Qwen3.5-2B at 6 seeds.
+
+**Eval.** A wider held-out set, **seeds 1–5** (456 positive and 171 null
+documents; sha256 `605ee3b0…`), in no split used before.
+- Span metrics as in §8.
+- The 2B reader as in §9, with its null documents subsampled as there.
+- v1's top 3 memories (the v1 PoC LoRA), the oracle history gold and the 0.8B
+  reader as references.
+
+**Results on the wide set** (95% bootstrap intervals over documents; reader
+accuracy over 396 answer documents):
+
+| Run | Training documents | Answer (needle) contained | All needles | Null correct | Tokens | Reader accuracy (2B) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2 seeds | 548 | 0.538 [0.50, 0.58] | 0.436 | 0.708 | 50 | 0.424 [0.38, 0.47] |
+| 4 seeds | 1,065 | 0.617 [0.58, 0.66] | 0.498 | 0.994 | 62 | 0.444 [0.39, 0.49] |
+| 6 seeds, seed 0 | 1,605 | 0.690 [0.65, 0.73] | 0.566 | 0.982 | 60 | 0.505 [0.46, 0.56] |
+| 6 seeds, seed 1 | 1,605 | 0.601 [0.56, 0.64] | 0.469 | 0.924 | 44 | 0.462 [0.41, 0.51] |
+| 6 seeds × 2 epochs | 3,210 steps | 0.642 [0.60, 0.68] | 0.550 | 0.971 | 48 | 0.490 [0.44, 0.54] |
+| 6 seeds, 2B base | 1,605 | 0.709 [0.67, 0.75] | 0.592 | 0.942 | 62 | 0.503 [0.45, 0.55] |
+| 12 seeds, seed 0 | 3,220 | 0.776 [0.74, 0.81] | 0.671 | 0.988 | 72 | 0.535 [0.49, 0.59] |
+| 12 seeds, seed 1 | 3,220 | 0.691 [0.65, 0.73] | 0.607 | 0.982 | 52 | 0.495 [0.44, 0.55] |
+| **24 seeds** | 6,447 | **0.798** [0.76, 0.83] | **0.702** | 0.982 | 60 | **0.566** [0.52, 0.62] |
+| v1 top 3 memories | – | 0.779 [0.74, 0.81] | 0.702 | 0.000 | 467 | 0.558 [0.51, 0.61] |
+| Oracle history gold | – | – | – | – | – | 0.677 |
+
+Paired differences on the same documents (needle contained | reader accuracy):
+
+| Comparison | Needle contained | Reader accuracy |
+| --- | --- | --- |
+| 4 − 2 seeds | +0.079 [0.031, 0.125] | +0.020 [−0.025, 0.066] |
+| 6 − 4 seeds | +0.073 [0.029, 0.114] | +0.061 [0.018, 0.104] |
+| 12 − 6 seeds, seed 0 | +0.086 [0.045, 0.125] | +0.030 [−0.015, 0.076] |
+| 12 − 6 seeds, seed 1 | +0.090 [0.048, 0.132] | +0.033 [−0.015, 0.078] |
+| **24 − 12 seeds, seed 0** | **+0.022** [−0.015, 0.058] | **+0.030** [−0.013, 0.071] |
+| 24 seeds − v1 top 3 | +0.019 [−0.027, 0.066] | +0.008 [−0.043, 0.056] |
+| Seed 1 − seed 0, at 6 seeds | −0.089 [−0.128, −0.048] | −0.043 [−0.086, −0.003] |
+| Seed 1 − seed 0, at 12 seeds | −0.085 [−0.121, −0.050] | −0.040 [−0.083, 0.003] |
+| 2 epochs − 1 epoch, at 6 seeds | −0.048 [−0.079, −0.017] | −0.015 [−0.056, 0.025] |
+| 12 seeds − 6 seeds × 2 epochs (equal compute) | +0.134 [0.090, 0.178] | +0.045 [0.000, 0.091] |
+| 2B − 0.8B, at 6 seeds | +0.020 [−0.017, 0.060] | −0.003 [−0.045, 0.038] |
+| 12 seeds − v1 top 3 | −0.003 [−0.050, 0.043] | −0.023 [−0.071, 0.025] |
+
+**Side checks** (on the §7–§9 held-out set):
+- **0.8B reader:** the 73-token count packet (0.464) reads as well as v1's top
+  3 (0.471) and better than the whole document (0.418). Oracle history is
+  0.556. A weaker reader gains more from a short packet.
+- **Evidence width with the count head:** answer contained 0.790, but null
+  correct is 0.748. That is worse than the evidence model with a calibrated
+  margin (0.916).
+
+**What the curves say:**
+
+1. **Fresh data is the only axis that pays, up to a point.**
+   - From 2 to 12 seeds, every doubling of generator seeds adds about +0.08
+     to +0.09 answer containment, on both training seeds: log-linear until it
+     bends (item 4).
+   - Reader accuracy rises only about +0.02 to +0.06 per doubling, and most of
+     those intervals include 0.
+   - A second epoch hurts (−0.048). At equal compute, fresh seeds beat
+     repetition by +0.134.
+   - A 2.6× larger base buys nothing measurable at this data size (+0.020
+     [−0.017, 0.060]).
+2. **Training-seed noise equals one data doubling.** Re-running the identical
+   recipe on another training seed moves answer containment by −0.085 to
+   −0.089 and reader accuracy by about −0.04, at both data sizes. Only
+   eval-seed variance is small: per-eval-seed containment has a standard
+   deviation of 0.02–0.05.
+3. **At 12 seeds the span packet is level with v1's top 3 memories.** That
+   holds on both answer containment and reader accuracy, at 72 tokens against
+   467, and it adds a working "nothing relevant" answer (0.988 against 0).
+4. **The plateau is at about 12–24 seeds** (about 3,000–6,500 training
+   documents) for this recipe (0.8B, LoRA r 16, 1 epoch).
+   - Up to 12 seeds every doubling paid about +0.08 to +0.09 answer
+     containment. 12 → 24 seeds pays +0.022 [−0.015, 0.058] on the wide set
+     and −0.014 [−0.067, 0.039] on the §7 held-out set: about a quarter of the
+     earlier slope, and inside noise.
+   - Reader accuracy keeps creeping (+0.030 [−0.013, 0.071]). The best packet,
+     at 24 seeds, reads 0.566 at 60 tokens against v1's top 3 at 0.558 with
+     467 tokens, and the 2B reader's oracle ceiling is 0.677.
+   - What remains is capacity and labels, not data:
+     - 2B was not better at 6 seeds, but it was never tried at 24;
+     - a higher LoRA rank or a full fine-tune was not tried;
+     - the history gold misses the v13 "struck" statements (§8).
+
+**Cost of scaling further.**
+
+Measured on the Mac:
+- 1,579 input tokens per training document;
+- 0.30 documents/s for one job alone (fp32, MPS, gradient checkpointing),
+  about 0.10–0.16 per job with four jobs sharing the GPU;
+- about 2 days of continuous Mac mini time for this whole PoC, with up to
+  five jobs sharing the GPU.
+
+Estimated for one L40S (bf16, LoRA, checkpointing):
+- 6 × 0.87 B FLOPs per token at 15–35% of 181 TFLOPS gives 5,200–12,100
+  tokens/s, or 3.3–7.7 documents/s (11–26× the Mac). That is an estimate;
+  B0 measures it.
+
+| Training set | Documents | L40S hours | Lium ($0.38–0.73/h) | AWS g6e ($1.86/h) |
+| --- | --- | --- | --- | --- |
+| 24 seeds | 6,440 | 0.2–0.5 | $0.09–0.40 | $0.43–1.01 |
+| 48 seeds | 12,880 | 0.5–1.1 | $0.18–0.79 | $0.87–2.02 |
+| 96 seeds | 25,760 | 0.9–2.2 | $0.35–1.59 | $1.73–4.04 |
+| 192 seeds | 51,520 | 1.9–4.3 | $0.71–3.17 | $3.46–8.08 |
+
+- **Scoring one submission** is a forward pass over about 600–1,000 documents
+  (1–1.6M tokens): minutes on an L40S, under $0.05.
+- **A reader check** adds about 600 short generations.
+- The data curve has already bent at 24 seeds. The cheap regime, about
+  3,000–6,500 documents, costs under $1 of L40S time per training run.
+
+**Is renting GPUs worth it?** Yes, but only a small, targeted spend that fits
+inside the already-approved P0 budget (about $300–1,000; Lium first).
+
+1. **Test whether the plateau is a capacity limit.** Train 2B, a higher
+   LoRA rank and a full fine-tune of 0.8B, at 24–48 seeds, with 3 training
+   seeds each, on one L40S. That is about $5–30 at Lium prices; the Mac would
+   need about 1–2 days per configuration. More data alone is not worth
+   renting for: 12 → 24 seeds already stopped paying.
+2. **Test with a production-class reader** (Haiku 5.5 or GLM-5.3-Flash, the
+   readers the product and DittoBench use) on the same packets. This is the
+   one result that changes the product case: a 2B reader caps at 0.677 even
+   with oracle packets, so the packet's real value at production quality is
+   unmeasured. It costs inference, not training: tens of dollars.
+3. **Run B0's bf16 determinism check** on the same node (bittensor-compute.md).
+
+Not worth renting:
+- **more data alone:** past about 12–24 seeds it stopped paying;
+- **bigger bases without more data:** 2B gave nothing at 6 seeds;
+- **longer training:** a second epoch hurt;
+- **H100-class hardware:** the whole curve fits in a few L40S-hours.
+
+**Is it worth putting a new IM on the subnet?** Not as a new mechanism, and
+not yet as a paid track. Measured against what an IM needs:
+
+| What an IM needs | Evidence here |
+| --- | --- |
+| A spread larger than noise | Yes on span metrics. 2 against 12 seeds is +0.24 containment, and 5 eval seeds resolve about ±0.04. Reader accuracy spreads only about 0.14 across 12× data (0.424 to 0.566), so it cannot rank miners alone. |
+| Rankings that are not luck | No. Re-rolling the training seed of one recipe moves containment by 0.09, as much as doubling the data. A KOTH board would churn on seed lottery unless the dethrone margin is at least 0.09 containment, or a miner must submit several seeds. |
+| Headroom that needs ideas, not just spend | Weak. The recipe is simple and public, and it plateaus at about 12–24 generator seeds: under $1 of L40S time per training run. A miner market would reach that ceiling within days, then compete on seed re-rolls and copies (open questions Q1 and Q3). Emissions would buy little that about $10–50 of in-house GPU time does not. |
+| A test that transfers to the product | Unknown. Everything here is the public generator, and the score measures fidelity to it. The approved private team-trace eval (P0-T) is what would make a competition test something the generator does not. |
+| Low operating cost | Mixed. Scoring is cheap (under $0.05 per submission). But v2 needs native generator span labels, a new scorer path, commit-reveal seeds (Q1) and near-duplicate rules (Q3). v1 itself has not yet run its shadow season or P0-S. |
+
+Recommendation:
+
+- **Keep span extraction inside the existing CPM track**, as the
+  `cpm_score_version = 2` candidate in §4, in shadow at 0 bps. A second
+  mechanism would halve capacity.
+- **Make v2 the product's own CPM path**: Ditto trains and hosts the span
+  model from the generator for about $10–50 of GPU time. Doing that in-house
+  is cheaper than paying emissions for it today.
+- **Revisit a paid v2 track only when all three hold:**
+  1. a production-class reader shows packet quality matters beyond token
+     savings;
+  2. P0-T gives a private real-trace eval, so the competition cannot be won by
+     generator volume alone;
+  3. v1's shadow season has settled Q1 to Q3.
+
+  Then set the dethrone margin from these noise numbers: at least about 0.09
+  containment on at least 5 eval seeds, or a mean over several training seeds.
