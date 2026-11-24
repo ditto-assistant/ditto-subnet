@@ -3030,70 +3030,10 @@ export const SIMILARITY_BUDGET_DEFAULT = {
   containment_threshold: 0.95,
 } as const
 
-// Post-score source review is intentionally part of queue policy, not the
-// screener worker's L2/L3 settings. The queue decides when a successfully built
-// submission has enough score evidence to justify the expensive review. Older
-// screeners extra-forbid unknown reviewer settings, while queue-policy reads
-// already have an additive client-first default path.
-export const DEFERRED_SOURCE_REVIEW_DEFAULT = {
-  mode: 'off',
-  integrity_double_check_mode: 'off',
-  min_cohort_size: 8,
-  composite_mad_multiplier: 6,
-  axis_mad_multiplier: 6,
-  min_composite_delta: 0.1,
-  min_axis_delta: 0.15,
-} as const
-
-// `bypass` is the no-source-review mode: build-only admission and no post-score
-// qualification, so an admitted submission goes straight to validator scoring.
-// It is the source-integrity branch only -- copy/plagiarism holds are opened by
-// a separate path that never reads this policy. Note `off` is the HEAVIEST mode
-// (full deep screen on every submission), not the off switch its name suggests.
-export const deferredSourceReviewModeSchema = z.enum([
-  'off',
-  'observe',
-  'enforce',
-  'bypass',
-])
-
-// Second, stronger deep review for every top-five entrant, including rows that
-// already passed the full pre-score screen. Enforce is refused by Platform until
-// screener review scope `integrity-double-check` holds a usable posture.
-export const integrityDoubleCheckModeSchema = z.enum(['off', 'observe', 'enforce'])
+// Screener review scope that held the top-five integrity double-check posture.
+// The queue-policy switch that used it was retired with source review
+// (2026-11-07); revisions already stored in this scope stay readable.
 export const INTEGRITY_DOUBLE_CHECK_SCOPE = 'integrity-double-check'
-
-const deferredSourceReviewSchema = z.object({
-  mode: deferredSourceReviewModeSchema.default(DEFERRED_SOURCE_REVIEW_DEFAULT.mode),
-  integrity_double_check_mode: integrityDoubleCheckModeSchema.default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT.integrity_double_check_mode,
-  ),
-  min_cohort_size: z.number().int().min(5).max(100).default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT.min_cohort_size,
-  ),
-  composite_mad_multiplier: z.number().min(1).max(20).default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT.composite_mad_multiplier,
-  ),
-  axis_mad_multiplier: z.number().min(1).max(20).default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT.axis_mad_multiplier,
-  ),
-  min_composite_delta: z.number().min(0).max(1).default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT.min_composite_delta,
-  ),
-  min_axis_delta: z.number().min(0).max(1).default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT.min_axis_delta,
-  ),
-})
-
-const deferredSourceReviewWriteSchema = deferredSourceReviewSchema.extend({
-  mode: deferredSourceReviewModeSchema,
-  integrity_double_check_mode: integrityDoubleCheckModeSchema,
-  min_cohort_size: z.number().int().min(5).max(100),
-  composite_mad_multiplier: z.number().min(1).max(20),
-  axis_mad_multiplier: z.number().min(1).max(20),
-  min_composite_delta: z.number().min(0).max(1),
-  min_axis_delta: z.number().min(0).max(1),
-})
 
 const similarityBudgetSchema = z.object({
   enabled: z.boolean().default(true),
@@ -3161,12 +3101,9 @@ const queuePolicySettingsBaseSchema = z.object({
   // client-first deployment, but require every nested field on writes so an
   // older Backroom cannot silently reset a live threshold.
   similarity_budget: similarityBudgetSchema.default(SIMILARITY_BUDGET_DEFAULT),
-  // Platform-owned post-score source-review policy. It is stored whole with
-  // the rest of queue policy; read defaults preserve client-first deployment,
-  // while the write schema below requires the complete nested block.
-  deferred_source_review: deferredSourceReviewSchema.default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT,
-  ),
+  // No `deferred_source_review`: it gated only source review, which is
+  // retired. Revisions stored before 2026-11-07 still carry the block, and
+  // `z.object` strips it on read; the platform ignores it on write.
   // `provisional_contender_lane_size` deliberately absent: the platform's
   // policy model does not have that field and forbids extras, so declaring it
   // here (with a default, no less) put a value in every body we sent that the
@@ -3252,7 +3189,6 @@ export const queuePolicySettingsWriteSchema = queuePolicySettingsBaseSchema
       .min(OWNER_CONCURRENT_SUBMISSION_MIN)
       .max(OWNER_CONCURRENT_SUBMISSION_MAX),
     similarity_budget: similarityBudgetWriteSchema,
-    deferred_source_review: deferredSourceReviewWriteSchema,
     prev_gen_carryover: prevGenCarryoverWriteSchema,
     lineage_reference_mode: lineageReferenceModeSchema,
   })

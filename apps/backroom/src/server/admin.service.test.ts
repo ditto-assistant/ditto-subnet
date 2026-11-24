@@ -2801,15 +2801,6 @@ describe('queue policy administration', () => {
       jaccard_threshold: 0.9,
       containment_threshold: 0.95,
     },
-    deferred_source_review: {
-      mode: 'off',
-      integrity_double_check_mode: 'off',
-      min_cohort_size: 8,
-      composite_mad_multiplier: 6,
-      axis_mad_multiplier: 6,
-      min_composite_delta: 0.1,
-      min_axis_delta: 0.15,
-    },
     prev_gen_carryover: {
       enabled: false,
       max_agents: 10,

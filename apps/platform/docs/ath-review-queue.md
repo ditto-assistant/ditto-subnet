@@ -56,11 +56,35 @@ literal string would drop legacy rows while every row it returned still said
   row it would hold, especially rows with `cohort_mad: 0`. Only then set
   `DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE`.
 
-## The top-five integrity double-check
+## Holds left by the retired source review
 
-`queue_policy_settings.deferred_source_review.integrity_double_check_mode`
-(`off` / `observe` / `enforce`, independent of `mode`) gives every top-five
-row one stronger deep review. It covers rows that already passed the full
+No `deferred_source_review` hold opens any more, and the queue-policy block of
+that name is gone (#3438). Queue-policy revisions written before 2026-11-07
+still store it; reads drop it and a write that sends it stores nothing for it.
+It never gated copy holds, which stay armed.
+
+What is still real for the rows that remain:
+
+- **They stay in the queue.** A pending `deferred_source_review` row is an
+  ordinary ATH hold: it is listed by `get_screening_review_queue` (filter
+  `review_kind=deferred_source_review`), counted by the queue SLO reads, keeps
+  the agent `ath_pending_review` and off the emission-eligible ledger, and its
+  public and miner projections still render (`deferred_source_review.py`).
+- **Only an operator settles them.** No screener re-claims them for a deep
+  pass and nothing clears them in bulk. Resolve each one with
+  `resolve_ath_review` and a real reason, because the resolution lands on the
+  agent's public audit record.
+- **Stranded rows are owner decisions.** As of 2026-11-08 the queue held three
+  owner-intent holds and one rejected agent whose old `deferred_source_review`
+  hold was never closed (#3438). Do not clear them automatically; the owner
+  decides each one.
+
+## The top-five integrity double-check (retired)
+
+The rest of this section describes the retired machinery, for reading rows it
+left behind. `queue_policy_settings.deferred_source_review.integrity_double_check_mode`
+(`off` / `observe` / `enforce`, independent of `mode`) gave every top-five
+row one stronger deep review. It covered rows that had already passed the full
 pre-score screen:
 
 ```
@@ -93,14 +117,10 @@ eval -> top five -> integrity double-check -> clear or reject
   `l2_model`, `l2_always_escalate: true` (L2/L3 run even when L1 certifies a
   clear), and larger budgets there. With `enforce`, a mechanically admitted
   top-five row's deferred pass takes the same posture.
-- **Fail closed.** Platform refuses `integrity_double_check_mode=enforce` (409)
-  until that scope holds an `enforce` revision with `l2_always_escalate`,
-  `l3_enabled`, and the `l1_l2` manifest. Worker compatibility also requires
-  `timeout_seconds <= 900`, `max_steps <= 20`, and low or medium critic
-  reasoning. If the posture later becomes unusable, or the claimant
-  cannot bind one (a legacy worker or the platform-owned Targon lane), the
-  claim query leaves double-check holds unselected. They stay pending and
-  visible here and cannot starve other screening work.
+- **Fail closed.** Platform used to refuse `integrity_double_check_mode=enforce`
+  (409) until that scope held a usable `enforce` revision. That gate went
+  with the block. If the claimant could not bind a posture, the claim query
+  left double-check holds unselected, so they stayed pending and visible here.
 - **Exit.** This is the same deferred lifecycle: a clean pass restores
   `scored`/`live` and resolves the review as `clear`, an adjudicated reject on
   an enforcing posture rejects, and anything else stays a pending operator hold

@@ -49,7 +49,6 @@ from ditto.api_models.confirmation_progress import (
 )
 from ditto.api_models.public import public_validation_failure_code
 from ditto.api_models.queue_policy_settings import (
-    DeferredSourceReviewSettings,
     PrevGenCarryoverSettings,
     QueuePolicySettings,
 )
@@ -159,6 +158,7 @@ from ditto.db.queries.king_reign import (
 )
 from ditto.db.queries.queue_policy_settings import (
     insert_queue_policy_settings_revision,
+    latest_queue_policy_settings_revision,
 )
 from ditto.db.queries.retry_budget import (
     INFRA_RETRY_BACKOFF_CAP,
@@ -875,14 +875,24 @@ async def _widest_carryover_policy(
     app.state.queue_policy_settings.invalidate()
 
 
-async def _install_deferred_review_mode(
-    app: FastAPI, maker: async_sessionmaker[AsyncSession], mode: str
+async def _install_retired_bypass_revision(
+    app: FastAPI, maker: async_sessionmaker[AsyncSession]
 ) -> None:
-    """Write a queue policy that only changes the source-review mode."""
-    settings = QueuePolicySettings(
-        deferred_source_review=DeferredSourceReviewSettings(mode=mode)  # type: ignore[arg-type]
-    )
-    payload = settings.model_dump(mode="json")
+    """Store a pre-retirement revision that set ``deferred_source_review`` to bypass.
+
+    The block is no longer a queue-policy field, so it is written as raw JSON,
+    exactly as revisions from before 2026-11-07 hold it.
+    """
+    payload = QueuePolicySettings().model_dump(mode="json")
+    payload["deferred_source_review"] = {
+        "mode": "bypass",
+        "integrity_double_check_mode": "off",
+        "min_cohort_size": 8,
+        "composite_mad_multiplier": 6.0,
+        "axis_mad_multiplier": 6.0,
+        "min_composite_delta": 0.10,
+        "min_axis_delta": 0.15,
+    }
     async with maker() as session, session.begin():
         await insert_queue_policy_settings_revision(
             session,
@@ -892,15 +902,20 @@ async def _install_deferred_review_mode(
             checksum=hashlib.sha256(
                 json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest(),
-            reason=f"test: deferred source review mode {mode}",
+            reason="test: deferred source review mode bypass",
             actor="test",
         )
     app.state.session_maker = maker
     app.state.queue_policy_settings.invalidate()
-    # Self-verifying: a helper that silently failed to install the policy would
-    # make every test using it pass for the wrong reason.
+    # Self-verifying: the legacy revision is the one in force, and it resolves
+    # (the retired block is dropped, not a validation error that would fall
+    # back to the default).
+    async with maker() as session:
+        latest = await latest_queue_policy_settings_revision(session)
+    assert latest is not None
+    assert latest.settings["deferred_source_review"]["mode"] == "bypass"
     resolved = await app.state.queue_policy_settings.resolve(maker)
-    assert resolved.deferred_source_review.mode == mode
+    assert not hasattr(resolved, "deferred_source_review")
 
 
 async def _seed_activated_era(
@@ -8321,16 +8336,17 @@ class TestAntiCopyGate:
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        """``deferred_source_review.mode="bypass"`` is not "no plagiarism check".
+        """A stored ``deferred_source_review.mode="bypass"`` keeps copy holds armed.
 
-        The mode names the SOURCE-INTEGRITY branch and nothing else. Copy holds
-        come from the duplicate-signal decision at score finalization, which
-        never reads that policy, so the whole anti-copy gate must survive the
-        one setting an operator is most likely to read as "screening off".
+        The retired block named the SOURCE-INTEGRITY branch and nothing else.
+        Copy holds come from the duplicate-signal decision at score
+        finalization, which never read that policy, so a revision that still
+        carries the setting an operator was most likely to read as "screening
+        off" must leave the anti-copy gate armed.
         """
         _install_db(app, session_maker)
         _install_chain(app)
-        await _install_deferred_review_mode(app, session_maker, "bypass")
+        await _install_retired_bypass_revision(app, session_maker)
         incumbent = await _seed_agent(
             session_maker, status=AgentStatus.EVALUATING, sha256="cd" * 32
         )

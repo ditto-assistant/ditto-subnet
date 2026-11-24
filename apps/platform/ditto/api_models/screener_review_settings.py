@@ -449,31 +449,3 @@ class AdminScreenerReviewSettingsResponse(BaseModel):
     shadow_observations: list[AdminShadowReviewObservation]
     probe_battery_observations: list[AdminProbeBatteryObservation] = []
     policy_manifests: list[ScreenerPolicyManifestView]
-
-
-def integrity_double_check_posture_error(
-    settings: ScreenerReviewSettings,
-) -> str | None:
-    """Why a reviewer revision cannot serve as the double-check posture.
-
-    The double-check exists to run the stronger layered review, so a posture
-    that would skip L2 (``off``/``shadow``) or the L3 critic is refused rather
-    than silently degrading into a repeat of the normal screen.
-    """
-    if settings.mode != "enforce":
-        return f"posture mode must be enforce, not {settings.mode}"
-    if not settings.l2_always_escalate:
-        return "posture must always escalate to L2"
-    if not settings.l3_enabled:
-        return "posture must enable the L3 critic"
-    if settings.policy_manifest_profile != "l1_l2":
-        return "posture must use the l1_l2 policy manifest profile"
-    # Match the deployed worker's narrower settings contract. A valid
-    # Platform revision alone does not prove a worker can deserialize it.
-    if settings.timeout_seconds > 900:
-        return "posture timeout_seconds must be at most 900 for worker compatibility"
-    if settings.max_steps > 20:
-        return "posture max_steps must be at most 20 for worker compatibility"
-    if settings.critic_reasoning_effort not in ("low", "medium"):
-        return "posture critic_reasoning_effort must be low or medium"
-    return None

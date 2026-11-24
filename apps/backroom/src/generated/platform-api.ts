@@ -24774,68 +24774,6 @@ export interface components {
             window_seconds: number;
         };
         /**
-         * DeferredSourceReviewSettings
-         * @description Hot-swappable post-score deep-review admission and anomaly policy.
-         *
-         *     This board decides *where* the expensive source review runs -- before
-         *     scoring (automatic, by a screener), after it (as an operator-adjudicated
-         *     hold), or, in ``bypass``, nowhere at all. Three of the four modes review
-         *     every submission somewhere; ``bypass`` is the one that does not, and it is
-         *     the only way to send admitted submissions straight to validator scoring.
-         *
-         *     SCOPE -- source integrity only
-         *     ==============================
-         *
-         *     Nothing on this board touches **copy/plagiarism** enforcement. Copy holds
-         *     (``review_kind: "copy"``) are opened from the duplicate-signal decision at
-         *     score finalization, which never reads this board, runs *before* the deferred
-         *     path, and wins outright: a copy hold moves the agent to
-         *     ``ATH_PENDING_REVIEW``, and the deferred path only acts on agents still in
-         *     ``SCORED``/``LIVE``. Setting ``mode="off"`` or ``mode="bypass"`` disables the
-         *     deferred source-integrity branch and **leaves plagiarism detection fully
-         *     armed**. The same is true of the transform/overfit audit, which has its own
-         *     switch. "No source review" never means "no copy detection".
-         */
-        DeferredSourceReviewSettings: {
-            /**
-             * Axis Mad Multiplier
-             * @default 6
-             */
-            axis_mad_multiplier: number;
-            /**
-             * Composite Mad Multiplier
-             * @default 6
-             */
-            composite_mad_multiplier: number;
-            /**
-             * Integrity Double Check Mode
-             * @default off
-             * @enum {string}
-             */
-            integrity_double_check_mode: "off" | "observe" | "enforce";
-            /**
-             * Min Axis Delta
-             * @default 0.15
-             */
-            min_axis_delta: number;
-            /**
-             * Min Cohort Size
-             * @default 8
-             */
-            min_cohort_size: number;
-            /**
-             * Min Composite Delta
-             * @default 0.1
-             */
-            min_composite_delta: number;
-            /**
-             * Mode
-             * @default off
-             * @enum {string}
-             */
-            mode: "off" | "observe" | "enforce" | "bypass";
-        };
-        /**
          * DispatchFenceBusyPair
          * @description Polls from one validator that bounced off a fence another poll held.
          */
@@ -41512,20 +41450,13 @@ export interface components {
          *
          *     Each revision stores the whole policy (not a diff), so a frozen snapshot is
          *     always reconstructable and a read never merges partial revisions.
+         *
+         *     Revisions written before source review was retired (2026-11-07) also carry
+         *     a ``deferred_source_review`` block. Nothing read it after that retirement,
+         *     so it is no longer a field: ``extra="ignore"`` drops it when an old
+         *     revision is read, and a write that still sends it stores nothing for it.
          */
         QueuePolicySettings: {
-            /**
-             * @default {
-             *       "axis_mad_multiplier": 6,
-             *       "composite_mad_multiplier": 6,
-             *       "integrity_double_check_mode": "off",
-             *       "min_axis_delta": 0.15,
-             *       "min_cohort_size": 8,
-             *       "min_composite_delta": 0.1,
-             *       "mode": "off"
-             *     }
-             */
-            deferred_source_review: components["schemas"]["DeferredSourceReviewSettings"];
             /**
              * Fresh Submission Slots
              * @default [
