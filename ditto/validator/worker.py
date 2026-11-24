@@ -4145,6 +4145,16 @@ class ValidatorWorker:
                 ticket_deadline=job.deadline,
             )
             self._resolve_ticket_deadline(job.agent_id, job.deadline)
+        except ScoreSubmissionUnresolvedError as exc:
+            # Silent on the wire, like the revocation below, but logged as what
+            # it is: nothing revoked the lease (see the canonical lane).
+            logger.warning(
+                "top-five confirmation submission for agent %s on %s did not "
+                "resolve; leaving the ticket to Platform: %s",
+                job.agent_id if job is not None else None,
+                job.slot_id if job is not None else _slot_id,
+                exc,
+            )
         except LeaseRevokedError as exc:
             # Same wire rule as the canonical lane: the platform took this lease
             # back itself, so nothing is handed back. ``scoring_error`` would
@@ -4352,6 +4362,13 @@ class ValidatorWorker:
                 job.agent_id,
                 len(results),
                 accepted.accepted,
+            )
+        except ScoreSubmissionUnresolvedError as exc:
+            logger.warning(
+                "generator round submission for agent %s did not resolve; "
+                "leaving it to Platform: %s",
+                job.agent_id,
+                exc,
             )
         except LeaseRevokedError as exc:
             logger.warning(

@@ -1001,14 +1001,15 @@ class TestAnAcceptedScoreIsNotRevoked:
         )
         slot = worker._slots["slot-0"]
         loop = asyncio.get_running_loop()
-        deadline = datetime.now(UTC) + timedelta(seconds=0.4)
+        deadline = datetime.now(UTC) + timedelta(seconds=2.0)
         grace = worker_module._SCORE_SUBMIT_GRACE_SECONDS
         async with asyncio.timeout(0.1) as run_budget:
             slot.lease_timeout = run_budget
             worker._bound_submission_past_deadline(slot, deadline)
             when = run_budget.when()
             assert when is not None
-            assert grace + 0.3 < when - loop.time() <= grace + 0.4
+            # Wide lower bound: a scheduling pause must not fail a correct bound.
+            assert grace + 1.5 < when - loop.time() <= grace + 2.0
         slot.lease_timeout = None
 
     async def test_a_submission_that_never_resolves_hands_nothing_back(

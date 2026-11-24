@@ -128,6 +128,10 @@ class ScoreSubmissionUnresolvedError(LeaseRevokedError):
     for a ticket that may be scored, and Platform accepts nothing for this
     ticket past its deadline), so it gets the revocation's silence. Platform
     settles the ticket itself: it is scored, or it expired and reopens.
+
+    A subclass so any ``LeaseRevokedError`` handler stays silent on the wire.
+    Each lane catches it first, ahead of its revocation handler, so the log says
+    what happened: nothing revoked the lease.
     """
 
 
