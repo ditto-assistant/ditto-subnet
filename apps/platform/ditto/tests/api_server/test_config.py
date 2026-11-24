@@ -386,6 +386,29 @@ class TestCheckConfig:
         with pytest.raises(ApiServerConfigError, match=message):
             check_config(config)
 
+    @pytest.mark.parametrize("timeout", [1.0, 90.0, 95.0])
+    def test_inference_timeout_accepts_broker_bounded_values(
+        self, timeout: float
+    ) -> None:
+        base = make_api_server_config()
+        config = replace(
+            base,
+            inference_proxy=replace(base.inference_proxy, timeout_seconds=timeout),
+        )
+        check_config(config)
+
+    @pytest.mark.parametrize("timeout", [0.0, 96.0, 120.0])
+    def test_inference_timeout_rejects_values_above_relay_cap(
+        self, timeout: float
+    ) -> None:
+        base = make_api_server_config()
+        config = replace(
+            base,
+            inference_proxy=replace(base.inference_proxy, timeout_seconds=timeout),
+        )
+        with pytest.raises(ApiServerConfigError, match="between 1 and 95 seconds"):
+            check_config(config)
+
 
 class TestEfficiencyBonusConfig:
     """Env parsing + boot validation for the relative efficiency bonus."""
