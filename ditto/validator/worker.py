@@ -4139,10 +4139,14 @@ class ValidatorWorker:
                     job, "scoring_error", "confirmation_run_produced_no_report"
                 )
                 return True
-            await self._platform.submit_top5_confirmation_score(
-                job.agent_id,
-                report=report,
-                ticket_deadline=job.deadline,
+            await self._submit_within_deadline_grace(
+                lambda: self._platform.submit_top5_confirmation_score(
+                    job.agent_id,
+                    report=report,
+                    ticket_deadline=job.deadline,
+                ),
+                agent_id=job.agent_id,
+                deadline=job.deadline,
             )
             self._resolve_ticket_deadline(job.agent_id, job.deadline)
         except ScoreSubmissionUnresolvedError as exc:
@@ -4353,8 +4357,12 @@ class ValidatorWorker:
                 # else (an older scorer running the whole dataset) is refused
                 # here rather than posted as an attestation.
                 raise DittobenchError("oracle run results do not match the job")
-            accepted = await self._platform.submit_generator_round_score(
-                job, run_id=run_id, results=results
+            accepted = await self._submit_within_deadline_grace(
+                lambda: self._platform.submit_generator_round_score(
+                    job, run_id=run_id, results=results
+                ),
+                agent_id=job.agent_id,
+                deadline=job.deadline,
             )
             logger.info(
                 "generator round %s agent %s submitted (%d cases, accepted=%s)",
@@ -5828,6 +5836,41 @@ class ValidatorWorker:
         at = asyncio.get_running_loop().time() + remaining + _SCORE_SUBMIT_GRACE_SECONDS
         if at > current:
             lease_timeout.reschedule(at)
+
+    @staticmethod
+    async def _submit_within_deadline_grace[T](
+        submit: Callable[[], Awaitable[T]],
+        *,
+        agent_id: UUID,
+        deadline: datetime,
+    ) -> T:
+        """Bound a submission made after its lease work, like the canonical one.
+
+        The top-five confirmation and generator-round lanes submit after
+        ``_run_within_lease`` returns, so neither the lease timeout nor the
+        per-request HTTP timeout bounds a peer that answers slowly but never
+        finishes. The bound matches :meth:`_bound_submission_past_deadline`: the
+        ticket deadline plus ``_SCORE_SUBMIT_GRACE_SECONDS``. Cut there, the
+        outcome is unknown, so it raises
+        :class:`ScoreSubmissionUnresolvedError` and nothing is handed back.
+        """
+        aware = (
+            deadline if deadline.tzinfo is not None else deadline.replace(tzinfo=UTC)
+        )
+        remaining = (aware - datetime.now(UTC)).total_seconds()
+        bound = asyncio.timeout(max(remaining + _SCORE_SUBMIT_GRACE_SECONDS, 0.0))
+        try:
+            async with bound:
+                return await submit()
+        except TimeoutError as error:
+            # Only this bound's own expiry is an unresolved submission.
+            if not bound.expired():
+                raise
+            raise ScoreSubmissionUnresolvedError(
+                f"score submission for agent {agent_id} did not resolve within "
+                f"{_SCORE_SUBMIT_GRACE_SECONDS:.0f}s past its ticket deadline "
+                f"{aware.isoformat()}; Platform settles it"
+            ) from error
 
     @staticmethod
     def _mark_score_accepted(slot: _SlotState) -> None:

@@ -618,6 +618,57 @@ class TestTheRetestLaneActsOnTheRoster:
         platform.report_ticket_failed.assert_not_awaited()
         assert all(slot.active_agent_id is None for slot in worker._slots.values())
 
+    async def test_a_retest_submission_that_never_resolves_hands_nothing_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The lane's submission has the canonical bound: deadline plus grace.
+
+        It runs after ``_run_within_lease``, so without its own bound a peer that
+        never finishes the request would hold the slot indefinitely. Cut there,
+        Platform may have committed the score, so nothing is handed back.
+        """
+        from ditto.tests.validator.test_worker import _report  # noqa: PLC0415
+
+        job = _retest_job().model_copy(
+            update={"deadline": datetime.now(UTC) + timedelta(seconds=0.2)}
+        )
+        seed = job.confirmation_datasets[0].seed
+        monkeypatch.setattr(worker_module, "lease_budget_seconds", lambda *_a: 5.0)
+        monkeypatch.setattr(worker_module, "_SCORE_SUBMIT_GRACE_SECONDS", 0.2)
+        worker, platform, _ = _worker_with_scorer(
+            AsyncMock(), heartbeat=_RosterHeartbeat().mock, jobs=[]
+        )
+        platform.request_top5_confirmation_job = AsyncMock(side_effect=[job, None])
+        worker._evaluate = AsyncMock(  # type: ignore[method-assign]
+            return_value=_report("run-retest", 0.7).model_copy(update={"seed": seed})
+        )
+
+        async def never_resolves(*_args: object, **_kwargs: object) -> None:
+            await asyncio.sleep(3600)
+
+        platform.submit_top5_confirmation_score = AsyncMock(side_effect=never_resolves)
+
+        assert await asyncio.wait_for(worker._run_top5_confirmation_lane(), 20)
+
+        platform.submit_top5_confirmation_score.assert_awaited_once()
+        platform.report_ticket_failed.assert_not_awaited()
+        assert all(slot.active_agent_id is None for slot in worker._slots.values())
+
+    async def test_a_timeout_inside_a_bounded_submission_is_not_unresolved(
+        self,
+    ) -> None:
+        """Only the bound's own expiry is an unresolved submission."""
+
+        async def inner_timeout() -> None:
+            raise TimeoutError("raised by the request itself")
+
+        with pytest.raises(TimeoutError, match="raised by the request itself"):
+            await worker_module.ValidatorWorker._submit_within_deadline_grace(
+                inner_timeout,
+                agent_id=uuid4(),
+                deadline=datetime.now(UTC) + timedelta(seconds=60),
+            )
+
     async def test_a_stale_revocation_does_not_cancel_the_next_retest(self) -> None:
         """A revocation left over from a previous lease is not inherited."""
         from ditto.tests.validator.test_worker import _report  # noqa: PLC0415
