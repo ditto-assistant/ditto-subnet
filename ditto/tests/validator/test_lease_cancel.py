@@ -994,17 +994,65 @@ class TestAnAcceptedScoreIsNotRevoked:
         assert finished == ["run-accepted"]
         platform.report_ticket_failed.assert_not_awaited()
 
-    async def test_submission_lifts_the_lease_budget(self) -> None:
-        """The lease budget no longer bounds the request once submission starts."""
+    async def test_submission_is_bounded_past_the_ticket_deadline(self) -> None:
+        """The run budget gives way to the deadline plus a grace, never to nothing."""
         worker, _, _ = _worker_with_scorer(
             AsyncMock(), heartbeat=_RosterHeartbeat().mock
         )
         slot = worker._slots["slot-0"]
+        loop = asyncio.get_running_loop()
+        deadline = datetime.now(UTC) + timedelta(seconds=0.4)
+        grace = worker_module._SCORE_SUBMIT_GRACE_SECONDS
         async with asyncio.timeout(0.1) as run_budget:
             slot.lease_timeout = run_budget
-            worker._lift_run_budget_for_submission(slot)
-            assert run_budget.when() is None
+            worker._bound_submission_past_deadline(slot, deadline)
+            when = run_budget.when()
+            assert when is not None
+            assert grace + 0.3 < when - loop.time() <= grace + 0.4
         slot.lease_timeout = None
+
+    async def test_a_submission_that_never_resolves_hands_nothing_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A peer that never finishes the request is cut, but not as a failure.
+
+        The per-request HTTP timeout never fires for it, so the grace past the
+        deadline is the slot's hard bound. Platform may have committed the
+        score, so neither ``scoring_error`` nor failure progress is reported.
+        """
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        monkeypatch.setattr(worker_module, "lease_budget_seconds", lambda *_a: 0.1)
+        monkeypatch.setattr(worker_module, "_SCORE_SUBMIT_GRACE_SECONDS", 0.2)
+        job = _job(
+            "5MinerA" + "x" * 41,
+            deadline=datetime.now(UTC) + timedelta(seconds=0.3),
+        )
+        worker, platform, _ = _accepting_worker(upload=AsyncMock(), job=job)
+
+        async def never_resolves(*_args: object, **_kwargs: object) -> None:
+            await asyncio.sleep(3600)
+
+        platform.submit_score = AsyncMock(side_effect=never_resolves)
+        stages: list[str] = []
+        publish = worker._publish_benchmark_progress
+
+        async def record_stage(stage: str, **kwargs: Any) -> bool:
+            stages.append(stage)
+            return bool(await publish(stage, **kwargs))
+
+        worker._publish_benchmark_progress = record_stage
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+
+        platform.submit_score.assert_awaited_once()
+        platform.submit_transcript.assert_not_awaited()
+        platform.report_ticket_failed.assert_not_awaited()
+        assert "submitting_result" in stages
+        assert "failed_retrying" not in stages
+        slot = worker._slots["slot-0"]
+        assert slot.active_agent_id is None
+        assert not slot.submission_unresolved
 
     async def test_an_outer_cancel_after_a_mid_submission_revocation_propagates(
         self,
