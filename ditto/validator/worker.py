@@ -2918,10 +2918,11 @@ class ValidatorWorker:
         await self._publish_benchmark_progress("preparing")
 
     def _clear_active_ticket(self) -> None:
+        # ``submitting_score``/``score_accepted`` are left for the lease's
+        # revocation watchdog, which resets them once it is gone; the next
+        # ``_begin_active_ticket`` resets them too.
         self._active_agent_id = None
         self._active_ticket_deadline = None
-        self._slot_state().submitting_score = False
-        self._slot_state().score_accepted = False
         self._active_run_token = None
         self._benchmark_progress = None
         self._last_progress_heartbeat_monotonic = None
@@ -5276,9 +5277,16 @@ class ValidatorWorker:
         async def watch_for_revocation() -> None:
             nonlocal cancels_before_watchdog
             await slot.revoked.wait()
-            # Never cancel a submission: Platform may already have accepted it
-            # (#2966). Its answer resolves the lease instead.
-            if running is not None and not slot.submitting_score:
+            # Never cancel a submission or what follows it: Platform may already
+            # have accepted it (#2966), and its answer resolves the lease. The
+            # flags stay set until this watchdog is gone (see ``finally``), so a
+            # watchdog woken late, after the run cleared its ticket, still sees
+            # them.
+            if (
+                running is not None
+                and not slot.submitting_score
+                and not slot.score_accepted
+            ):
                 cancels_before_watchdog = running.cancelling()
                 running.cancel()
 
@@ -5312,6 +5320,9 @@ class ValidatorWorker:
             # awaiting it would risk swallowing this task's *own* cancellation
             # and losing the lease-deadline abort it was meant to preserve.
             watchdog.cancel()
+            # Only now can no watchdog act on this lease's submission state.
+            slot.submitting_score = False
+            slot.score_accepted = False
 
     async def _score_job(self, job: JobResponse) -> ScoreReport:
         """Score one issued ticket against its platform-pinned dataset.
@@ -5639,15 +5650,25 @@ class ValidatorWorker:
                     else {}
                 ),
             )
-        except Exception as error:
-            if lease_slot is not None and lease_slot.revoked.is_set():
-                # The roster dropped this lease mid-submission and the
-                # submission then failed (a refusal, or an answer that did not
-                # parse): a revocation, which hands nothing back, exactly as if
-                # the watchdog had cancelled the run before it submitted.
+        except PlatformError as error:
+            if (
+                lease_slot is not None
+                and lease_slot.revoked.is_set()
+                and not isinstance(error, PlatformInfrastructureError)
+            ):
+                # The roster dropped this lease mid-submission and Platform then
+                # refused the score (a definitive 4xx): a revocation, which
+                # hands nothing back, as if the watchdog had cancelled the run
+                # before it submitted. A 5xx/transport failure that outlasted
+                # ``submit_score``'s retries, or an answer that did not parse,
+                # says nothing about why the roster dropped the lease -- an
+                # accepted score drops it too -- so it keeps its ordinary
+                # handling. That hand-back is safe either way: ``fail_job``
+                # finds no open ticket for a withdrawn or scored lease and
+                # charges nothing.
                 raise LeaseRevokedError(
                     f"platform no longer holds the lease for agent {agent_id} "
-                    f"on {lease_slot.slot_id}; score submission failed: {error}"
+                    f"on {lease_slot.slot_id}; score refused: {error}"
                 ) from error
             raise
         if ticket_deadline is not None:

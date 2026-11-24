@@ -26,7 +26,7 @@ from ditto.api_models.benchmark_capacity import ActiveBenchmarkSlot, BenchmarkCa
 from ditto.api_models.validator import HeldLease, ValidatorHeartbeatResponse
 from ditto.validator import worker as worker_module
 from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
-from ditto.validator.errors import PlatformError
+from ditto.validator.errors import PlatformError, PlatformInfrastructureError
 from ditto.validator.lease_roster import (
     RosterKnown,
     RosterUnknown,
@@ -578,6 +578,46 @@ class TestTheRetestLaneActsOnTheRoster:
         platform.report_ticket_failed.assert_not_awaited()
         assert not worker._slots[job.slot_id].revoked.is_set()
 
+    async def test_a_roster_drop_during_the_retest_submission_cancels_nothing(
+        self,
+    ) -> None:
+        """The lane submits after ``_run_within_lease`` returns.
+
+        Its watchdog is already cancelled and the lease timeout has exited, so
+        a roster that omits the lease while ``submit_top5_confirmation_score``
+        is in flight sets ``revoked`` and nothing acts on it.
+        """
+        from ditto.tests.validator.test_worker import _report  # noqa: PLC0415
+
+        job = _retest_job()
+        seed = job.confirmation_datasets[0].seed
+        worker, platform, _ = _worker_with_scorer(
+            AsyncMock(), heartbeat=_RosterHeartbeat().mock, jobs=[]
+        )
+        platform.request_top5_confirmation_job = AsyncMock(side_effect=[job, None])
+        worker._evaluate = AsyncMock(  # type: ignore[method-assign]
+            return_value=_report("run-retest", 0.7).model_copy(update={"seed": seed})
+        )
+        accepted: list[UUID] = []
+
+        async def dropped_mid_submission(agent_id: UUID, **_kwargs: object) -> None:
+            worker._apply_lease_roster(
+                _response([]), advertised=worker._capacity_snapshot()
+            )
+            await asyncio.sleep(0.1)
+            accepted.append(agent_id)
+
+        platform.submit_top5_confirmation_score = AsyncMock(
+            side_effect=dropped_mid_submission
+        )
+
+        assert await asyncio.wait_for(worker._run_top5_confirmation_lane(), 20)
+
+        assert worker._slots[job.slot_id].revoked.is_set()
+        assert accepted == [job.agent_id]
+        platform.report_ticket_failed.assert_not_awaited()
+        assert all(slot.active_agent_id is None for slot in worker._slots.values())
+
     async def test_a_stale_revocation_does_not_cancel_the_next_retest(self) -> None:
         """A revocation left over from a previous lease is not inherited."""
         from ditto.tests.validator.test_worker import _report  # noqa: PLC0415
@@ -968,10 +1008,25 @@ class TestAnAcceptedScoreIsNotRevoked:
             await asyncio.wait_for(run, timeout=20)
         platform.report_ticket_failed.assert_not_awaited()
 
-    async def test_any_submission_failure_on_a_revoked_lease_hands_nothing_back(
-        self,
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            PlatformInfrastructureError("score submit failed: ReadTimeout"),
+            PlatformInfrastructureError("score rejected (503): unavailable"),
+        ],
+        ids=["transport", "5xx"],
+    )
+    async def test_a_transient_failure_on_a_dropped_lease_is_still_handed_back(
+        self, failure: Exception
     ) -> None:
-        """A refusal is not the only way a revoked lease's submission can fail."""
+        """Only a definitive refusal is read as the revocation.
+
+        A transport/5xx failure that outlasted ``submit_score``'s retries may
+        follow a score Platform committed, and an accepted score drops the lease
+        from the roster too. Such a failure says nothing about why the lease is
+        gone, so it keeps its ``infrastructure`` hand-back; ``fail_job`` charges
+        nothing when no open ticket remains.
+        """
         from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
 
         job = _job("5MinerA" + "x" * 41)
@@ -982,27 +1037,106 @@ class TestAnAcceptedScoreIsNotRevoked:
 
         worker, platform, heartbeat = _accepting_worker(upload=upload, job=job)
 
-        async def revoked_then_unparseable(agent_id: UUID, **_kwargs: object) -> None:
+        async def dropped_then_failed(agent_id: UUID, **_kwargs: object) -> None:
             heartbeat._evict.add(agent_id)
             await worker._report_heartbeat("running_benchmark")
-            raise ValueError("score response did not validate")
+            raise failure
 
-        platform.submit_score = AsyncMock(side_effect=revoked_then_unparseable)
-        stages: list[str] = []
-        publish = worker._publish_benchmark_progress
-
-        async def record_stage(stage: str, **kwargs: Any) -> bool:
-            stages.append(stage)
-            return bool(await publish(stage, **kwargs))
-
-        worker._publish_benchmark_progress = record_stage
+        platform.submit_score = AsyncMock(side_effect=dropped_then_failed)
 
         await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
 
         platform.submit_score.assert_awaited_once()
-        platform.report_ticket_failed.assert_not_awaited()
-        assert "failed_retrying" not in stages
+        assert worker._slots["slot-0"].revoked.is_set()
+        platform.report_ticket_failed.assert_awaited_once()
+        assert platform.report_ticket_failed.await_args.args[1] == "infrastructure"
         assert all(slot.active_agent_id is None for slot in worker._slots.values())
+
+    async def test_an_unparseable_answer_on_a_dropped_lease_is_not_a_revocation(
+        self,
+    ) -> None:
+        """A 200 that does not parse more likely carried an accepted score.
+
+        It surfaces exactly as it would on a held lease, never relabelled as a
+        silent revocation.
+        """
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        job = _job("5MinerA" + "x" * 41)
+        worker: Any = None
+
+        async def upload(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("a failed submission has no transcript to publish")
+
+        worker, platform, heartbeat = _accepting_worker(upload=upload, job=job)
+
+        async def dropped_then_unparseable(agent_id: UUID, **_kwargs: object) -> None:
+            heartbeat._evict.add(agent_id)
+            await worker._report_heartbeat("running_benchmark")
+            raise ValueError("score response did not validate")
+
+        platform.submit_score = AsyncMock(side_effect=dropped_then_unparseable)
+
+        with pytest.raises(ValueError, match="did not validate"):
+            await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+        assert worker._slots["slot-0"].revoked.is_set()
+
+    async def test_a_late_watchdog_does_not_cancel_work_after_an_accepted_score(
+        self,
+    ) -> None:
+        """The roster drop was recorded mid-submission; the watchdog woke late.
+
+        The run had already marked the score accepted and cleared its ticket
+        before the watchdog task ran. Its cancel would land on the final
+        heartbeat and turn the accepted score into ``LeaseRevokedError``.
+        """
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        job = _job("5MinerA" + "x" * 41)
+        worker, _, _ = _worker_with_scorer(
+            AsyncMock(), heartbeat=_RosterHeartbeat().mock
+        )
+        slot = worker._slots[job.slot_id]
+
+        async def accepted_then_cleared() -> str:
+            slot.active_agent_id = job.agent_id
+            slot.submitting_score = True
+            # Recorded, not acted on: the watchdog is woken but has not run.
+            slot.revoked.set()
+            worker._mark_score_accepted(slot)
+            worker._clear_active_ticket()
+            # The final ``polling`` heartbeat, where a late cancel would land.
+            await asyncio.sleep(0.05)
+            return "accepted"
+
+        result = await worker._run_until_revoked(
+            accepted_then_cleared, job=job, slot=slot
+        )
+
+        assert result == "accepted"
+        # The watchdog is gone, so the next lease starts clean.
+        assert not slot.submitting_score
+        assert not slot.score_accepted
+
+    async def test_a_late_watchdog_still_cancels_before_submission(self) -> None:
+        """The control: without a submission the late watchdog still cancels."""
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        job = _job("5MinerA" + "x" * 41)
+        worker, _, _ = _worker_with_scorer(
+            AsyncMock(), heartbeat=_RosterHeartbeat().mock
+        )
+        slot = worker._slots[job.slot_id]
+
+        async def revoked_then_cleared() -> str:
+            slot.active_agent_id = job.agent_id
+            slot.revoked.set()
+            worker._clear_active_ticket()
+            await asyncio.sleep(0.05)
+            return "not reached"
+
+        with pytest.raises(worker_module.LeaseRevokedError):
+            await worker._run_until_revoked(revoked_then_cleared, job=job, slot=slot)
 
     async def test_a_revocation_still_cancels_a_run_that_has_not_submitted(
         self,
