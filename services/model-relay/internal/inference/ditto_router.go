@@ -61,6 +61,13 @@ func dittoRouterHeaders(cfg config.DittoRouterConfig, onBehalfOf string) map[str
 // identical. Provider preferences and the OpenRouter-only recovery ladder do
 // not apply: the Router is a single upstream that picks the provider itself
 // (the endpoint's locked model on the competition lane).
+//
+// The Router never calls OpenRouter on the relay's behalf, so none of its
+// outcomes is evidence about the grant's OpenRouter route: every exhausted
+// outcome is route-unobservable (the caller also skips the shared provider
+// circuit). A success still crosses the same trust boundary as the OpenRouter
+// path: the reply must name the locked model and is rebuilt by
+// publicProviderResponse before it reaches the harness.
 func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg config.InferenceProxyConfig,
 	router config.DittoRouterConfig, payload map[string]any, model, onBehalfOf string,
 	sleep sleepFunc) (*chatCompletionResult, *chatProviderExhausted) {
@@ -74,7 +81,6 @@ func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg co
 			terminalErrorCode: code,
 			timedOut:          timedOut,
 			upstreamProvider:  dittoRouterRoute,
-			routeObservable:   true,
 			phases:            []phaseTrace{trace},
 		}
 	}
@@ -94,9 +100,7 @@ func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg co
 	decoded, _ := decodeJSONNumbers(result.body)
 	decodedMap, ok := decoded.(map[string]any)
 	if ok && providerContextLengthExceeded(result.status, decodedMap) {
-		failure := exhausted(providerContextLengthExceededCode, result.attempts, false)
-		failure.routeObservable = false
-		return nil, failure
+		return nil, exhausted(providerContextLengthExceededCode, result.attempts, false)
 	}
 	if result.status >= 400 {
 		// 402 is the Router refusing to bill the on-behalf-of user (no live
@@ -115,11 +119,19 @@ func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg co
 	if _, _, providerError := providerErrorEnvelope(decodedMap); providerError {
 		return nil, exhausted("provider_unavailable", result.attempts, false)
 	}
-	if m, isString := decodedMap["model"].(string); !isString || m == "" {
+	if m, isString := decodedMap["model"].(string); !isString || m != model {
 		return nil, exhausted("provider_identity_mismatch", result.attempts, false)
 	}
 	prompt, completion, usageOk := boundedUsage(decodedMap)
 	if !usageOk {
+		return nil, exhausted("invalid_provider_response", result.attempts, false)
+	}
+	public, problem := publicProviderResponse(decodedMap, result.body)
+	if problem != nil {
+		return nil, exhausted(phaseErrorCode(problem), result.attempts, false)
+	}
+	raw, marshalErr := compactJSON(public)
+	if marshalErr != nil {
 		return nil, exhausted("invalid_provider_response", result.attempts, false)
 	}
 	// Ditto's receipt is the ledger of record for this call; the Router may
@@ -129,7 +141,7 @@ func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg co
 		cost = 0
 	}
 	return &chatCompletionResult{
-		raw:              result.body,
+		raw:              raw,
 		promptTokens:     prompt,
 		completionTokens: completion,
 		costMicrousd:     cost,
