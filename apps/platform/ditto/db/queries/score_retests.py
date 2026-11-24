@@ -584,6 +584,25 @@ async def activate_next_score_retest(
     latest = await latest_retest_events_for_validator(
         session, validator_hotkey=validator_hotkey
     )
+    # Lock every issued ticket BEFORE either cleanup below appends to the audit
+    # chain. ``submit_score`` holds its own ticket row and then takes the
+    # transaction-scoped audit-chain lock, so taking the audit lock first and
+    # the issued rows after would wait on a scorer that is waiting on us, and
+    # Postgres would abort one side (a 500 that discards a finished run). The
+    # cleanups only move ``expired`` rows back to ``scored``, so they never
+    # change which rows are ``issued``: this set is still exact afterwards.
+    issued_rows = list(
+        (
+            await session.scalars(
+                select(ValidatorTicket)
+                .where(
+                    ValidatorTicket.validator_hotkey == validator_hotkey,
+                    ValidatorTicket.status == TicketStatus.ISSUED,
+                )
+                .with_for_update()
+            )
+        ).all()
+    )
     await _requeue_failed_contract_retests(
         session,
         validator_hotkey=validator_hotkey,
@@ -600,18 +619,6 @@ async def activate_next_score_retest(
         session, validator_hotkey=validator_hotkey
     )
 
-    issued_rows = list(
-        (
-            await session.scalars(
-                select(ValidatorTicket)
-                .where(
-                    ValidatorTicket.validator_hotkey == validator_hotkey,
-                    ValidatorTicket.status == TicketStatus.ISSUED,
-                )
-                .with_for_update()
-            )
-        ).all()
-    )
     issued_retests = [
         ticket
         for ticket in issued_rows

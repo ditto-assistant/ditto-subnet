@@ -33,7 +33,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
@@ -48,6 +48,7 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.audit import (
+    EVENT_SCORE,
     EVENT_SCORE_RETEST_QUEUED,
     EVENT_SCORE_RETEST_RELEASED,
     EVENT_SCORE_RETEST_REQUESTED,
@@ -954,4 +955,82 @@ class TestLapsedOrdinaryReplacementCloses:
             agent_id,
             reason="replacement run ended before completion",
             at=failed_at,
+        )
+
+    async def test_cleanup_takes_issued_tickets_before_the_audit_chain(
+        self,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The closure must keep ``submit_score``'s ticket-before-audit order.
+
+        A scorer holds its own issued ticket and then appends its ``score``
+        audit entry. If the closure took the audit-chain lock first and the
+        validator's issued rows second, each side would wait on the other and
+        Postgres would abort one of them: on the scorer's side, a 500 that
+        discards a finished run. With the issued rows locked first, the
+        closure simply queues behind the scorer and then settles the lapse.
+        """
+        agent_id, deadline = await self._promote(session)
+        later = deadline + timedelta(minutes=1)
+        async with session.begin():
+            assert await expire_overdue_tickets(session, now=later) == 1
+        scoring = await _seed_issued_ticket(session)
+
+        async with session_maker() as scorer, scorer.begin():
+            # submit_score: lock the scorer's own ticket row first.
+            held = await scorer.get(
+                ValidatorTicket,
+                (scoring.agent_id, scoring.bench_version, _HOTKEY),
+                with_for_update=True,
+            )
+            assert held is not None
+
+            async def poll() -> ValidatorTicket | None:
+                async with session_maker() as poller, poller.begin():
+                    return await activate_next_score_retest(
+                        poller,
+                        validator_hotkey=_HOTKEY,
+                        now=later,
+                        supports_version=lambda version: version == 9,
+                        slot_id="slot-1",
+                    )
+
+            cleanup = asyncio.create_task(poll())
+            async with session_maker() as observer:
+                for _ in range(200):
+                    waiting = await observer.scalar(
+                        text(
+                            "SELECT count(*) FROM pg_stat_activity"
+                            " WHERE datname = current_database()"
+                            " AND wait_event_type = 'Lock'"
+                        )
+                    )
+                    await observer.rollback()
+                    if waiting:
+                        break
+                    await asyncio.sleep(0.025)
+                else:
+                    pytest.fail("the closure never queued behind the scorer's ticket")
+
+            # submit_score: then append to the audit chain. Before the fix the
+            # closure already held that lock, so this wait was a deadlock.
+            await asyncio.wait_for(
+                append_audit_entry(
+                    scorer,
+                    agent_id=scoring.agent_id,
+                    validator_hotkey=_HOTKEY,
+                    event=EVENT_SCORE,
+                    payload={"bench_version": scoring.bench_version},
+                    recorded_at=later,
+                ),
+                timeout=_NO_WAIT,
+            )
+
+        assert await asyncio.wait_for(cleanup, timeout=_NO_WAIT) is None
+        await self._assert_released_and_confirmable(
+            session,
+            agent_id,
+            reason="replacement ticket expired before completion",
+            at=later,
         )
