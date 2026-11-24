@@ -2439,7 +2439,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Execute screening quarantine batch',
       description:
-        'Execute exactly the per-item decisions from a current preview token. Requires confirmed=true and backroom:write. Each decision is separately authorized and audited to the signed-in operator; successful, already-applied, and failed rows are returned independently for safe retry. It refuses exactly what the preview refuses, including expectedAttemptId and expectedScoreCount sent on a row that is not a parked screening failure.',
+        'Execute exactly the per-item decisions from a current preview token. Requires confirmed=true and backroom:write. Each decision is separately authorized and audited to the signed-in operator; successful, already-applied, and failed rows are returned independently for safe retry. If the batch request\'s answer is lost (a timeout or dropped connection), the result is a read-back instead, with reconciled_after set: rows Platform recorded are already_applied, and every other row is unconfirmed (Platform may still be applying it). Preview again before executing an unconfirmed row. It refuses exactly what the preview refuses, including expectedAttemptId and expectedScoreCount sent on a row that is not a parked screening failure.',
       inputSchema: screeningQuarantineBatchExecuteInputSchema,
       annotations: toolAnnotations('write', true),
     },

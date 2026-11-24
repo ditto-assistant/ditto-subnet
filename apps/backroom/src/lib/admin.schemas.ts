@@ -6923,7 +6923,9 @@ export const screeningQuarantineBatchExecuteInputSchema = z
 
 export const screeningQuarantineBatchExecuteItemSchema = z.object({
   quarantine_id: z.string().uuid(),
-  status: z.enum(['applied', 'already_applied', 'failed']),
+  // `unconfirmed` is Backroom's own: after a batch request whose answer was
+  // lost, an item the read-back could not show as recorded (#3042).
+  status: z.enum(['applied', 'already_applied', 'failed', 'unconfirmed']),
   agent_status: z.string().nullable().default(null),
   terminal_reconciliation: z.boolean().nullish().default(false),
   terminal_ruling: screeningQuarantineTerminalRulingSchema.nullish().default(null),
@@ -6935,6 +6937,10 @@ export const screeningQuarantineBatchExecuteResponseSchema = z.object({
   applied_count: z.number().int().nonnegative(),
   already_applied_count: z.number().int().nonnegative(),
   failed_count: z.number().int().nonnegative(),
+  unconfirmed_count: z.number().int().nonnegative().default(0),
+  // Set when the batch request's answer was lost and these rows are a
+  // read-back of what Platform recorded, not its answer to the batch.
+  reconciled_after: z.enum(['timeout', 'transport']).nullable().default(null),
 })
 
 export const quarantineContextInputSchema = z.object({
