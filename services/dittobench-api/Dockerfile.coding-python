@@ -9,7 +9,7 @@ COPY research/dittobench-datagen/ /src/research/dittobench-datagen/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
     -o /out/supervisor ./cmd/dittobench-coding-supervisor
 
-FROM python:3.13.14-slim@sha256:69e18bd8d831d88e0ef70239dc7771ab7c28bc296ae78ac75cde71e60aa4434f AS python
+FROM python:3.15.0-slim@sha256:f5b92f2a669a4c347044f29367f31983280b648250ca94dea66f98c53bc87e58 AS python
 RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY services/dittobench-api/coding_runtime/python/requirements.txt /tmp/requirements.txt
 RUN python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt
