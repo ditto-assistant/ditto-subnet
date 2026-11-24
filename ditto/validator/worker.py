@@ -5269,24 +5269,38 @@ class ValidatorWorker:
         revocation racing in at the very end must not turn it into silence.
         """
         running = asyncio.current_task()
+        # ``cancelling()`` just before the watchdog's own cancel, or ``None``
+        # while the watchdog has not cancelled.
+        cancels_before_watchdog: int | None = None
 
         async def watch_for_revocation() -> None:
+            nonlocal cancels_before_watchdog
             await slot.revoked.wait()
             # Never cancel a submission: Platform may already have accepted it
             # (#2966). Its answer resolves the lease instead.
             if running is not None and not slot.submitting_score:
+                cancels_before_watchdog = running.cancelling()
                 running.cancel()
 
         watchdog = asyncio.create_task(watch_for_revocation())
         try:
             return await operation()
         except asyncio.CancelledError:
-            if not slot.revoked.is_set() or lease_budget_seconds(job.deadline) <= 0:
+            # Only the watchdog's own cancel is a revocation. ``slot.revoked``
+            # alone is not proof: a revocation seen mid-submission is recorded
+            # without cancelling, so a later cancel from an enclosing scope
+            # (shutdown, an outer ``wait_for``) must keep propagating.
+            if (
+                cancels_before_watchdog is None
+                or running is None
+                or lease_budget_seconds(job.deadline) <= 0
+            ):
                 raise
             # Balance the watchdog's cancel so an enclosing ``asyncio.timeout``
-            # does not later read this as its own expiry.
-            if running is not None:
-                running.uncancel()
+            # does not later read this as its own expiry. A cancel requested
+            # since the watchdog's came from someone else, and wins.
+            if running.uncancel() > cancels_before_watchdog:
+                raise
             raise LeaseRevokedError(
                 f"platform no longer holds the lease for agent {job.agent_id} "
                 f"on {job.slot_id}; stopping the run"
@@ -5609,8 +5623,9 @@ class ValidatorWorker:
         if harness_memory is None:
             harness_memory = own_memory
         lease_slot = self._running_lease_slot(agent_id, ticket_deadline)
-        if lease_slot is not None:
+        if lease_slot is not None and ticket_deadline is not None:
             lease_slot.submitting_score = True
+            self._bound_submission_by_ticket_deadline(lease_slot, ticket_deadline)
         try:
             await self._platform.submit_score(
                 agent_id,
@@ -5624,13 +5639,15 @@ class ValidatorWorker:
                     else {}
                 ),
             )
-        except PlatformError as error:
+        except Exception as error:
             if lease_slot is not None and lease_slot.revoked.is_set():
-                # The roster dropped this lease mid-submission and Platform then
-                # refused the score: a revocation, which hands nothing back.
+                # The roster dropped this lease mid-submission and the
+                # submission then failed (a refusal, or an answer that did not
+                # parse): a revocation, which hands nothing back, exactly as if
+                # the watchdog had cancelled the run before it submitted.
                 raise LeaseRevokedError(
                     f"platform no longer holds the lease for agent {agent_id} "
-                    f"on {lease_slot.slot_id}; score refused: {error}"
+                    f"on {lease_slot.slot_id}; score submission failed: {error}"
                 ) from error
             raise
         if ticket_deadline is not None:
@@ -5690,6 +5707,35 @@ class ValidatorWorker:
         ):
             return None
         return slot
+
+    @staticmethod
+    def _bound_submission_by_ticket_deadline(
+        slot: _SlotState, ticket_deadline: datetime
+    ) -> None:
+        """Let the ticket's own deadline, not the run budget, bound submission.
+
+        The run budget ends a reporting margin before the deadline. Firing it
+        while ``submit_score`` is in flight would cancel a request Platform may
+        already have committed and hand back ``scoring_error`` for a scored
+        ticket (#2966). Platform accepts nothing after the deadline, so the
+        deadline still bounds a hung submission, and acceptance lifts the bound
+        entirely (:meth:`_mark_score_accepted`).
+        """
+        lease_timeout = slot.lease_timeout
+        if lease_timeout is None or lease_timeout.expired():
+            return
+        current = lease_timeout.when()
+        if current is None:
+            return
+        deadline = (
+            ticket_deadline
+            if ticket_deadline.tzinfo is not None
+            else ticket_deadline.replace(tzinfo=UTC)
+        )
+        loop = asyncio.get_running_loop()
+        at = loop.time() + (deadline - datetime.now(UTC)).total_seconds()
+        if at > current:
+            lease_timeout.reschedule(at)
 
     @staticmethod
     def _mark_score_accepted(slot: _SlotState) -> None:

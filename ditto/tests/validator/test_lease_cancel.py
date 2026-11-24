@@ -884,6 +884,126 @@ class TestAnAcceptedScoreIsNotRevoked:
         after_score.assert_called_once_with(job.agent_id, 8)
         assert all(slot.active_agent_id is None for slot in worker._slots.values())
 
+    async def test_the_run_budget_cannot_cancel_an_in_flight_submission(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The run budget ends a margin early; the ticket deadline bounds submit.
+
+        Platform commits the score, but its answer arrives after the run budget
+        (deadline minus the reporting margin) has run out. Cancelling the
+        request there would lose the transcript and hand back ``scoring_error``
+        for a ticket that is already scored.
+        """
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        monkeypatch.setattr(worker_module, "lease_budget_seconds", lambda *_a: 0.3)
+        job = _job("5MinerA" + "x" * 41)
+        finished: list[str] = []
+
+        async def upload(*_args: object, run_id: str, **_kw: object) -> None:
+            finished.append(run_id)
+
+        worker, platform, heartbeat = _accepting_worker(upload=upload, job=job)
+
+        async def slow_accept(agent_id: UUID, **_kwargs: object) -> None:
+            heartbeat._evict.add(agent_id)
+            await asyncio.sleep(0.6)
+
+        platform.submit_score = AsyncMock(side_effect=slow_accept)
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+
+        platform.submit_score.assert_awaited_once()
+        assert finished == ["run-accepted"]
+        platform.report_ticket_failed.assert_not_awaited()
+
+    async def test_the_ticket_deadline_still_bounds_a_hung_submission(self) -> None:
+        """Lifting the run budget at submission keeps the deadline as a bound."""
+        worker, _, _ = _worker_with_scorer(
+            AsyncMock(), heartbeat=_RosterHeartbeat().mock
+        )
+        slot = worker._slots["slot-0"]
+        loop = asyncio.get_running_loop()
+        deadline = datetime.now(UTC) + timedelta(seconds=0.4)
+        async with asyncio.timeout(0.1) as run_budget:
+            slot.lease_timeout = run_budget
+            worker._bound_submission_by_ticket_deadline(slot, deadline)
+            when = run_budget.when()
+            assert when is not None
+            assert 0.3 < when - loop.time() <= 0.4
+        slot.lease_timeout = None
+
+    async def test_an_outer_cancel_after_a_mid_submission_revocation_propagates(
+        self,
+    ) -> None:
+        """Only the watchdog's own cancel is a revocation.
+
+        The roster dropped the lease while the score was being submitted, so
+        ``revoked`` is set without a cancel, and Platform accepted the score.
+        A cancel from an enclosing scope during the upload (shutdown, an outer
+        ``wait_for``) must reach the caller, not be swallowed as a revocation
+        that lets the slot go on claiming leases.
+        """
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        job = _job("5MinerA" + "x" * 41)
+        worker: Any = None
+
+        async def upload(*_args: object, **_kwargs: object) -> None:
+            current = asyncio.current_task()
+            assert current is not None
+            current.cancel()
+            await asyncio.sleep(1)
+
+        worker, platform, heartbeat = _accepting_worker(upload=upload, job=job)
+
+        async def revoked_then_accepted(agent_id: UUID, **_kwargs: object) -> None:
+            heartbeat._evict.add(agent_id)
+            await worker._report_heartbeat("running_benchmark")
+
+        platform.submit_score = AsyncMock(side_effect=revoked_then_accepted)
+
+        run = asyncio.create_task(worker.run_once(set_weights=False))
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(run, timeout=20)
+        platform.report_ticket_failed.assert_not_awaited()
+
+    async def test_any_submission_failure_on_a_revoked_lease_hands_nothing_back(
+        self,
+    ) -> None:
+        """A refusal is not the only way a revoked lease's submission can fail."""
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        job = _job("5MinerA" + "x" * 41)
+        worker: Any = None
+
+        async def upload(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("a failed submission has no transcript to publish")
+
+        worker, platform, heartbeat = _accepting_worker(upload=upload, job=job)
+
+        async def revoked_then_unparseable(agent_id: UUID, **_kwargs: object) -> None:
+            heartbeat._evict.add(agent_id)
+            await worker._report_heartbeat("running_benchmark")
+            raise ValueError("score response did not validate")
+
+        platform.submit_score = AsyncMock(side_effect=revoked_then_unparseable)
+        stages: list[str] = []
+        publish = worker._publish_benchmark_progress
+
+        async def record_stage(stage: str, **kwargs: Any) -> bool:
+            stages.append(stage)
+            return bool(await publish(stage, **kwargs))
+
+        worker._publish_benchmark_progress = record_stage
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+
+        platform.submit_score.assert_awaited_once()
+        platform.report_ticket_failed.assert_not_awaited()
+        assert "failed_retrying" not in stages
+        assert all(slot.active_agent_id is None for slot in worker._slots.values())
+
     async def test_a_revocation_still_cancels_a_run_that_has_not_submitted(
         self,
     ) -> None:
