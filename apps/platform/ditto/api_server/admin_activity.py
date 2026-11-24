@@ -207,7 +207,6 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
         QueuePolicySettings,
         frozenset(
             (
-                "deferred_source_review",
                 "fresh_submission_slots",
                 "lane_cycle_size",
                 "owner_concurrent_submission_limit",
@@ -305,15 +304,6 @@ _NESTED_FIELDS: dict[str, tuple[str, ...]] = {
         "dedupe_scope",
         "require_desired_era_drained",
         "require_cohort_complete",
-    ),
-    "deferred_source_review": (
-        "mode",
-        "integrity_double_check_mode",
-        "min_cohort_size",
-        "composite_mad_multiplier",
-        "axis_mad_multiplier",
-        "min_composite_delta",
-        "min_axis_delta",
     ),
 }
 

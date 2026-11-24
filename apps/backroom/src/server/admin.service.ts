@@ -2035,21 +2035,73 @@ function queuePolicyRefusal(cause: unknown) {
   return new Error(`${cause.message}. ${recovery}`)
 }
 
+// A platform released before the deferred_source_review retirement still
+// requires that block on every write and still returns it on read, while this
+// Backroom no longer models it. Release deploys Platform and Backroom in
+// parallel, so for that window carry the live block over unchanged instead of
+// failing every write. Delete once every platform runs the retirement.
+//
+// Only Platform's request-validation refusal qualifies. That platform answers
+// a body missing the block with the generic validation envelope (422,
+// error_code 3001, "request validation failed"): field names stay in its logs,
+// so the detail cannot name the block. Validation depends on the body alone,
+// never on live state, so the retry, whose body differs only by the block,
+// can succeed only when the block was what failed; a route refusal such as a
+// wrong scope carries its own code and is never retried. The platform's own
+// GET then decides: a retired platform no longer returns the block, so this
+// returns null and the original refusal stands.
+const PLATFORM_REQUEST_VALIDATION_ERROR_CODE = 3001
+const legacyDeferredSourceReviewSchema = z.object({
+  effective: z.object({
+    settings: z.object({
+      deferred_source_review: z.record(z.string(), z.unknown()),
+    }),
+  }),
+})
+
+async function legacyDeferredSourceReviewBlock(cause: unknown) {
+  if (
+    !(cause instanceof PlatformAdminError) ||
+    cause.status !== 422 ||
+    cause.errorCode !== PLATFORM_REQUEST_VALIDATION_ERROR_CODE
+  ) {
+    return null
+  }
+  let payload: unknown
+  try {
+    payload = await platformAdminRequest(QUEUE_POLICY_SETTINGS_PATH)
+  } catch {
+    return null
+  }
+  const legacy = legacyDeferredSourceReviewSchema.safeParse(payload)
+  return legacy.success ? legacy.data.effective.settings.deferred_source_review : null
+}
+
 export async function setQueuePolicySettings(rawInput: unknown, actor: string) {
   const input = setQueuePolicySettingsInputSchema.parse(rawInput)
-  try {
-    await platformAdminRequest(QUEUE_POLICY_SETTINGS_PATH, {
+  const post = (settings: Record<string, unknown>) =>
+    platformAdminRequest(QUEUE_POLICY_SETTINGS_PATH, {
       method: 'POST',
       actor,
       body: {
         scope: input.scope,
         expected_revision: input.expectedRevision,
-        settings: input.settings,
+        settings,
         reason: input.reason,
         actor,
         confirmation: input.confirmation,
       },
     })
+  try {
+    try {
+      await post(input.settings)
+    } catch (cause) {
+      const legacyBlock = await legacyDeferredSourceReviewBlock(cause)
+      if (legacyBlock === null) throw cause
+      // Nothing was stored by the 422, and expected_revision still guards
+      // the retry against a concurrent write.
+      await post({ ...input.settings, deferred_source_review: legacyBlock })
+    }
   } catch (cause) {
     throw queuePolicyRefusal(cause) ?? cause
   }

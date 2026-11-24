@@ -295,6 +295,100 @@ async def _requeue_failed_contract_retests(
         )
 
 
+async def _has_lapsed_replacement(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    latest: dict[UUID, ScoreAuditEntry],
+) -> bool:
+    """Whether an active re-test's replacement row already reads ``expired``.
+
+    An unlocked status read, made only for ``score_retest_requested``
+    lifecycles (rare: an operator action). It lets every re-test lane on this
+    validator settle the lapse, not only the lane of the re-test's own basis.
+    """
+    for entry in latest.values():
+        if entry.event != EVENT_SCORE_RETEST_REQUESTED:
+            continue
+        status = await session.scalar(
+            select(ValidatorTicket.status).where(
+                ValidatorTicket.agent_id == entry.agent_id,
+                ValidatorTicket.bench_version
+                == int(entry.payload.get("bench_version", -1)),
+                ValidatorTicket.validator_hotkey == validator_hotkey,
+            )
+        )
+        if status == TicketStatus.EXPIRED:
+            return True
+    return False
+
+
+def _lapsed_replacement_reason(entry: ScoreAuditEntry, ticket: ValidatorTicket) -> str:
+    """Name how the replacement lease ended: its deadline, or a failure.
+
+    The overdue sweep leaves the deadline the replacement was promoted with;
+    ``fail_job`` moves it to the moment the validator reported the failure.
+    """
+    promoted = entry.payload.get("replacement_deadline")
+    try:
+        promoted_deadline = (
+            None if promoted is None else _utc(datetime.fromisoformat(str(promoted)))
+        )
+    except ValueError:
+        promoted_deadline = None
+    if promoted_deadline is not None and _utc(ticket.deadline) < promoted_deadline:
+        return "replacement run ended before completion"
+    return "replacement ticket expired before completion"
+
+
+async def _close_lapsed_replacements(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    latest: dict[UUID, ScoreAuditEntry],
+    now: datetime,
+) -> None:
+    """Release ordinary re-tests whose replacement lease ended without a score.
+
+    The repair bases are requeued by :func:`_requeue_failed_contract_retests`.
+    Every other basis closes, exactly as the ``issued``-past-deadline branch of
+    :func:`activate_next_score_retest` closes it. That branch sees the row only
+    while it is still ``issued``. Every job request runs the fleet-wide
+    ``expire_overdue_tickets`` sweep first, and ``fail_job`` also writes
+    ``expired``, so the row usually reads ``expired`` before this validator's
+    lane looks at it. Without this transition the lifecycle stayed
+    ``score_retest_requested`` forever. That blocked confirmation and continual
+    leases for the (agent, validator) pair, and Backroom kept showing an active
+    re-test (#2965). The accepted score is untouched, so the row is restored to
+    its consumed ``scored`` shape, as the manual ``release-ticket`` does.
+    """
+    for entry in tuple(latest.values()):
+        if (
+            entry.event != EVENT_SCORE_RETEST_REQUESTED
+            or entry.payload.get("basis") in REPAIR_RETEST_BASES
+        ):
+            continue
+        ticket = await session.get(
+            ValidatorTicket,
+            (
+                entry.agent_id,
+                int(entry.payload.get("bench_version", -1)),
+                validator_hotkey,
+            ),
+            with_for_update=True,
+        )
+        if ticket is None or ticket.status != TicketStatus.EXPIRED:
+            continue
+        ticket.status = TicketStatus.SCORED
+        ticket.retry_after = None
+        await _close_unserviceable(
+            session,
+            entry=entry,
+            now=now,
+            reason=_lapsed_replacement_reason(entry, ticket),
+        )
+
+
 async def _rollout_member_positions(
     session: AsyncSession, *, bench_version: int
 ) -> dict[UUID, int]:
@@ -467,13 +561,20 @@ async def activate_next_score_retest(
     probe = await latest_retest_events_for_validator(
         session, validator_hotkey=validator_hotkey
     )
+    # A replacement whose row the overdue sweep or ``fail_job`` already
+    # expired is settled by whichever lane polls first. The ordinary lane runs
+    # only on an idle validator outside a rollout, so waiting for the
+    # re-test's own lane could strand the lifecycle indefinitely.
+    lapsed = await _has_lapsed_replacement(
+        session, validator_hotkey=validator_hotkey, latest=probe
+    )
     if required_basis is not None:
         probe = {
             agent_id: entry
             for agent_id, entry in probe.items()
             if entry.payload.get("basis") == required_basis
         }
-    if not probe:
+    if not probe and not lapsed:
         return None
 
     if not await try_lock_validator(session, validator_hotkey):
@@ -483,16 +584,13 @@ async def activate_next_score_retest(
     latest = await latest_retest_events_for_validator(
         session, validator_hotkey=validator_hotkey
     )
-    await _requeue_failed_contract_retests(
-        session,
-        validator_hotkey=validator_hotkey,
-        latest=latest,
-        now=now,
-    )
-    latest = await latest_retest_events_for_validator(
-        session, validator_hotkey=validator_hotkey
-    )
-
+    # Lock every issued ticket BEFORE either cleanup below appends to the audit
+    # chain. ``submit_score`` holds its own ticket row and then takes the
+    # transaction-scoped audit-chain lock, so taking the audit lock first and
+    # the issued rows after would wait on a scorer that is waiting on us, and
+    # Postgres would abort one side (a 500 that discards a finished run). The
+    # cleanups only move ``expired`` rows back to ``scored``, so they never
+    # change which rows are ``issued``: this set is still exact afterwards.
     issued_rows = list(
         (
             await session.scalars(
@@ -505,6 +603,22 @@ async def activate_next_score_retest(
             )
         ).all()
     )
+    await _requeue_failed_contract_retests(
+        session,
+        validator_hotkey=validator_hotkey,
+        latest=latest,
+        now=now,
+    )
+    await _close_lapsed_replacements(
+        session,
+        validator_hotkey=validator_hotkey,
+        latest=latest,
+        now=now,
+    )
+    latest = await latest_retest_events_for_validator(
+        session, validator_hotkey=validator_hotkey
+    )
+
     issued_retests = [
         ticket
         for ticket in issued_rows

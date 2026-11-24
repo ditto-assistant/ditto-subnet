@@ -2,20 +2,16 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { QueuePolicySettingsControl, ScreenerReviewControl } from '../lib/admin.schemas'
+import type { ScreenerReviewControl } from '../lib/admin.schemas'
 import { ScreenerReviewControlPanel } from './ScreenerReviewControlPanel'
 
 const getControl = vi.fn()
 const updateSettings = vi.fn()
-const getQueuePolicy = vi.fn()
-const updateQueuePolicy = vi.fn()
 
 vi.mock('@tanstack/react-start', () => ({ useServerFn: (value: unknown) => value }))
 vi.mock('../server/admin.functions', () => ({
   getScreenerReviewControl: () => getControl(),
   updateScreenerReviewSettings: (input: unknown) => updateSettings(input),
-  getQueuePolicyControl: () => getQueuePolicy(),
-  updateQueuePolicySettings: (input: unknown) => updateQueuePolicy(input),
 }))
 
 const settings = {
@@ -109,82 +105,26 @@ const state: ScreenerReviewControl = {
   policy_manifests: [],
 }
 
-const queueSettings = {
-  rescore_cohort_size: 10,
-  priority_cohort_size: 5,
-  lane_cycle_size: 4,
-  fresh_submission_slots: [0, 1, 3],
-  owner_concurrent_submission_limit: 2,
-  similarity_budget: {
-    enabled: true,
-    concurrent_submission_limit: 1,
-    jaccard_threshold: 0.9,
-    containment_threshold: 0.95,
-  },
-  deferred_source_review: {
-    mode: 'off' as const,
-    integrity_double_check_mode: 'off' as const,
-    min_cohort_size: 8,
-    composite_mad_multiplier: 6,
-    axis_mad_multiplier: 6,
-    min_composite_delta: 0.1,
-    min_axis_delta: 0.15,
-  },
-  prev_gen_carryover: {
-    enabled: false,
-    max_agents: 10,
-    min_score_count: 2,
-    include_exhausted: false,
-    dedupe_scope: 'coldkey' as const,
-    require_cohort_complete: true,
-    require_desired_era_drained: true,
-  },
-  lineage_reference_mode: 'same_owner_version' as const,
-}
-
-const queuePolicy: QueuePolicySettingsControl = {
-  current: [],
-  history: [],
-  default: queueSettings,
-  effective: {
-    revision: 0,
-    scope: '*',
-    settings: queueSettings,
-    checksum: '',
-    source: 'default',
-    open_rollout_desired_version: null,
-    open_rollout_rescore_cohort_target: null,
-    open_rollout_priority_cohort_target: null,
-    open_rollout_overrides_setting: false,
-    rollout_locked_fields: [],
-    rollout_is_open: false,
-    min_cohort_size: 5,
-    max_cohort_size: 25,
-  },
-}
-
 describe('ScreenerReviewControlPanel', () => {
   afterEach(cleanup)
 
   beforeEach(() => {
     getControl.mockReset().mockResolvedValue(state)
     updateSettings.mockReset().mockResolvedValue(undefined)
-    getQueuePolicy.mockReset().mockResolvedValue(queuePolicy)
-    updateQueuePolicy.mockReset().mockResolvedValue(queuePolicy)
   })
 
   it('creates an exact-instance shadow revision without changing the global mode', async () => {
-    render(<ScreenerReviewControlPanel initialState={state} initialQueuePolicy={queuePolicy} readOnly={false} />)
+    render(<ScreenerReviewControlPanel initialState={state} readOnly={false} />)
 
     fireEvent.change(screen.getByLabelText('Scope'), {
       target: { value: 'ditto-screener-prod' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'shadow' }))
-    fireEvent.change(screen.getAllByLabelText('Audit reason')[1]!, {
+    fireEvent.change(screen.getByLabelText('Audit reason'), {
       target: { value: 'bounded one-worker reviewer canary' },
     })
     const confirmation = 'APPLY SCREENER REVIEW ditto-screener-prod SHADOW'
-    fireEvent.change(screen.getAllByLabelText(/^Type to confirm/)[1]!, {
+    fireEvent.change(screen.getByLabelText(/^Type to confirm/), {
       target: { value: confirmation },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Append settings revision' }))
@@ -202,7 +142,7 @@ describe('ScreenerReviewControlPanel', () => {
   })
 
   it('keeps mutation disabled for read-only operators', () => {
-    render(<ScreenerReviewControlPanel initialState={state} initialQueuePolicy={queuePolicy} readOnly />)
+    render(<ScreenerReviewControlPanel initialState={state} readOnly />)
 
     expect(
       (screen.getByRole('button', { name: 'Append settings revision' }) as HTMLButtonElement)
@@ -211,7 +151,7 @@ describe('ScreenerReviewControlPanel', () => {
   })
 
   it('allows enforce and exposes exact-worker inheritance', () => {
-    render(<ScreenerReviewControlPanel initialState={state} initialQueuePolicy={queuePolicy} readOnly={false} />)
+    render(<ScreenerReviewControlPanel initialState={state} readOnly={false} />)
 
     const reviewerModes = within(screen.getByLabelText('Agentic review mode'))
     expect((reviewerModes.getByRole('button', { name: 'enforce' }) as HTMLButtonElement).disabled)
@@ -224,14 +164,14 @@ describe('ScreenerReviewControlPanel', () => {
   })
 
   it('disables L3 independently without turning off L2 review', async () => {
-    render(<ScreenerReviewControlPanel initialState={state} initialQueuePolicy={queuePolicy} readOnly={false} />)
+    render(<ScreenerReviewControlPanel initialState={state} readOnly={false} />)
 
     fireEvent.click(screen.getByRole('switch', { name: 'Enable L3 verification' }))
     expect(screen.getByText(/L2 analyst becomes the final paid reviewer/)).toBeTruthy()
-    fireEvent.change(screen.getAllByLabelText('Audit reason')[1]!, {
+    fireEvent.change(screen.getByLabelText('Audit reason'), {
       target: { value: 'keep L2 review active while disabling costly L3 calls' },
     })
-    fireEvent.change(screen.getAllByLabelText(/^Type to confirm/)[1]!, {
+    fireEvent.change(screen.getByLabelText(/^Type to confirm/), {
       target: { value: 'APPLY SCREENER REVIEW * OFF' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Append settings revision' }))
@@ -244,67 +184,8 @@ describe('ScreenerReviewControlPanel', () => {
     })
   })
 
-  it('enforces deferred review without exposing a top-five disable switch', async () => {
-    render(<ScreenerReviewControlPanel initialState={state} initialQueuePolicy={queuePolicy} readOnly={false} />)
-
-    const modes = within(screen.getByLabelText('Deferred review mode'))
-    fireEvent.click(modes.getByRole('button', { name: 'enforce' }))
-    fireEvent.change(screen.getAllByLabelText('Audit reason')[0]!, {
-      target: { value: 'prescore first and deep-review only qualified submissions' },
-    })
-    fireEvent.change(screen.getAllByLabelText(/^Type to confirm/)[0]!, {
-      target: { value: 'APPLY QUEUE POLICY SETTINGS' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Append queue-policy revision' }))
-
-    await waitFor(() => expect(updateQueuePolicy).toHaveBeenCalledTimes(1))
-    expect(updateQueuePolicy).toHaveBeenCalledWith({
-      data: {
-        expectedRevision: 0,
-        confirmation: 'APPLY QUEUE POLICY SETTINGS',
-        reason: 'prescore first and deep-review only qualified submissions',
-        settings: {
-          ...queueSettings,
-          deferred_source_review: {
-            ...queueSettings.deferred_source_review,
-            mode: 'enforce',
-          },
-        },
-      },
-    })
-    expect(screen.getByText('Top-five integrity rail')).toBeTruthy()
-    expect(screen.queryByLabelText(/disable top-five/i)).toBeNull()
-  })
-
-  it('enables the top-five integrity double-check without changing the deferred mode', async () => {
-    render(<ScreenerReviewControlPanel initialState={state} initialQueuePolicy={queuePolicy} readOnly={false} />)
-
-    const modes = within(screen.getByLabelText('Integrity double-check mode'))
-    fireEvent.click(modes.getByRole('button', { name: 'double-check enforce' }))
-    fireEvent.change(screen.getAllByLabelText('Audit reason')[0]!, {
-      target: { value: 'double-check every top-five entrant on the stronger posture' },
-    })
-    fireEvent.change(screen.getAllByLabelText(/^Type to confirm/)[0]!, {
-      target: { value: 'APPLY QUEUE POLICY SETTINGS' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Append queue-policy revision' }))
-
-    await waitFor(() => expect(updateQueuePolicy).toHaveBeenCalledTimes(1))
-    expect(updateQueuePolicy).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        settings: {
-          ...queueSettings,
-          deferred_source_review: {
-            ...queueSettings.deferred_source_review,
-            integrity_double_check_mode: 'enforce',
-          },
-        },
-      }),
-    })
-  })
-
   it('writes an always-escalating posture to the double-check scope before any worker uses it', async () => {
-    render(<ScreenerReviewControlPanel initialState={state} initialQueuePolicy={queuePolicy} readOnly={false} />)
+    render(<ScreenerReviewControlPanel initialState={state} readOnly={false} />)
 
     fireEvent.change(screen.getByLabelText('Scope'), {
       target: { value: 'integrity-double-check' },
@@ -314,11 +195,11 @@ describe('ScreenerReviewControlPanel', () => {
       within(screen.getByLabelText('Agentic review mode')).getByRole('button', { name: 'enforce' }),
     )
     fireEvent.click(screen.getByRole('switch', { name: 'Always escalate to L2/L3' }))
-    fireEvent.change(screen.getAllByLabelText('Audit reason')[1]!, {
+    fireEvent.change(screen.getByLabelText('Audit reason'), {
       target: { value: 'stronger reviewer for top-five double-checks' },
     })
     const confirmation = 'APPLY SCREENER REVIEW integrity-double-check ENFORCE'
-    fireEvent.change(screen.getAllByLabelText(/^Type to confirm/)[1]!, {
+    fireEvent.change(screen.getByLabelText(/^Type to confirm/), {
       target: { value: confirmation },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Append settings revision' }))
@@ -333,36 +214,12 @@ describe('ScreenerReviewControlPanel', () => {
     })
   })
 
-  it('describes observe as legacy pre-score review plus would-trigger audit only', () => {
-    render(<ScreenerReviewControlPanel initialState={state} initialQueuePolicy={queuePolicy} readOnly={false} />)
+  it('no longer offers the retired deferred source-review queue policy', () => {
+    render(<ScreenerReviewControlPanel initialState={state} readOnly={false} />)
 
-    const modes = within(screen.getByLabelText('Deferred review mode'))
-    fireEvent.click(modes.getByRole('button', { name: 'observe' }))
-
-    expect(
-      screen.getByText(/Full source review still runs before scoring while the platform records/),
-    ).toBeTruthy()
-    expect(screen.queryByText(/Build and prescore normally/)).toBeNull()
-  })
-
-  it('blocks an out-of-range anomaly policy before the request', () => {
-    render(<ScreenerReviewControlPanel initialState={state} initialQueuePolicy={queuePolicy} readOnly={false} />)
-
-    fireEvent.change(screen.getByLabelText('Minimum scored cohort'), {
-      target: { value: '4' },
-    })
-    fireEvent.change(screen.getAllByLabelText('Audit reason')[0]!, {
-      target: { value: 'invalid client-side range check' },
-    })
-    fireEvent.change(screen.getAllByLabelText(/^Type to confirm/)[0]!, {
-      target: { value: 'APPLY QUEUE POLICY SETTINGS' },
-    })
-
-    expect(screen.getByRole('alert').textContent).toContain('whole-number cohort from 5 to 100')
-    expect(
-      (screen.getByRole('button', { name: 'Append queue-policy revision' }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true)
-    expect(updateQueuePolicy).not.toHaveBeenCalled()
+    expect(screen.queryByLabelText('Deferred review mode')).toBeNull()
+    expect(screen.queryByLabelText('Integrity double-check mode')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Append queue-policy revision' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'bypass' })).toBeNull()
   })
 })

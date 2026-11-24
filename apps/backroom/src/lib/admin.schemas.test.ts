@@ -3004,15 +3004,6 @@ describe('queue policy settings schemas', () => {
     lane_cycle_size: 4,
     fresh_submission_slots: [0, 1, 3],
     owner_concurrent_submission_limit: 2,
-    deferred_source_review: {
-      mode: 'off',
-      integrity_double_check_mode: 'off',
-      min_cohort_size: 8,
-      composite_mad_multiplier: 6,
-      axis_mad_multiplier: 6,
-      min_composite_delta: 0.1,
-      min_axis_delta: 0.15,
-    },
     similarity_budget: {
       enabled: true,
       concurrent_submission_limit: 1,
@@ -3143,7 +3134,6 @@ describe('queue policy settings schemas', () => {
   // platform-side addition fail loudly in CI instead of silently in prod.
   it('declares exactly the platform-owned policy field set', () => {
     expect(Object.keys(queuePolicySettingsSchema.parse({})).sort()).toEqual([
-      'deferred_source_review',
       'fresh_submission_slots',
       'lane_cycle_size',
       'lineage_reference_mode',
@@ -3173,23 +3163,10 @@ describe('queue policy settings schemas', () => {
     const { similarity_budget: _similarity, ...missingSimilarity } = settings
     expect(() => queuePolicySettingsWriteSchema.parse(missingSimilarity)).toThrow()
 
-    const { deferred_source_review: _deferred, ...missingDeferred } = settings
-    expect(() => queuePolicySettingsWriteSchema.parse(missingDeferred)).toThrow()
-
     expect(() =>
       queuePolicySettingsWriteSchema.parse({
         ...settings,
         similarity_budget: { ...settings.similarity_budget, jaccard_threshold: undefined },
-      }),
-    ).toThrow()
-
-    expect(() =>
-      queuePolicySettingsWriteSchema.parse({
-        ...settings,
-        deferred_source_review: {
-          ...settings.deferred_source_review,
-          composite_mad_multiplier: undefined,
-        },
       }),
     ).toThrow()
 
@@ -3229,48 +3206,27 @@ describe('queue policy settings schemas', () => {
     ).toThrow()
   })
 
-  it('keeps deferred anomaly review inside the platform bounds', () => {
-    expect(() =>
-      queuePolicySettingsWriteSchema.parse({
-        ...settings,
-        deferred_source_review: { ...settings.deferred_source_review, min_cohort_size: 4 },
-      }),
-    ).toThrow()
-    expect(() =>
-      queuePolicySettingsWriteSchema.parse({
-        ...settings,
-        deferred_source_review: {
-          ...settings.deferred_source_review,
-          axis_mad_multiplier: 20.1,
-        },
-      }),
-    ).toThrow()
-    expect(() =>
-      queuePolicySettingsWriteSchema.parse({
-        ...settings,
-        deferred_source_review: { ...settings.deferred_source_review, mode: 'disabled' },
-      }),
-    ).toThrow()
+  it('drops the retired deferred source-review block on read and write', () => {
+    // Revisions stored before source review was retired (2026-11-07) still
+    // carry the block. It must neither fail the board read nor be sent back.
+    const legacy = {
+      ...settings,
+      deferred_source_review: {
+        mode: 'bypass',
+        integrity_double_check_mode: 'enforce',
+        min_cohort_size: 8,
+        composite_mad_multiplier: 6,
+        axis_mad_multiplier: 6,
+        min_composite_delta: 0.1,
+        min_axis_delta: 0.15,
+      },
+    }
+    expect(queuePolicySettingsSchema.parse(legacy)).not.toHaveProperty('deferred_source_review')
+    expect(queuePolicySettingsWriteSchema.parse(legacy)).not.toHaveProperty(
+      'deferred_source_review',
+    )
+    expect(queuePolicySettingsWriteSchema.parse(legacy)).toEqual(settings)
   })
-
-  it.each(['off', 'observe', 'enforce', 'bypass'] as const)(
-    'carries the %s source-review mode through read and write',
-    (mode) => {
-      // `bypass` is the no-source-review mode. The read schema matters as much
-      // as the write one: an enum that did not know the value would fail the
-      // whole queue-policy read the moment an operator selected it, taking the
-      // board down with it.
-      const deferred = { ...settings.deferred_source_review, mode }
-      expect(
-        queuePolicySettingsWriteSchema.parse({ ...settings, deferred_source_review: deferred })
-          .deferred_source_review.mode,
-      ).toBe(mode)
-      expect(
-        queuePolicySettingsSchema.parse({ ...settings, deferred_source_review: deferred })
-          .deferred_source_review.mode,
-      ).toBe(mode)
-    },
-  )
 
   it('surfaces whether an open rollout is actually locking the lane fields', () => {
     // `rollout_locked_fields` is a constant; `rollout_is_open` is the only

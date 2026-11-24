@@ -1,5 +1,7 @@
 """Contract tests for the operator-controlled validator-queue policy board."""
 
+import hashlib
+import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -13,13 +15,11 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
-from ditto.api_models.screener_review_settings import (
-    INTEGRITY_DOUBLE_CHECK_SCOPE,
-    ScreenerReviewSettings,
-    review_settings_checksum,
-)
 from ditto.api_server.dependencies import get_session
-from ditto.db.models import BenchmarkRollout, ScreenerReviewSettingsRevision
+from ditto.db.models import BenchmarkRollout, QueuePolicySettingsRevision
+from ditto.db.queries.queue_policy_settings import (
+    insert_queue_policy_settings_revision,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -75,15 +75,6 @@ def _settings(**overrides: object) -> dict[str, object]:
             "dedupe_scope": "coldkey",
             "require_cohort_complete": True,
             "require_desired_era_drained": True,
-        },
-        "deferred_source_review": {
-            "mode": "off",
-            "integrity_double_check_mode": "off",
-            "min_cohort_size": 8,
-            "composite_mad_multiplier": 6.0,
-            "axis_mad_multiplier": 6.0,
-            "min_composite_delta": 0.10,
-            "min_axis_delta": 0.15,
         },
         "lineage_reference_mode": "same_owner_version",
     }
@@ -372,41 +363,6 @@ class TestWholePolicyWrites:
         effective = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
         assert effective["settings"]["lineage_reference_mode"] == "released_base"
 
-    async def test_bypass_mode_round_trips_and_is_attributed(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """The no-source-review mode is an ordinary audited policy write.
-
-        It travels the same append-only board as every other queue knob, so the
-        revision that turns source review off carries an actor, a reason and a
-        timestamp like any other privileged mutation -- there is no side door.
-        """
-        _install(app, settings_maker)
-        deferred = {
-            "mode": "bypass",
-            "integrity_double_check_mode": "off",
-            "min_cohort_size": 8,
-            "composite_mad_multiplier": 6.0,
-            "axis_mad_multiplier": 6.0,
-            "min_composite_delta": 0.10,
-            "min_axis_delta": 0.15,
-        }
-        created = await client.post(
-            _URL, headers=_HEADERS, json=_payload(deferred_source_review=deferred)
-        )
-        assert created.status_code == 200, created.text
-
-        board = (await client.get(_URL, headers=_HEADERS)).json()
-        assert board["effective"]["settings"]["deferred_source_review"] == deferred
-        latest = board["history"][0]
-        assert latest["settings"]["deferred_source_review"]["mode"] == "bypass"
-        assert latest["actor"] == "backroom:test"
-        assert latest["reason"]
-        assert latest["created_at"]
-
 
 class TestLaneFloors:
     """The lane split may be retuned but never collapsed onto one lane."""
@@ -570,113 +526,104 @@ class TestLaneModulusIsLockedDuringARollout:
         assert response.status_code == 200, response.text
 
 
-class TestIntegrityDoubleCheckPosture:
-    """Enforce is refused until a screener could actually run the double-check.
+# The block every revision written before the 2026-11-07 review retirement
+# carries, exactly as live revision 16 stores it -- with the double-check set
+# to enforce, which this endpoint used to refuse without a reviewer posture.
+_RETIRED_DEFERRED_SOURCE_REVIEW = {
+    "mode": "off",
+    "integrity_double_check_mode": "enforce",
+    "min_cohort_size": 8,
+    "composite_mad_multiplier": 6.0,
+    "axis_mad_multiplier": 6.0,
+    "min_composite_delta": 0.10,
+    "min_axis_delta": 0.15,
+}
 
-    A hold nobody can claim pulls a top-five row off the emission ledger with
-    no review able to release it, so the posture must exist first.
+
+class TestRetiredDeferredSourceReviewBlock:
+    """``deferred_source_review`` gated only source review, which is retired.
+
+    A write must not need it, a write that still carries it must not be gated
+    on it, and a stored revision that holds it must keep reading.
     """
 
-    @staticmethod
-    def _enforce_body() -> dict[str, object]:
-        body = _settings()
-        deferred = dict(body["deferred_source_review"])  # type: ignore[call-overload]
-        deferred["integrity_double_check_mode"] = "enforce"
-        body["deferred_source_review"] = deferred
-        return _payload(settings=body)
-
-    @staticmethod
-    async def _posture(
-        maker: async_sessionmaker[AsyncSession], settings: ScreenerReviewSettings
-    ) -> None:
-        async with maker() as session, session.begin():
-            session.add(
-                ScreenerReviewSettingsRevision(
-                    parent_revision=0,
-                    scope=INTEGRITY_DOUBLE_CHECK_SCOPE,
-                    settings=settings.model_dump(mode="json"),
-                    checksum=review_settings_checksum(settings),
-                    reason="stronger top-five posture",
-                    actor="backroom:test",
-                )
-            )
-
-    async def test_enforce_without_a_posture_is_refused(
+    async def test_a_write_without_the_block_is_accepted(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         settings_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         _install(app, settings_maker)
-        response = await client.post(_URL, headers=_HEADERS, json=self._enforce_body())
-        assert response.status_code == 409
-        assert INTEGRITY_DOUBLE_CHECK_SCOPE in response.text
-        assert (await client.get(_URL, headers=_HEADERS)).json()["current"] == []
-
-    async def test_enforce_on_a_posture_that_skips_l2_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        await self._posture(settings_maker, ScreenerReviewSettings(mode="shadow"))
-        response = await client.post(_URL, headers=_HEADERS, json=self._enforce_body())
-        assert response.status_code == 409
-        assert "enforce" in response.text
-
-    async def test_enforce_with_a_stronger_posture_is_accepted(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        await self._posture(
-            settings_maker,
-            ScreenerReviewSettings(
-                mode="enforce",
-                l2_model="openai/gpt-5.6-sol",
-                l2_fallback_models=("openai/gpt-5.6-terra",),
-                l2_always_escalate=True,
-                timeout_seconds=900,
-                max_steps=20,
-                policy_manifest_profile="l1_l2",
-            ),
-        )
-        response = await client.post(_URL, headers=_HEADERS, json=self._enforce_body())
+        body = _payload()
+        assert "deferred_source_review" not in body["settings"]  # type: ignore[operator]
+        response = await client.post(_URL, headers=_HEADERS, json=body)
         assert response.status_code == 200, response.text
         board = (await client.get(_URL, headers=_HEADERS)).json()
-        deferred = board["effective"]["settings"]["deferred_source_review"]
-        assert deferred["integrity_double_check_mode"] == "enforce"
+        assert board["effective"]["revision"] == 1
+        assert "deferred_source_review" not in board["effective"]["settings"]
+        assert "deferred_source_review" not in board["default"]
 
-    @pytest.mark.parametrize(
-        "override",
-        [
-            {"l2_always_escalate": False},
-            {"timeout_seconds": 1200},
-            {"max_steps": 32},
-            {"critic_reasoning_effort": "high"},
-        ],
-    )
-    async def test_enforce_rejects_unrunnable_or_conditional_posture(
+    async def test_a_write_still_carrying_the_block_stores_nothing_for_it(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         settings_maker: async_sessionmaker[AsyncSession],
-        override: dict[str, object],
+    ) -> None:
+        """An older client that echoes the block back is neither refused nor
+        gated on it: no reviewer posture exists here, and ``enforce`` used to
+        be a 409 without one."""
+        _install(app, settings_maker)
+        response = await client.post(
+            _URL,
+            headers=_HEADERS,
+            json=_payload(deferred_source_review=_RETIRED_DEFERRED_SOURCE_REVIEW),
+        )
+        assert response.status_code == 200, response.text
+        assert "deferred_source_review" not in response.json()["settings"]
+        async with settings_maker() as session:
+            stored = await session.get(QueuePolicySettingsRevision, 1)
+            assert stored is not None
+            assert "deferred_source_review" not in stored.settings
+
+    async def test_a_stored_revision_with_the_block_still_reads(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         _install(app, settings_maker)
-        posture = ScreenerReviewSettings(
-            mode="enforce",
-            l2_always_escalate=True,
-            timeout_seconds=900,
-            max_steps=20,
+        legacy = _settings(
+            rescore_cohort_size=8,
+            deferred_source_review=_RETIRED_DEFERRED_SOURCE_REVIEW,
         )
-        await self._posture(
-            settings_maker,
-            ScreenerReviewSettings.model_validate({**posture.model_dump(), **override}),
+        # The checksum it was written with covers the block; reads return it
+        # as stored rather than recomputing it.
+        checksum = hashlib.sha256(
+            json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        async with settings_maker() as session, session.begin():
+            await insert_queue_policy_settings_revision(
+                session,
+                parent_revision=0,
+                scope="*",
+                settings=legacy,
+                checksum=checksum,
+                reason="Restore full pre-score L1 source review",
+                actor="backroom:test",
+            )
+        board = await client.get(_URL, headers=_HEADERS)
+        assert board.status_code == 200, board.text
+        effective = board.json()["effective"]
+        assert effective["revision"] == 1
+        assert effective["checksum"] == checksum
+        assert effective["settings"]["rescore_cohort_size"] == 8
+        assert "deferred_source_review" not in effective["settings"]
+        assert board.json()["history"][0]["settings"]["rescore_cohort_size"] == 8
+        resolved = await app.state.queue_policy_settings.resolve(settings_maker)
+        assert resolved.rescore_cohort_size == 8
+
+        # The next revision is written whole without the block.
+        response = await client.post(
+            _URL, headers=_HEADERS, json=_payload(expected_revision=1)
         )
-        response = await client.post(_URL, headers=_HEADERS, json=self._enforce_body())
-        assert response.status_code == 409, response.text
-        assert (await client.get(_URL, headers=_HEADERS)).json()["current"] == []
+        assert response.status_code == 200, response.text

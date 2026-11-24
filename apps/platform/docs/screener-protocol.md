@@ -24,9 +24,9 @@ What no longer runs:
   challenges and lineage-scoped review. Every claim is an ordinary build-only
   attempt (no `deferred-mechanical-admission` marker, since nothing is
   deferred), which the protocol already forbids from quarantining; a pass
-  goes straight to `evaluating`. The queue-policy field
-  `deferred_source_review` is no longer read by the claim or by score
-  finalization.
+  goes straight to `evaluating`. The queue-policy block
+  `deferred_source_review` is removed (#3438): stored revisions still carry
+  it, and reads and writes ignore it.
 - Screening quarantines and inconclusive holds from a review, and policy
   rejects. The repeated-expiry park now moves the agent to `screening_failed`
   for an exact operator retry instead of opening a quarantine.

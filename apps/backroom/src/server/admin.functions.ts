@@ -45,7 +45,6 @@ import {
   updateSubmissionSettingsInputSchema,
   setBurnSettingsInputSchema,
   setContinualRetestSettingsInputSchema,
-  setQueuePolicySettingsInputSchema,
   setInferenceConcurrencySettingsInputSchema,
   setValidatorSlotSettingsInputSchema,
   setValidatorIssuancePauseInputSchema,
@@ -128,8 +127,6 @@ import {
   setBurnSettings as setBurnSettingsService,
   fetchContinualRetestSettings,
   setContinualRetestSettings as setContinualRetestSettingsService,
-  fetchQueuePolicySettings,
-  setQueuePolicySettings as setQueuePolicySettingsService,
   fetchInferenceConcurrencySettings,
   fetchValidatorSlotSettings,
   fetchValidatorFleet,
@@ -496,23 +493,6 @@ export const updateScreenerReviewSettings = createServerFn({ method: 'POST' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return applyScreenerReviewSettingsService(context.session.email, data)
-  })
-
-export const getQueuePolicyControl = createServerFn({ method: 'GET' })
-  .middleware([authMiddleware])
-  .handler(() => {
-    setResponseHeader('Cache-Control', 'no-store')
-    setResponseHeader('Vary', 'Cookie, Authorization')
-    return fetchQueuePolicySettings()
-  })
-
-export const updateQueuePolicySettings = createServerFn({ method: 'POST' })
-  .middleware([writeAuthMiddleware, sameOriginMiddleware])
-  .validator(setQueuePolicySettingsInputSchema)
-  .handler(({ context, data }) => {
-    setResponseHeader('Cache-Control', 'no-store')
-    setResponseHeader('Vary', 'Cookie, Authorization')
-    return setQueuePolicySettingsService(data, context.session.email)
   })
 
 export const listScreeningQuarantines = createServerFn({ method: 'GET' })

@@ -16,6 +16,9 @@ TRANSACTION_FILE="$STATE_DIR/transaction.env"
 FAILED_CANDIDATE_FILE="$STATE_DIR/failed-candidate"
 LAST_UPDATE_FILE="$STATE_DIR/last-update.env"
 PREFETCHED_FILE="$STATE_DIR/prefetched-release.env"
+# Component digests of the prefetched candidate. They live beside the marker,
+# not in it: validator images read the marker with a fixed key allowlist.
+PREFETCHED_IMAGES_FILE="$STATE_DIR/prefetched-release-images.env"
 LAST_REFRESH_FILE="$STATE_DIR/last-updater-refresh.env"
 PREPARED_FILE="$STATE_DIR/prepared-release.env"
 BOOTSTRAP_TRANSACTION_FILE="$STATE_DIR/bootstrap-transaction.env"
@@ -172,7 +175,7 @@ is_prunable_managed_image() {
 }
 
 retained_release_images() {
-  local dir descriptor key image
+  local dir descriptor key image pending
   for dir in "$CURRENT_DIR" "$PREVIOUS_DIR"; do
     if [ "$dir" = "$CURRENT_DIR" ]; then
       [ -d "$dir" ] || return 1
@@ -189,6 +192,49 @@ retained_release_images() {
       printf '%s\n' "$image"
     done < <(release_image_keys "$dir")
   done
+  # The pending candidate is retained too, so a no-op tick between staging and
+  # promotion cannot discard what prefetch just warmed. Only a complete marker
+  # vouches for it; anything else retains nothing and is discarded by the
+  # caller, which leaves the next prefetch to re-verify the candidate.
+  if pending="$(prefetched_release_images)"; then printf '%s\n' "$pending"; fi
+}
+
+# Print the prefetched candidate's descriptor and component digests. The marker
+# and its image list are written only after prefetch authenticated the
+# descriptor, validated its manifest, and verified every component's labels.
+# A marker that does not name a newer same-major release, or whose image list
+# is missing, names another release, or lacks a component of its shape, is
+# refused.
+prefetched_release_images() {
+  local candidate version current_version key image legacy=false
+  [ -f "$PREFETCHED_FILE" ] && [ ! -L "$PREFETCHED_FILE" ] || return 1
+  [ -f "$PREFETCHED_IMAGES_FILE" ] && [ ! -L "$PREFETCHED_IMAGES_FILE" ] || return 1
+  candidate="$(manifest_value "$PREFETCHED_FILE" CANDIDATE_RELEASE)"
+  version="$(manifest_value "$PREFETCHED_FILE" CANDIDATE_VERSION)"
+  is_descriptor_digest "$candidate" || return 1
+  [ "$candidate" != "$(manifest_value "$MANAGED_FILE" STACK_RELEASE 2>/dev/null || true)" ] || return 1
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  current_version="$(manifest_value "$CURRENT_DIR/manifest.env" STACK_VERSION 2>/dev/null || true)"
+  [[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  semver_greater_same_major "$version" "$current_version" || return 1
+  [ "$(manifest_value "$PREFETCHED_IMAGES_FILE" CANDIDATE_RELEASE)" = "$candidate" ] || return 1
+  [ -z "$(manifest_value "$PREFETCHED_IMAGES_FILE" CANDIDATE_MODEL_RELAY_IMAGE)" ] || legacy=true
+  printf '%s\n' "$candidate"
+  for key in PYLON_IMAGE SANDBOX_DOCKER_IMAGE MODEL_RELAY_IMAGE OLLAMA_IMAGE DITTOBENCH_API_IMAGE VALIDATOR_IMAGE; do
+    case "$key" in MODEL_RELAY_IMAGE|OLLAMA_IMAGE) [ "$legacy" = true ] || continue;; esac
+    image="$(manifest_value "$PREFETCHED_IMAGES_FILE" "CANDIDATE_$key")"
+    is_image_digest "$image" && validate_image_repository "$key" "$image" || return 1
+    printf '%s\n' "$image"
+  done
+}
+
+discard_prefetch() { rm -f "$PREFETCHED_FILE" "$PREFETCHED_IMAGES_FILE"; }
+
+# Keep the prefetch marker only while it still names a pending candidate.
+discard_settled_prefetch() {
+  [ -f "$PREFETCHED_FILE" ] || [ -f "$PREFETCHED_IMAGES_FILE" ] || return 0
+  prefetched_release_images >/dev/null 2>&1 && return 0
+  discard_prefetch
 }
 
 prune_obsolete_managed_images() {
@@ -739,14 +785,17 @@ semver_greater_same_major() {
 }
 
 prefetch_release() {
-  local candidate_ref="$1" previous_ref current_version candidate_version temporary
+  local candidate_ref="$1" previous_ref current_version candidate_version temporary key
   previous_ref="$(managed_release)"
   if [ "$candidate_ref" = "$previous_ref" ]; then
-    rm -f "$PREFETCHED_FILE"
+    discard_prefetch
     log "candidate channel still points at the installed release"
     return 0
   fi
-  if [ "$(manifest_value "$PREFETCHED_FILE" CANDIDATE_RELEASE 2>/dev/null || true)" = "$candidate_ref" ]; then
+  # A marker from an older updater has no image list, so cleanup cannot retain
+  # its images. Prefetch it once more to record them.
+  if [ "$(manifest_value "$PREFETCHED_FILE" CANDIDATE_RELEASE 2>/dev/null || true)" = "$candidate_ref" ] && \
+    prefetched_release_images >/dev/null 2>&1; then
     log "candidate already prefetched: $candidate_ref"
     return 0
   fi
@@ -759,9 +808,20 @@ prefetch_release() {
     die "prefetch candidate $candidate_version requires supervised major migration or is not newer"
   fi
   pull_release_images "$STAGED_DIR" || die "prefetch component verification failed"
+  # Component digests from the authenticated manifest, so image cleanup can
+  # retain the pending candidate until it is installed or superseded. The list
+  # is bound to its release and lands before the marker that vouches for it.
+  temporary="$PREFETCHED_IMAGES_FILE.tmp"
+  {
+    printf 'CANDIDATE_RELEASE=%s\n' "$candidate_ref"
+    while IFS= read -r key; do
+      printf 'CANDIDATE_%s=%s\n' "$key" "$(manifest_value "$STAGED_DIR/manifest.env" "$key")"
+    done < <(release_image_keys "$STAGED_DIR")
+  } >"$temporary"
+  mv "$temporary" "$PREFETCHED_IMAGES_FILE"
+  # The marker keeps the two-key shape that validator status readers accept.
   temporary="$PREFETCHED_FILE.tmp"
-  printf 'CANDIDATE_RELEASE=%s\nCANDIDATE_VERSION=%s\n' \
-    "$candidate_ref" "$candidate_version" >"$temporary"
+  printf 'CANDIDATE_RELEASE=%s\nCANDIDATE_VERSION=%s\n' "$candidate_ref" "$candidate_version" >"$temporary"
   mv "$temporary" "$PREFETCHED_FILE"
   rm -rf -- "$STAGED_DIR"
   log "prefetched authenticated complete stack $candidate_version ($candidate_ref)"
@@ -923,6 +983,45 @@ resume_stray_drain() {
   resume_and_verify "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || die "drained validator did not resume"
 }
 
+# rollback_ready is journaled once the restored previous stack is drained and
+# healthy, just before its USR2. The resume may already have landed, and the
+# previous tree may already have been promoted to current, so recover like a
+# committed transaction: finish a resumed stack, resume a drained one, and
+# recreate it only when its validator is not running at all.
+recover_rollback_ready() {
+  local previous_ref="$1" dir container state
+  if [ "$(cat "$CURRENT_DIR/.descriptor-ref" 2>/dev/null || true)" = "$previous_ref" ]; then
+    dir="$CURRENT_DIR"
+    # Promotion already installed the restored release as current, so the
+    # rollback can no longer go back to the candidate. Record it before any
+    # Compose call: the wrapper binds current to managed-release.env, which
+    # still names the candidate when a committed update was rolled back.
+    record_managed "$previous_ref"
+  elif [ -d "$PREVIOUS_DIR" ] && [ "$(cat "$PREVIOUS_DIR/.descriptor-ref" 2>/dev/null || true)" = "$previous_ref" ]; then
+    dir="$PREVIOUS_DIR"
+  else
+    die "rollback journal names no installed release tree; refusing an unsafe recovery"
+  fi
+  container="$(service_container "$dir" ditto-subnet)"; state="$(runtime_state "$container")"
+  if state_ready "$state" "$container" && stack_services_healthy "$dir" && assert_stack_matches "$dir"; then
+    log "restored previous validator already resumed; completing the rollback"
+  elif wait_stack_quiescent "$dir" "$ready_timeout" "$check_seconds"; then
+    resume_and_verify "$dir" "$ready_timeout" "$check_seconds" || die "restored previous validator may be working; refusing to recreate it"
+  else
+    # The validator may have resumed while the quiescence wait ran.
+    state="$(runtime_state "$container")"
+    [ "$(docker_bounded inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)" != true ] || state_drained "$state" "$container" || \
+      die "restored previous validator state is ambiguous; refusing to recreate a possibly working stack"
+    if [ "$dir" = "$CURRENT_DIR" ]; then
+      restore_release "$CURRENT_DIR" || die "could not recover the previous complete stack"
+    else
+      rollback_to_previous "$previous_ref" || die "could not recover the previous complete stack"
+    fi
+  fi
+  promote_previous_after_rollback "$previous_ref" || die "could not promote the restored previous release"
+  record_managed "$previous_ref"
+}
+
 recover_transaction() {
   local phase previous candidate container state
   [ -f "$TRANSACTION_FILE" ] || return 0
@@ -941,8 +1040,12 @@ recover_transaction() {
         restore_release "$CURRENT_DIR" || die "previous complete stack stopped and could not be restored"
       fi
       ;;
-    old_stopped|candidate_started|rollback_pending|rollback_ready)
+    old_stopped|candidate_started|rollback_pending)
       rollback_to_previous "$previous" || die "could not recover the previous complete stack"
+      record_failed_candidate "$candidate" transaction_interrupted
+      ;;
+    rollback_ready)
+      recover_rollback_ready "$previous"
       record_failed_candidate "$candidate" transaction_interrupted
       ;;
     committed)
@@ -953,6 +1056,7 @@ recover_transaction() {
         resume_and_verify "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || die "committed stack may be working; refusing rollback"
         record_managed "$candidate"
       else
+        state="$(runtime_state "$container")"
         [ "$(docker_bounded inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)" != true ] || state_drained "$state" "$container" || die "committed validator state is ambiguous; refusing an unsafe rollback"
         record_transaction rollback_pending "$previous" "$candidate"
         rollback_to_previous "$previous" || die "committed stack failed recovery and full rollback failed"
@@ -1000,7 +1104,8 @@ perform_update() {
   resume_and_verify "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || die "candidate may be working; committed journal retained"
   record_managed "$candidate_ref"
   printf 'PREVIOUS_RELEASE=%s\nCURRENT_RELEASE=%s\nCURRENT_VERSION=%s\nUPDATED_AT=%s\n' "$previous_ref" "$candidate_ref" "$candidate_version" "$(date +%s)" >"$LAST_UPDATE_FILE"
-  rm -f "$FAILED_CANDIDATE_FILE" "$PREFETCHED_FILE" "$TRANSACTION_FILE"
+  rm -f "$FAILED_CANDIDATE_FILE" "$TRANSACTION_FILE"
+  discard_settled_prefetch
   prune_obsolete_managed_images
   log "updated complete validator stack $current_version -> $candidate_version"
 }
@@ -1247,7 +1352,7 @@ if [ "$candidate" = "$(managed_release)" ]; then
     log "installed Pylon is unhealthy; draining before same-release repair"
     repair_unhealthy_pylon "$CURRENT_DIR" || die "unhealthy Pylon could not be repaired; validator resume attempted"
   fi
-  rm -f "$PREFETCHED_FILE"
+  discard_settled_prefetch
   prune_obsolete_managed_images
   log "already running stack release $candidate"
   exit 0

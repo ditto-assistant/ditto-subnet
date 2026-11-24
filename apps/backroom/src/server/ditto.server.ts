@@ -109,17 +109,27 @@ export type PlatformAdminFailure = 'unreachable' | 'timeout' | 'auth' | 'server'
 export class PlatformAdminError extends Error {
   readonly failure: PlatformAdminFailure
   readonly status: number | null
+  /** Platform's machine-readable envelope `error_code`, when it sent one. */
+  readonly errorCode: number | null
 
   constructor(
     failure: PlatformAdminFailure,
     message: string,
     status: number | null = null,
+    errorCode: number | null = null,
   ) {
     super(message)
     this.name = 'PlatformAdminError'
     this.failure = failure
     this.status = status
+    this.errorCode = errorCode
   }
+}
+
+function envelopeErrorCode(payload: unknown): number | null {
+  if (!payload || typeof payload !== 'object') return null
+  const code = (payload as Record<string, unknown>).error_code
+  return typeof code === 'number' && Number.isInteger(code) ? code : null
 }
 
 function isTimeout(error: unknown, depth = 0): boolean {
@@ -318,6 +328,7 @@ export async function platformAdminRequest(
       response.status >= 500 ? 'server' : 'request',
       message,
       response.status,
+      envelopeErrorCode(payload),
     )
   }
 }

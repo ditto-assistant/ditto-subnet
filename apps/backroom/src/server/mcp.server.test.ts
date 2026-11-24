@@ -5231,15 +5231,6 @@ describe('Backroom MCP tools', () => {
       lane_cycle_size: 5,
       fresh_submission_slots: [0, 1, 3],
       owner_concurrent_submission_limit: 2,
-      deferred_source_review: {
-        mode: 'off',
-        integrity_double_check_mode: 'off',
-        min_cohort_size: 8,
-        composite_mad_multiplier: 6,
-        axis_mad_multiplier: 6,
-        min_composite_delta: 0.1,
-        min_axis_delta: 0.15,
-      },
       similarity_budget: {
         enabled: true,
         concurrent_submission_limit: 1,
@@ -5337,15 +5328,6 @@ describe('Backroom MCP tools', () => {
           lane_cycle_size: 6,
           fresh_submission_slots: [0, 1, 2, 4],
           owner_concurrent_submission_limit: 2,
-          deferred_source_review: {
-            mode: 'off',
-            integrity_double_check_mode: 'off',
-            min_cohort_size: 8,
-            composite_mad_multiplier: 6,
-            axis_mad_multiplier: 6,
-            min_composite_delta: 0.1,
-            min_axis_delta: 0.15,
-          },
           similarity_budget: {
             enabled: true,
             concurrent_submission_limit: 1,
