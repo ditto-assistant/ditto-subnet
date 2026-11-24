@@ -1323,10 +1323,8 @@ def check_config(config: ApiServerConfig) -> None:
         or inference.embedding_response_body_bytes > 16 << 20
     ):
         raise ApiServerConfigError("embedding proxy limit exceeds its safety bound")
-    if not 1 <= inference.timeout_seconds <= 120:
-        raise ApiServerConfigError(
-            "inference timeout must be between 1 and 120 seconds"
-        )
+    if not 1 <= inference.timeout_seconds <= 95:
+        raise ApiServerConfigError("inference timeout must be between 1 and 95 seconds")
     efficiency = config.efficiency_bonus
     if efficiency.fold_enabled and not efficiency.enabled:
         raise ApiServerConfigError(

@@ -40,6 +40,14 @@ const (
 	PinnedEmbeddingDimensions = 768
 )
 
+// MaxInferenceTimeoutSeconds caps DITTO_INFERENCE_TIMEOUT_SECONDS below the
+// scorer broker's fixed 100 s client timeout
+// (services/dittobench-api/cmd/dittobench-api/inference_broker.go). The relay
+// bounds a request's whole provider ladder by this one budget; the 5 s margin
+// covers admission, settlement and the broker-to-relay hop, so a reply the
+// relay charges for is still inside the window the broker waits for it.
+const MaxInferenceTimeoutSeconds = 95
+
 // Routing modes accepted by DITTO_INFERENCE_ROUTING_MODE.
 const (
 	RoutingModeAggregateThroughput = "aggregate_throughput"
@@ -280,7 +288,7 @@ type InferenceProxyConfig struct {
 
 	RequestBodyBytes  int64 // DITTO_INFERENCE_REQUEST_BODY_BYTES, default 4 MiB, max 8 MiB
 	ResponseBodyBytes int64 // DITTO_INFERENCE_RESPONSE_BODY_BYTES, default 2 MiB, max 8 MiB
-	TimeoutSeconds    int   // DITTO_INFERENCE_TIMEOUT_SECONDS, default 90, range [1,120]
+	TimeoutSeconds    int   // DITTO_INFERENCE_TIMEOUT_SECONDS, default 90, range [1,MaxInferenceTimeoutSeconds]
 	MaxOutputTokens   int   // DITTO_INFERENCE_MAX_OUTPUT_TOKENS, default 32768, max 65536
 
 	// ConfirmationBackpressureRetry lets a confirmation lane re-dispatch a
@@ -728,8 +736,9 @@ func validateInferenceProxy(r *envReader, ip *InferenceProxyConfig) {
 	pos("DITTO_INFERENCE_REQUEST_BODY_BYTES", ip.RequestBodyBytes, 8*1024*1024)
 	pos("DITTO_INFERENCE_RESPONSE_BODY_BYTES", ip.ResponseBodyBytes, 8*1024*1024)
 	pos("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", int64(ip.MaxOutputTokens), 65536)
-	if ip.TimeoutSeconds < 1 || ip.TimeoutSeconds > 120 {
-		r.fail("DITTO_INFERENCE_TIMEOUT_SECONDS out of range: %d (must be 1..120)", ip.TimeoutSeconds)
+	if ip.TimeoutSeconds < 1 || ip.TimeoutSeconds > MaxInferenceTimeoutSeconds {
+		r.fail("DITTO_INFERENCE_TIMEOUT_SECONDS out of range: %d (must be 1..%d)",
+			ip.TimeoutSeconds, MaxInferenceTimeoutSeconds)
 	}
 
 	hierarchy := func(names [3]string, a, b, c, cap int) {

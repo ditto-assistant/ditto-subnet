@@ -14,7 +14,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1198,6 +1200,64 @@ func TestConfirmationEmbeddingsFullFlow(t *testing.T) {
 	}
 	if requestCount != 1 || active != 0 || grantPrompt != 500 {
 		t.Fatalf("grant embedding accounting: %d %d %d", requestCount, active, grantPrompt)
+	}
+}
+
+// The broker forwards confirmation embeddings with the same fixed 100 s
+// client as scored ones (forwardPlatformEmbedding), so the direct route and
+// its OpenRouter fall-through share one TimeoutSeconds budget here too
+// (#2973). A receipt-free direct 429 that arrives after half the budget is
+// returned as the direct rejection, without an OpenRouter dispatch that
+// could only end in an ambiguous timeout.
+func TestConfirmationEmbeddingsSkipFallThroughThatCannotFit(t *testing.T) {
+	const budget = 2 * time.Second
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(budget * 6 / 10):
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited","type":"request_rate_limit_exceeded"}}`))
+	}))
+	defer direct.Close()
+	var routerCalls atomic.Int32
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		routerCalls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": config.PinnedEmbeddingModel,
+			"data":  []any{map[string]any{"index": 0, "embedding": make([]float64, 768)}},
+			"usage": map[string]any{"prompt_tokens": 5},
+		})
+	}))
+	defer router.Close()
+	cfg := testConfig(t, map[string]string{
+		"PERPLEXITY_API_KEY":              "test-pplx-key",
+		"DITTO_INFERENCE_TIMEOUT_SECONDS": strconv.Itoa(int(budget / time.Second)),
+	})
+	cfg.Inference.EmbeddingFallbackURL = direct.URL
+	cfg.Inference.EmbeddingUpstreamURL = router.URL
+	f := newConfirmationFixture(t, cfg, "embedding", config.PinnedEmbeddingModel, strings.ToLower(config.PinnedEmbeddingProvider))
+
+	nonce := uuid.New()
+	body := []byte(`{"model":"perplexity/pplx-embed-v1-0.6b","input":["` +
+		strings.Repeat("hello memory ", 50) + `"],"dimensions":768,"encoding_format":"float"}`)
+	w := serve(f.deps, proxyRequest(confirmationEmbPath, string(body), f.signedHeaders(1, nonce, body)))
+	if routerCalls.Load() != 0 {
+		t.Fatalf("fall-through dispatched %d OpenRouter calls past half the budget", routerCalls.Load())
+	}
+	expectEnvelope(t, w, 502, relayhttp.CodeHTTPException, "embedding provider unavailable")
+	var status string
+	var prompt, cost int64
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT status, prompt_tokens, cost_microusd FROM confirmation_inference_requests
+		 WHERE grant_id = $1 AND nonce = $2`, f.grantID, nonce).Scan(&status, &prompt, &cost); err != nil {
+		t.Fatalf("read request: %v", err)
+	}
+	// The direct rejection is receipt-free, so nothing is charged.
+	if status != "failed" || prompt != 0 || cost != 0 {
+		t.Fatalf("settle: status=%s prompt=%d cost=%d", status, prompt, cost)
 	}
 }
 
