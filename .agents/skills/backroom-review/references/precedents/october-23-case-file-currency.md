@@ -1,7 +1,7 @@
 ---
 id: october-23-case-file-currency
 resolution: guidance
-tags: [policy-v13, i5, w3, reversal, sn-215, case-file, chronology, generator-defect, t, love, overhorizon, harry, lets, orsentra]
+tags: [policy-v13, i5, w3, w13, reversal, sn-215, case-file, chronology, generator-defect, t, love, overhorizon, harry, lets, orsentra, ditto]
 holding: A case-file currency rule (the SN-215 shape) is not a rejection ground on its own. The rule says a self-marked change outranks filing dates, and may come with a date disclaimer, change cues, request-identifier scoping, an aside filter, a host current/supersedes note, or filing times omitted inside the scoped view. Bench v13 stamps shuffled case-file rows in shuffled order (#3088), so this is coping with a benchmark defect. A reject needs an independent ground that stands with the rule removed.
 ---
 
@@ -54,11 +54,14 @@ Kept, because each has an independent ground:
 - Harry v9/v12/v13: the settings-request predicates (SN-214)
 - gale v2/v3 and clear v37: other I5/I7/I4 grounds
 
-ditto v7 `fdc99e79-a7c5-4a5d-bc9e-f8d0f4756e0a` is left rejected pending an
-operator call. Its currency recipe is covered by this holding. Its compiled
-stage-1..4 router weights, though, have no W13 opaque-component declaration
-(`fixtures/router/*.bin`, `src/router/mod.rs:214-230`), and that gap was
-never resolved.
+ditto v7 `fdc99e79-a7c5-4a5d-bc9e-f8d0f4756e0a` was restored separately in batch
+`5399f1da-1504-4757-a927-128a0debf91b` (rulings sha256
+`270f923899856f5143b6838a2207e82296438440c448b93514b6227671a23c8b`). Its
+currency recipe is covered by this holding. The open W13 question about its
+compiled stage-1..4 router weights (`fixtures/router/*.bin`,
+`src/router/mod.rs:214-230`) was settled by operator ruling: compiled weights
+of the miner's own classifier models are acceptable opaque components, not a
+rejection ground on their own.
 
 Apply this per exact UUID. A later artifact with the same rule still needs
 its own full review for independent grounds.
