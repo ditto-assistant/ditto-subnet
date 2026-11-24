@@ -1134,15 +1134,13 @@ class TestPinCrownHeir:
     """#2991 review guards for public crown-heir resolution."""
 
     def test_resolves_renamed_family_through_withheld_generation(self) -> None:
-        from types import SimpleNamespace
-
         from ditto.api_server.endpoints.public import _pin_crown_heir
 
         crowned_id = uuid4()
         withheld_replacement_id = uuid4()
         linked_payable_id = uuid4()
         rival_id = uuid4()
-        pin = SimpleNamespace(
+        pin: Any = SimpleNamespace(
             snapshot_id=uuid4(),
             netuid=118,
             epoch_index=10,
@@ -1165,7 +1163,7 @@ class TestPinCrownHeir:
             incumbent_agent_id=crowned_id,
             champion_owner_root="old-root",
         )
-        payable_rows = [
+        payable_rows: Any = [
             SimpleNamespace(
                 agent_id=rival_id,
                 miner_hotkey=_HOTKEY_B,
@@ -1177,7 +1175,7 @@ class TestPinCrownHeir:
                 emission_owner_root="renamed-root",
             ),
         ]
-        all_rows = [
+        all_rows: Any = [
             *payable_rows,
             SimpleNamespace(
                 agent_id=withheld_replacement_id,
@@ -1192,12 +1190,10 @@ class TestPinCrownHeir:
         )
 
     def test_malformed_stored_pin_falls_back_to_stored_root(self) -> None:
-        from types import SimpleNamespace
-
         from ditto.api_server.endpoints.public import _pin_crown_heir
 
         heir_id = uuid4()
-        pin = SimpleNamespace(
+        pin: Any = SimpleNamespace(
             snapshot_id=uuid4(),
             netuid=118,
             epoch_index=10,
@@ -1213,7 +1209,7 @@ class TestPinCrownHeir:
             incumbent_agent_id=None,
             champion_owner_root="stored-root",
         )
-        rows = [
+        rows: Any = [
             SimpleNamespace(
                 agent_id=heir_id,
                 miner_hotkey=_HOTKEY_B,
