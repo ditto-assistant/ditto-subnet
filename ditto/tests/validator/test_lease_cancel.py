@@ -927,7 +927,7 @@ class TestAnAcceptedScoreIsNotRevoked:
     async def test_the_run_budget_cannot_cancel_an_in_flight_submission(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The run budget ends a margin early; the ticket deadline bounds submit.
+        """The run budget ends a margin early; it cannot cut a submission short.
 
         Platform commits the score, but its answer arrives after the run budget
         (deadline minus the reporting margin) has run out. Cancelling the
@@ -957,20 +957,53 @@ class TestAnAcceptedScoreIsNotRevoked:
         assert finished == ["run-accepted"]
         platform.report_ticket_failed.assert_not_awaited()
 
-    async def test_the_ticket_deadline_still_bounds_a_hung_submission(self) -> None:
-        """Lifting the run budget at submission keeps the deadline as a bound."""
+    async def test_an_answer_after_the_ticket_deadline_is_not_cancelled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No cut at the deadline either: ``submit_score`` bounds its own request.
+
+        Platform commits the score just before the ticket deadline, or under
+        host/Platform clock skew, and its answer arrives after the deadline on
+        this host. Cancelling there would still hand back ``scoring_error`` for
+        a scored ticket.
+        """
+        from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
+
+        monkeypatch.setattr(worker_module, "lease_budget_seconds", lambda *_a: 0.1)
+        job = _job(
+            "5MinerA" + "x" * 41,
+            deadline=datetime.now(UTC) + timedelta(seconds=0.4),
+        )
+        finished: list[str] = []
+
+        async def upload(*_args: object, run_id: str, **_kw: object) -> None:
+            finished.append(run_id)
+
+        worker, platform, heartbeat = _accepting_worker(upload=upload, job=job)
+
+        async def accept_after_the_deadline(agent_id: UUID, **_kwargs: object) -> None:
+            heartbeat._evict.add(agent_id)
+            await asyncio.sleep(0.8)
+
+        platform.submit_score = AsyncMock(side_effect=accept_after_the_deadline)
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+
+        platform.submit_score.assert_awaited_once()
+        assert datetime.now(UTC) > job.deadline
+        assert finished == ["run-accepted"]
+        platform.report_ticket_failed.assert_not_awaited()
+
+    async def test_submission_lifts_the_lease_budget(self) -> None:
+        """The lease budget no longer bounds the request once submission starts."""
         worker, _, _ = _worker_with_scorer(
             AsyncMock(), heartbeat=_RosterHeartbeat().mock
         )
         slot = worker._slots["slot-0"]
-        loop = asyncio.get_running_loop()
-        deadline = datetime.now(UTC) + timedelta(seconds=0.4)
         async with asyncio.timeout(0.1) as run_budget:
             slot.lease_timeout = run_budget
-            worker._bound_submission_by_ticket_deadline(slot, deadline)
-            when = run_budget.when()
-            assert when is not None
-            assert 0.3 < when - loop.time() <= 0.4
+            worker._lift_run_budget_for_submission(slot)
+            assert run_budget.when() is None
         slot.lease_timeout = None
 
     async def test_an_outer_cancel_after_a_mid_submission_revocation_propagates(

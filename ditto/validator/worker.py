@@ -5636,7 +5636,7 @@ class ValidatorWorker:
         lease_slot = self._running_lease_slot(agent_id, ticket_deadline)
         if lease_slot is not None and ticket_deadline is not None:
             lease_slot.submitting_score = True
-            self._bound_submission_by_ticket_deadline(lease_slot, ticket_deadline)
+            self._lift_run_budget_for_submission(lease_slot)
         try:
             await self._platform.submit_score(
                 agent_id,
@@ -5738,33 +5738,22 @@ class ValidatorWorker:
         return slot
 
     @staticmethod
-    def _bound_submission_by_ticket_deadline(
-        slot: _SlotState, ticket_deadline: datetime
-    ) -> None:
-        """Let the ticket's own deadline, not the run budget, bound submission.
+    def _lift_run_budget_for_submission(slot: _SlotState) -> None:
+        """Let ``submit_score`` bound its own request, not the lease budget.
 
-        The run budget ends a reporting margin before the deadline. Firing it
-        while ``submit_score`` is in flight would cancel a request Platform may
-        already have committed and hand back ``scoring_error`` for a scored
-        ticket (#2966). Platform accepts nothing after the deadline, so the
-        deadline still bounds a hung submission, and acceptance lifts the bound
-        entirely (:meth:`_mark_score_accepted`).
+        The lease budget ends a reporting margin before the ticket deadline.
+        Firing it, or any cut at the deadline itself, while ``submit_score`` is
+        in flight would cancel a request Platform may already have committed
+        (near the deadline, or under host/Platform clock skew) and hand back
+        ``scoring_error`` for a scored ticket (#2966). ``submit_score`` is
+        already bounded: each request by the client's HTTP timeout, and its
+        replays stop once the next would land inside
+        ``_SCORE_SUBMIT_DEADLINE_MARGIN`` of the deadline. The revocation
+        watchdog stands down for the same span (``submitting_score``).
         """
         lease_timeout = slot.lease_timeout
-        if lease_timeout is None or lease_timeout.expired():
-            return
-        current = lease_timeout.when()
-        if current is None:
-            return
-        deadline = (
-            ticket_deadline
-            if ticket_deadline.tzinfo is not None
-            else ticket_deadline.replace(tzinfo=UTC)
-        )
-        loop = asyncio.get_running_loop()
-        at = loop.time() + (deadline - datetime.now(UTC)).total_seconds()
-        if at > current:
-            lease_timeout.reschedule(at)
+        if lease_timeout is not None and not lease_timeout.expired():
+            lease_timeout.reschedule(None)
 
     @staticmethod
     def _mark_score_accepted(slot: _SlotState) -> None:
