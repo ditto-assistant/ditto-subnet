@@ -8,7 +8,7 @@ COPY services/dittobench-api/cmd/dittobench-coding-supervisor/ ./cmd/dittobench-
 COPY research/dittobench-datagen/ /src/research/dittobench-datagen/
 RUN CGO_ENABLED=0 go build -trimpath -o /out/supervisor ./cmd/dittobench-coding-supervisor
 
-FROM rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922 AS toolchain
+FROM rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS toolchain
 RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN chmod -R go-w /usr/local/rustup
 
