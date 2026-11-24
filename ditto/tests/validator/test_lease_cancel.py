@@ -1057,8 +1057,9 @@ class TestAnAcceptedScoreIsNotRevoked:
     ) -> None:
         """A 200 that does not parse more likely carried an accepted score.
 
-        It surfaces exactly as it would on a held lease, never relabelled as a
-        silent revocation.
+        It is never relabelled as a silent revocation. It is contained as an
+        ``infrastructure`` hand-back, as on a held lease, rather than escaping
+        the sweep.
         """
         from ditto.tests.validator.test_worker import _job  # noqa: PLC0415
 
@@ -1077,9 +1078,13 @@ class TestAnAcceptedScoreIsNotRevoked:
 
         platform.submit_score = AsyncMock(side_effect=dropped_then_unparseable)
 
-        with pytest.raises(ValueError, match="did not validate"):
-            await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+
+        platform.submit_score.assert_awaited_once()
         assert worker._slots["slot-0"].revoked.is_set()
+        platform.report_ticket_failed.assert_awaited_once()
+        assert platform.report_ticket_failed.await_args.args[1] == "infrastructure"
+        assert all(slot.active_agent_id is None for slot in worker._slots.values())
 
     async def test_a_late_watchdog_does_not_cancel_work_after_an_accepted_score(
         self,

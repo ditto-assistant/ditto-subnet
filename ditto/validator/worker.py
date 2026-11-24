@@ -5650,6 +5650,14 @@ class ValidatorWorker:
                     else {}
                 ),
             )
+        except ValueError as error:
+            # A 200 whose body did not parse or validate. Platform may still have
+            # committed the score, so this is never relabelled as a revocation.
+            # Classify it as an infrastructure failure so the slot hands it back
+            # instead of letting the bare error escape the sweep.
+            raise PlatformInfrastructureError(
+                f"score submission returned an invalid response: {error}"
+            ) from error
         except PlatformError as error:
             if (
                 lease_slot is not None
