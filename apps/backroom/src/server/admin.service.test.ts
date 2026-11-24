@@ -2932,6 +2932,93 @@ describe('queue policy administration', () => {
     ).rejects.toThrow(/expected 0, current 2.*get_queue_policy_settings/s)
   })
 
+  it('carries the live deferred_source_review block to a platform that still requires it', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    // A platform released before the retirement: it still returns the block
+    // and 422s a write without it. Release deploys Platform and Backroom in
+    // parallel, so this Backroom can meet that platform.
+    const legacyBlock = {
+      mode: 'off',
+      integrity_double_check_mode: 'off',
+      min_cohort_size: 8,
+      composite_mad_multiplier: 6,
+      axis_mad_multiplier: 6,
+      min_composite_delta: 0.1,
+      min_axis_delta: 0.15,
+    }
+    const legacyControl = {
+      ...control,
+      effective: {
+        ...control.effective,
+        revision: 16,
+        source: 'revision',
+        settings: { ...settings, deferred_source_review: legacyBlock },
+      },
+    }
+    const nextSettings = { ...settings, rescore_cohort_size: 8 }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          { detail: [{ msg: "Value error, missing ['deferred_source_review']" }] },
+          { status: 422 },
+        ),
+      )
+      .mockResolvedValueOnce(Response.json(legacyControl))
+      .mockResolvedValueOnce(Response.json({ revision: 17 }))
+      .mockResolvedValueOnce(Response.json(legacyControl))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await setQueuePolicySettings(
+      {
+        expectedRevision: 16,
+        settings: nextSettings,
+        reason: 'shrink the rescore cohort to eight',
+        confirmation: 'APPLY QUEUE POLICY SETTINGS',
+      },
+      'operator@omniaura.ai',
+    )
+
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    const bodyOf = (call: number) =>
+      JSON.parse(String((fetchMock.mock.calls[call] as [string, RequestInit])[1].body))
+    expect(bodyOf(0).settings).toEqual(nextSettings)
+    expect(bodyOf(2)).toEqual({
+      scope: '*',
+      expected_revision: 16,
+      settings: { ...nextSettings, deferred_source_review: legacyBlock },
+      reason: 'shrink the rescore cohort to eight',
+      actor: 'operator@omniaura.ai',
+      confirmation: 'APPLY QUEUE POLICY SETTINGS',
+    })
+  })
+
+  it('keeps a 422 from a retired platform as the refusal and never resends', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({ detail: 'similarity_budget is incomplete' }, { status: 422 }),
+      )
+      // The retired platform no longer returns the block.
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      setQueuePolicySettings(
+        {
+          expectedRevision: 0,
+          settings,
+          reason: 'restore the shipped lane cycle after the wave',
+          confirmation: 'APPLY QUEUE POLICY SETTINGS',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow(/similarity_budget is incomplete.*get_queue_policy_settings/s)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect((fetchMock.mock.calls[1] as [string, RequestInit])[1].method).toBe('GET')
+  })
+
   it('rejects an unsatisfiable lane policy before any admin call', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi.fn()
