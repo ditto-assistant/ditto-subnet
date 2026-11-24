@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.505.1 (2026-11-24)
+
+### Bug Fixes
+
+- **platform**: Keep the crown when the champion family is renamed
+  ([#3625](https://github.com/ditto-assistant/ditto-subnet/pull/3625),
+  [`db0e44c`](https://github.com/ditto-assistant/ditto-subnet/commit/db0e44ca00267de545d379dca99d96df71115a69))
+
+
 ## v0.505.0 (2026-11-24)
 
 ### Bug Fixes
