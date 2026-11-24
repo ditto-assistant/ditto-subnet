@@ -1037,7 +1037,10 @@ def pin_champion_hotkey(pin: LedgerPin) -> str | None:
     if pin.champion_agent_id is None:
         return None
     candidates: list[LedgerEntry] = list(pin.entries)
-    provisional = pin_provisional_incumbent(pin.context.get("served") or {})
+    try:
+        provisional = pin_provisional_incumbent(pin.context.get("served") or {})
+    except (AttributeError, KeyError, TypeError, ValueError):
+        provisional = None
     if provisional is not None:
         candidates.append(provisional)
     return next(

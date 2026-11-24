@@ -1218,3 +1218,34 @@ class TestPinCrownHeir:
         ]
 
         assert _pin_crown_heir(pin, rows) == heir_id
+
+    def test_pin_champion_hotkey_ignores_malformed_served_context(self) -> None:
+        from ditto.api_server.ledger_pin import pin_champion_hotkey
+
+        crowned_id = uuid4()
+        entry = _entry(
+            agent_id=crowned_id,
+            hotkey=_HOTKEY_A,
+            composite=0.85,
+            first_seen=_NOW,
+        )
+        for bad_served in (
+            "not-a-dict",
+            {"crown_mode": "incumbent", "provisional_incumbent": {"corrupt": True}},
+        ):
+            pin = LedgerPin(
+                snapshot_id=uuid4(),
+                netuid=118,
+                epoch_index=10,
+                last_epoch_block=1000,
+                pinned_block=1001,
+                pinned_block_hash="0xabc",
+                pinned_at=_NOW,
+                bench_version=14,
+                entries=(entry,),
+                context={"served": bad_served},
+                ledger_digest="digest",
+                champion_agent_id=crowned_id,
+                incumbent_agent_id=crowned_id,
+            )
+            assert pin_champion_hotkey(pin) == _HOTKEY_A
