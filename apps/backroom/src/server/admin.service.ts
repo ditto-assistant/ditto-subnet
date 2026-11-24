@@ -2039,9 +2039,18 @@ function queuePolicyRefusal(cause: unknown) {
 // requires that block on every write and still returns it on read, while this
 // Backroom no longer models it. Release deploys Platform and Backroom in
 // parallel, so for that window carry the live block over unchanged instead of
-// failing every write. The platform's own GET decides: a retired platform no
-// longer returns the block, so this returns null and the original refusal
-// stands. Delete once every platform runs the retirement.
+// failing every write. Delete once every platform runs the retirement.
+//
+// Only Platform's request-validation refusal qualifies. That platform answers
+// a body missing the block with the generic validation envelope (422,
+// error_code 3001, "request validation failed"): field names stay in its logs,
+// so the detail cannot name the block. Validation depends on the body alone,
+// never on live state, so the retry, whose body differs only by the block,
+// can succeed only when the block was what failed; a route refusal such as a
+// wrong scope carries its own code and is never retried. The platform's own
+// GET then decides: a retired platform no longer returns the block, so this
+// returns null and the original refusal stands.
+const PLATFORM_REQUEST_VALIDATION_ERROR_CODE = 3001
 const legacyDeferredSourceReviewSchema = z.object({
   effective: z.object({
     settings: z.object({
@@ -2051,7 +2060,13 @@ const legacyDeferredSourceReviewSchema = z.object({
 })
 
 async function legacyDeferredSourceReviewBlock(cause: unknown) {
-  if (!(cause instanceof PlatformAdminError) || cause.status !== 422) return null
+  if (
+    !(cause instanceof PlatformAdminError) ||
+    cause.status !== 422 ||
+    cause.errorCode !== PLATFORM_REQUEST_VALIDATION_ERROR_CODE
+  ) {
+    return null
+  }
   let payload: unknown
   try {
     payload = await platformAdminRequest(QUEUE_POLICY_SETTINGS_PATH)

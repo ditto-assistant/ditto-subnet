@@ -2932,20 +2932,26 @@ describe('queue policy administration', () => {
     ).rejects.toThrow(/expected 0, current 2.*get_queue_policy_settings/s)
   })
 
+  const validationRefusal = {
+    error_code: 3001,
+    message: 'request validation failed',
+    request_id: 'req-validation',
+  }
+  const legacyBlock = {
+    mode: 'off',
+    integrity_double_check_mode: 'off',
+    min_cohort_size: 8,
+    composite_mad_multiplier: 6,
+    axis_mad_multiplier: 6,
+    min_composite_delta: 0.1,
+    min_axis_delta: 0.15,
+  }
+
   it('carries the live deferred_source_review block to a platform that still requires it', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     // A platform released before the retirement: it still returns the block
     // and 422s a write without it. Release deploys Platform and Backroom in
     // parallel, so this Backroom can meet that platform.
-    const legacyBlock = {
-      mode: 'off',
-      integrity_double_check_mode: 'off',
-      min_cohort_size: 8,
-      composite_mad_multiplier: 6,
-      axis_mad_multiplier: 6,
-      min_composite_delta: 0.1,
-      min_axis_delta: 0.15,
-    }
     const legacyControl = {
       ...control,
       effective: {
@@ -2958,12 +2964,8 @@ describe('queue policy administration', () => {
     const nextSettings = { ...settings, rescore_cohort_size: 8 }
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        Response.json(
-          { detail: [{ msg: "Value error, missing ['deferred_source_review']" }] },
-          { status: 422 },
-        ),
-      )
+      // The exact envelope that platform sends: field names stay in its logs.
+      .mockResolvedValueOnce(Response.json(validationRefusal, { status: 422 }))
       .mockResolvedValueOnce(Response.json(legacyControl))
       .mockResolvedValueOnce(Response.json({ revision: 17 }))
       .mockResolvedValueOnce(Response.json(legacyControl))
@@ -2993,13 +2995,11 @@ describe('queue policy administration', () => {
     })
   })
 
-  it('keeps a 422 from a retired platform as the refusal and never resends', async () => {
+  it('keeps a validation 422 from a retired platform as the refusal and never resends', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        Response.json({ detail: 'similarity_budget is incomplete' }, { status: 422 }),
-      )
+      .mockResolvedValueOnce(Response.json(validationRefusal, { status: 422 }))
       // The retired platform no longer returns the block.
       .mockResolvedValueOnce(Response.json(control))
     vi.stubGlobal('fetch', fetchMock)
@@ -3014,9 +3014,52 @@ describe('queue policy administration', () => {
         },
         'operator@omniaura.ai',
       ),
-    ).rejects.toThrow(/similarity_budget is incomplete.*get_queue_policy_settings/s)
+    ).rejects.toThrow(/request validation failed.*get_queue_policy_settings/s)
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect((fetchMock.mock.calls[1] as [string, RequestInit])[1].method).toBe('GET')
+  })
+
+  it('never retries an unrelated 422, even from a platform that still requires the block', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    // A route refusal carries its own detail and the HTTP-exception code, not
+    // the validation code, so it is a decision on this write, not a missing
+    // field the carryover could satisfy.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error_code: 3002,
+            message: "queue policy is subnet-global; scope must be '*'",
+            request_id: 'req-scope',
+          },
+          { status: 422 },
+        ),
+      )
+      .mockResolvedValue(
+        Response.json({
+          ...control,
+          effective: {
+            ...control.effective,
+            settings: { ...settings, deferred_source_review: legacyBlock },
+          },
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      setQueuePolicySettings(
+        {
+          expectedRevision: 0,
+          settings,
+          reason: 'restore the shipped lane cycle after the wave',
+          confirmation: 'APPLY QUEUE POLICY SETTINGS',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow(/scope must be '\*'.*get_queue_policy_settings/s)
+    // No carryover read and no second POST.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('rejects an unsatisfiable lane policy before any admin call', async () => {
