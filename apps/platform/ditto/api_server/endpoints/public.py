@@ -321,13 +321,12 @@ from ditto.api_server.koth import (
     project_koth,
 )
 from ditto.api_server.ledger_pin import (
-    LedgerPin,
     classify_vector_against_pins,
     crown_family_root,
-    pin_champion_hotkey,
     pin_expected_shares,
     pin_generator_fraction,
     pin_provisional_incumbent,
+    pin_row_champion_hotkey,
     served_crown_gate,
     served_rank_shares,
 )
@@ -4698,7 +4697,9 @@ async def build_public_leaderboard(
         # next pin still carries the crown through the owner family, so the
         # projection must too, or it opens a classic first-seen walk and names
         # a senior rival the fleet will never crown.
-        emission_incumbent_id = _pin_crown_heir(eligibility_pin, emission_rows)
+        emission_incumbent_id = _pin_crown_heir(
+            eligibility_pin, emission_rows, family_rows=finalized_generations
+        )
     entries = []
     for i, row in enumerate(finalized_rows, start=1):
         settled, rolling, rolling_count = rollout_states.get(
@@ -5043,23 +5044,30 @@ def _ledger_pin_model(
     )
 
 
-def _pin_crown_heir(pin: LedgerEpochSnapshot, rows: Sequence[LedgerRow]) -> UUID | None:
+def _pin_crown_heir(
+    pin: LedgerEpochSnapshot,
+    rows: Sequence[LedgerRow],
+    *,
+    family_rows: Sequence[LedgerRow] | None = None,
+) -> UUID | None:
     """The row the next pin hands ``pin``'s crown to, as ``build_pin_draft`` does.
 
     The owner family's representative in ``rows`` inherits the crown; a legacy
     pin without an owner root only carries it to the exact same agent. The
-    family is resolved through the champion's identity by the same
+    family is resolved through the champion's identity over ``family_rows``
+    (including withheld generations, matching ``build_pin_draft``) by the same
     :func:`crown_family_root` the next pin uses, so a family renamed by an
     owner link since ``pin`` was taken keeps its crown here too (#2991).
     """
     if pin.champion_owner_root is not None:
+        member_rows = rows if family_rows is None else family_rows
         family = crown_family_root(
             stored_root=pin.champion_owner_root,
             champion_agent_id=pin.champion_agent_id,
-            champion_hotkey=pin_champion_hotkey(LedgerPin.from_row(pin)),
+            champion_hotkey=pin_row_champion_hotkey(pin),
             members=(
                 (row.agent_id, row.miner_hotkey, row.emission_owner_root)
-                for row in rows
+                for row in member_rows
             ),
         )
         return next(

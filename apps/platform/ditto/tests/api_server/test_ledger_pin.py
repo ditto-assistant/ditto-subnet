@@ -1128,3 +1128,97 @@ class TestClassifyWithGeneratorShare:
         assert pin_expected_burn(0.2, None, generator_fraction=0.1) == pytest.approx(
             0.2
         )
+
+
+class TestPinCrownHeir:
+    """#2991 review guards for public crown-heir resolution."""
+
+    def test_resolves_renamed_family_through_withheld_generation(self) -> None:
+        from types import SimpleNamespace
+
+        from ditto.api_server.endpoints.public import _pin_crown_heir
+
+        crowned_id = uuid4()
+        withheld_replacement_id = uuid4()
+        linked_payable_id = uuid4()
+        rival_id = uuid4()
+        pin = SimpleNamespace(
+            snapshot_id=uuid4(),
+            netuid=118,
+            epoch_index=10,
+            last_epoch_block=1000,
+            pinned_block=1001,
+            pinned_block_hash="0xabc",
+            pinned_at=_NOW,
+            bench_version=14,
+            entries=[
+                _entry(
+                    agent_id=crowned_id,
+                    hotkey=_HOTKEY_A,
+                    composite=0.85,
+                    first_seen=_NOW,
+                ).model_dump(mode="json", exclude_none=True)
+            ],
+            context={"served": {}},
+            ledger_digest="digest",
+            champion_agent_id=crowned_id,
+            incumbent_agent_id=crowned_id,
+            champion_owner_root="old-root",
+        )
+        payable_rows = [
+            SimpleNamespace(
+                agent_id=rival_id,
+                miner_hotkey=_HOTKEY_B,
+                emission_owner_root="rival-root",
+            ),
+            SimpleNamespace(
+                agent_id=linked_payable_id,
+                miner_hotkey="5LinkedSibling" + "x" * 34,
+                emission_owner_root="renamed-root",
+            ),
+        ]
+        all_rows = [
+            *payable_rows,
+            SimpleNamespace(
+                agent_id=withheld_replacement_id,
+                miner_hotkey=_HOTKEY_A,
+                emission_owner_root="renamed-root",
+            ),
+        ]
+
+        assert (
+            _pin_crown_heir(pin, payable_rows, family_rows=all_rows)
+            == linked_payable_id
+        )
+
+    def test_malformed_stored_pin_falls_back_to_stored_root(self) -> None:
+        from types import SimpleNamespace
+
+        from ditto.api_server.endpoints.public import _pin_crown_heir
+
+        heir_id = uuid4()
+        pin = SimpleNamespace(
+            snapshot_id=uuid4(),
+            netuid=118,
+            epoch_index=10,
+            last_epoch_block=1000,
+            pinned_block=1001,
+            pinned_block_hash="0xabc",
+            pinned_at=_NOW,
+            bench_version=14,
+            entries=[{"corrupt": "entry"}],
+            context={"served": {}},
+            ledger_digest="digest",
+            champion_agent_id=uuid4(),
+            incumbent_agent_id=None,
+            champion_owner_root="stored-root",
+        )
+        rows = [
+            SimpleNamespace(
+                agent_id=heir_id,
+                miner_hotkey=_HOTKEY_B,
+                emission_owner_root="stored-root",
+            )
+        ]
+
+        assert _pin_crown_heir(pin, rows) == heir_id

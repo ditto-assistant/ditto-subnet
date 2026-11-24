@@ -99,9 +99,8 @@ from ditto.api_server.koth import (
     project_koth,
 )
 from ditto.api_server.ledger_pin import (
-    LedgerPin,
     crown_family_root,
-    pin_champion_hotkey,
+    pin_row_champion_hotkey,
 )
 from ditto.api_server.storage.errors import (
     ObjectDownloadFailedError,
@@ -395,7 +394,7 @@ async def read_board_snapshot_for_state(
         read_at=read_at,
         anchor_owner_root=pin.champion_owner_root if pin else None,
         anchor_agent_id=pin.champion_agent_id if pin else None,
-        anchor_hotkey=pin_champion_hotkey(LedgerPin.from_row(pin)) if pin else None,
+        anchor_hotkey=pin_row_champion_hotkey(pin) if pin else None,
         pin_context=(
             f"{pin.epoch_index}:{pin.ledger_digest}:{pin.champion_owner_root}:{pin.champion_agent_id}"
             if pin

@@ -1050,6 +1050,18 @@ def pin_champion_hotkey(pin: LedgerPin) -> str | None:
     )
 
 
+def pin_row_champion_hotkey(row: LedgerEpochSnapshot) -> str | None:
+    """Resolve the crowned champion hotkey from a persisted pin row.
+
+    Falls back to ``None`` when stored pin JSON fails validation so read-only
+    projections retain the stored-root fallback instead of raising.
+    """
+    try:
+        return pin_champion_hotkey(LedgerPin.from_row(row))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
 def crown_family_root(
     *,
     stored_root: str | None,
