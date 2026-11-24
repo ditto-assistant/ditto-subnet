@@ -258,6 +258,21 @@ class ScreenerConfig:
     """OpenAI-compatible gateway the probe reviewer calls with that key."""
     probe_review_model: str = "anthropic/claude-sonnet-5.5"
     """Model the probe reviewer requests."""
+    build_backend: str = "local"
+    """``local`` (default) builds with the local Docker daemon; ``cathedral``
+    builds inside a Cathedral sealed room and saves a build receipt."""
+    cathedral_api_url: str = "https://api.polaris.computer"
+    cathedral_api_key_file: str | None = None
+    """Path to the Cathedral API key; read at use, never logged."""
+    cathedral_template: str = "sealed-4x8"
+    cathedral_builder_image: str = "docker:27-dind"
+    cathedral_builder_digest: str = (
+        "sha256:d2dc198f7d839eae26b5a9cb0e7cdc4e2c97d9cb4ea66dbeb0a4c0c7f0b165f8"
+    )
+    """The builder digest the room must report; the receipt checker pins it too."""
+    cathedral_build_memory: str = "7g"
+    cathedral_max_spend_usd: float = 0.5
+    cathedral_receipt_dir: str = "/opt/ditto/screener/state/build-receipts"
 
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured."""
@@ -338,6 +353,45 @@ def _parse_csv(name: str, default: str) -> tuple[str, ...]:
     return tuple(
         raw.strip() for raw in os.environ.get(name, default).split(",") if raw.strip()
     )
+
+
+def _validate_cathedral(config: ScreenerConfig) -> None:
+    """Refuse a Cathedral backend that cannot build or has a malformed recipe."""
+    if not config.cathedral_api_key_file:
+        raise ScreenerConfigError(
+            "SCREENER_CATHEDRAL_API_KEY_FILE is required when "
+            "SCREENER_BUILD_BACKEND=cathedral"
+        )
+    if not re.fullmatch(r"https?://[^\s/]+", config.cathedral_api_url):
+        raise ScreenerConfigError(
+            "SCREENER_CATHEDRAL_API_URL must be an http(s) origin without a path"
+        )
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", config.cathedral_template):
+        raise ScreenerConfigError("SCREENER_CATHEDRAL_TEMPLATE is malformed")
+    image = config.cathedral_builder_image
+    if (
+        "docker:" not in image
+        or "dind" not in image
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/:@-]{0,199}", image)
+    ):
+        raise ScreenerConfigError(
+            "SCREENER_CATHEDRAL_BUILDER_IMAGE must be a docker:*-dind image"
+        )
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", config.cathedral_builder_digest):
+        raise ScreenerConfigError(
+            "SCREENER_CATHEDRAL_BUILDER_DIGEST must be sha256:<64 hex>"
+        )
+    # Embedded in the room's shell command, so it must be a plain size.
+    if not re.fullmatch(r"[1-9][0-9]{0,5}[mg]", config.cathedral_build_memory):
+        raise ScreenerConfigError(
+            "SCREENER_CATHEDRAL_BUILD_MEMORY must look like 7g or 512m"
+        )
+    if not 0 < config.cathedral_max_spend_usd <= 100:
+        raise ScreenerConfigError(
+            "SCREENER_CATHEDRAL_MAX_SPEND_USD must be in (0, 100]"
+        )
+    if not os.path.isabs(config.cathedral_receipt_dir):
+        raise ScreenerConfigError("SCREENER_CATHEDRAL_RECEIPT_DIR must be absolute")
 
 
 def parse_screener_config_from_env() -> ScreenerConfig:
@@ -545,7 +599,33 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         probe_review_model=os.environ.get(
             "SCREENER_PROBE_REVIEW_MODEL", "anthropic/claude-sonnet-5.5"
         ),
+        build_backend=os.environ.get("SCREENER_BUILD_BACKEND", "local").strip(),
+        cathedral_api_url=os.environ.get(
+            "SCREENER_CATHEDRAL_API_URL", "https://api.polaris.computer"
+        )
+        .strip()
+        .rstrip("/"),
+        cathedral_api_key_file=os.environ.get("SCREENER_CATHEDRAL_API_KEY_FILE")
+        or None,
+        cathedral_template=os.environ.get("SCREENER_CATHEDRAL_TEMPLATE", "sealed-4x8"),
+        cathedral_builder_image=os.environ.get(
+            "SCREENER_CATHEDRAL_BUILDER_IMAGE", "docker:27-dind"
+        ),
+        cathedral_builder_digest=os.environ.get(
+            "SCREENER_CATHEDRAL_BUILDER_DIGEST",
+            "sha256:d2dc198f7d839eae26b5a9cb0e7cdc4e2c97d9cb4ea66dbeb0a4c0c7f0b165f8",
+        ),
+        cathedral_build_memory=os.environ.get("SCREENER_CATHEDRAL_BUILD_MEMORY", "7g"),
+        cathedral_max_spend_usd=_parse_float("SCREENER_CATHEDRAL_MAX_SPEND_USD", "0.5"),
+        cathedral_receipt_dir=os.environ.get(
+            "SCREENER_CATHEDRAL_RECEIPT_DIR",
+            "/opt/ditto/screener/state/build-receipts",
+        ),
     )
+    if config.build_backend not in {"local", "cathedral"}:
+        raise ScreenerConfigError("SCREENER_BUILD_BACKEND must be local or cathedral")
+    if config.build_backend == "cathedral":
+        _validate_cathedral(config)
     if not config.signing_source_present():
         raise ScreenerConfigError(
             "no signing key: set SCREENER_MNEMONIC or "
