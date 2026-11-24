@@ -1,6 +1,6 @@
 {
   "version": "dc3",
-  "items": 317660,
+  "items": 320488,
   "sources": [
     {
       "repo": "ditto-assistant/ditto-subnet",
@@ -8,7 +8,7 @@
         "miners",
         "research/dittobench-datagen"
       ],
-      "head": "f9756f200972c5cdb9ebdf68dbed6da62fe38a22"
+      "head": "119673aedd651d3e1585b956fcdd6acfc40ebfed"
     },
     {
       "repo": "ditto-assistant/ditto-harness",
