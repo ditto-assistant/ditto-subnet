@@ -485,8 +485,9 @@ authentication result; older responses without the field mean unknown.
 committed a block for `collector_stall_after_seconds` (one hour), whether or
 not `collector_blocked_reason` says why; `collector_cursor_advanced_at` is when
 it last did. A blocked sweep never moves that time, so a stall reads the same
-on every call rather than flickering with the reason. Null means unknown, not
-current. Use the durable collector cursor and exact-agent payout receipts to
+on every call rather than flickering with the reason. It is an age signal and
+reads no chain state, so a paused chain reads as a stall too. Null means
+unknown, not current. Use the durable collector cursor and exact-agent payout receipts to
 verify source release recovery. Requires `backroom:read` and changes nothing.
 
 `get_scoring_lease_settings` / `set_scoring_lease_settings` (#1156) read and

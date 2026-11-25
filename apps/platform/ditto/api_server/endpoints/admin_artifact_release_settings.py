@@ -102,11 +102,12 @@ def _catch_up(cursor: Any) -> CatchUpStatus | None:
 
 
 def _cursor_stalled(cursor: Any, now: datetime) -> bool | None:
-    """Whether the collector cursor stopped moving while the chain did not.
+    """Whether the collector cursor has gone the stall window without moving.
 
     Only a committed block moves ``updated_at``; a blocked sweep records its
-    reason and leaves it alone. Finalization never pauses, so a cursor this old
-    is behind whatever the blocked reason says, or says nothing at all.
+    reason and leaves it alone, so the age holds whatever the reason says, or
+    when there is none. It is age alone and reads no chain state: a paused
+    finalization reads as a stall too, which is still worth an operator's look.
     """
     if cursor is None:
         return None
