@@ -2184,6 +2184,7 @@ class TestFrontierOracleRerun:
         assert view["applied"] is None
         assert view["settled_at"] is None
         assert view["hold_reason"] is None
+        assert view["base_column_scores"] == resp.json()["base_column_scores"]
 
         # A live oracle lease cannot be rerun under a validator.
         monkeypatch.setattr(lane_mod, "oracle_model_capable", lambda *_a: True)
@@ -2317,3 +2318,37 @@ class TestFrontierOracleRerun:
             prior_runs = row.frontier.get("prior_runs") or []
             assert len(prior_runs) == 1
             assert prior_runs[0]["held_reason"] == "oracle timed out"
+
+    async def test_rerun_handles_legacy_frontier_without_weight(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_audit_cases=2)
+        round_index = await lane.score_round()
+        # Simulate a legacy settled zero-credit document lacking frontier_weight.
+        async with session_maker() as session:
+            row = await get_round(session, round_index, for_update=True)
+            assert row is not None and row.frontier is not None
+            legacy = dict(row.frontier)
+            legacy.pop("frontier_weight", None)
+            legacy["state"] = STATE_SETTLED
+            legacy["applied"] = {}
+            row.frontier = legacy
+            await session.commit()
+
+        rerun = await client.post(
+            f"{_ROUNDS_URL}/{round_index}/frontier/rerun",
+            headers=_ADMIN,
+            json={
+                "reason": "reopen legacy zero-credit document missing weight",
+                "actor": "backroom:test",
+                "confirmation": frontier_rerun_confirmation(round_index),
+            },
+        )
+        assert rerun.status_code == 200, rerun.text
+        assert rerun.json()["state"] == STATE_ORACLE_PENDING
+        assert rerun.json()["frontier_weight"] == 0.0

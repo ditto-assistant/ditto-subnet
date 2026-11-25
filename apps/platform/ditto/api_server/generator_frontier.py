@@ -1266,7 +1266,11 @@ async def rerun_frontier_oracle(
         "version": int(frontier.get("version") or FRONTIER_DOCUMENT_VERSION),
         "state": STATE_ORACLE_PENDING,
         "oracle_agent_id": str(settings.frontier_oracle_agent_id),
-        "frontier_weight": float(frontier["frontier_weight"]),
+        "frontier_weight": (
+            float(frontier["frontier_weight"])
+            if frontier.get("frontier_weight") is not None
+            else 0.0
+        ),
         "audit_cases": settings.frontier_audit_cases,
         "audit_grace_hours": settings.frontier_audit_grace_hours,
         "oracle_timeout_hours": settings.frontier_oracle_timeout_hours,
@@ -1294,6 +1298,11 @@ async def rerun_frontier_oracle(
         ),
         "escalation": None,
         "prior_runs": prior_runs,
+        **(
+            {"base_columns": frontier["base_columns"]}
+            if "base_columns" in frontier
+            else {}
+        ),
     }
     row.frontier = reopened
     await session.flush()
