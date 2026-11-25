@@ -357,7 +357,11 @@ class ApiServerConfig:
             openrouter_api_key=None,
             perplexity_api_key=None,
             upstream_url="https://openrouter.ai/api/v1/chat/completions",
-            allowed_models=("qwen/qwen3-32b", "openai/gpt-oss-20b"),
+            allowed_models=(
+                "qwen/qwen3-32b",
+                "openai/gpt-oss-20b",
+                "z-ai/glm-5.3-flash",
+            ),
             provider="nebius",
             routing_mode="aggregate_throughput",
             request_budget=DEFAULT_CHAT_REQUEST_BUDGET,
@@ -626,7 +630,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
                 model.strip()
                 for model in os.environ.get(
                     "DITTO_INFERENCE_ALLOWED_MODELS",
-                    "qwen/qwen3-32b,openai/gpt-oss-20b",
+                    "qwen/qwen3-32b,openai/gpt-oss-20b,z-ai/glm-5.3-flash",
                 ).split(",")
                 if model.strip()
             ),

@@ -72,7 +72,7 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 	if ip.TimeoutSeconds != 90 || ip.MaxOutputTokens != 32768 {
 		t.Errorf("timeout/max tokens wrong: %d/%d", ip.TimeoutSeconds, ip.MaxOutputTokens)
 	}
-	if len(ip.AllowedModels) != 2 || ip.AllowedModels[0] != "qwen/qwen3-32b" || ip.AllowedModels[1] != "openai/gpt-oss-20b" {
+	if len(ip.AllowedModels) != 3 || ip.AllowedModels[0] != "qwen/qwen3-32b" || ip.AllowedModels[1] != "openai/gpt-oss-20b" || ip.AllowedModels[2] != "z-ai/glm-5.3-flash" {
 		t.Errorf("allowed models default wrong: %v", ip.AllowedModels)
 	}
 	if ip.EmbeddingModel != PinnedEmbeddingModel || ip.EmbeddingDimensions != 768 {
