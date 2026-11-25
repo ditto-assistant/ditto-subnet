@@ -1,0 +1,84 @@
+#!/bin/bash
+# First-boot only (rendered by Terraform). This host has no SSH ingress, so the
+# SSM agent is the only way in. Canonical's Ubuntu AMIs ship the agent as a
+# snap that refreshes itself from the snap store; replace it with one exact
+# release and refuse any other bytes, as the Debian hosts pin theirs. AWS
+# publishes one .deb (debian_amd64) for both Debian and Ubuntu.
+#
+# The pinned package is downloaded and verified before the snap agent is
+# removed, so a failed download leaves the host reachable for diagnosis (on
+# the AMI's stock agent) instead of unreachable. The NVIDIA driver, CUDA
+# runtime and the scorer are installed later by the Ansible role, never here.
+set -euo pipefail
+
+version='${ssm_agent_version}'
+sha256='${ssm_agent_sha256}'
+url="https://s3.${region}.amazonaws.com/amazon-ssm-${region}/$${version}/debian_amd64/amazon-ssm-agent.deb"
+
+if ! command -v curl >/dev/null; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates
+fi
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 5 -o "$workdir/amazon-ssm-agent.deb" "$url"
+echo "$sha256  $workdir/amazon-ssm-agent.deb" | sha256sum --check --strict
+
+# User data can run before snapd finishes seeding, and snap commands fail then.
+# Two agents must never register the same instance, so the snap agent is
+# stopped before the pinned .deb starts. It is disabled, not removed, so the
+# AMI's exact snap revision stays installed: if the pinned install fails, that
+# same revision is re-enabled (never a fresh store download). Refreshes are held
+# so snapd cannot swap the revision while it is parked. The snap is removed
+# only once the pinned agent is running.
+# snapd rejects changes while another transaction (e.g. an auto-refresh) runs,
+# so snap changes are retried for up to ~2 minutes.
+snap_retry() {
+  local attempt
+  for attempt in $(seq 1 20); do
+    if "$@"; then
+      return 0
+    fi
+    sleep 6
+  done
+  return 1
+}
+
+had_snap_agent=false
+if command -v snap >/dev/null; then
+  snap wait system seed.loaded
+  if snap list amazon-ssm-agent >/dev/null 2>&1; then
+    # If the snap agent cannot be parked, stop here with it still running: the
+    # host stays reachable on the stock agent, and the failed first boot is
+    # visible in the console output.
+    if ! snap_retry snap refresh --hold=forever amazon-ssm-agent \
+      || ! snap_retry snap disable amazon-ssm-agent; then
+      echo "user-data: could not park the snap SSM agent; leaving it running" >&2
+      exit 1
+    fi
+    had_snap_agent=true
+  fi
+fi
+
+# If the pinned install or start fails, clean up whatever the .deb left, bring
+# back the parked snap agent (with no SSH ingress, a host without any SSM agent
+# is unreachable) and exit non-zero: the fallback is for diagnosis only, and the
+# host is not provisioned further until a clean first boot.
+if ! dpkg -i "$workdir/amazon-ssm-agent.deb" || ! systemctl enable --now amazon-ssm-agent; then
+  systemctl disable --now amazon-ssm-agent >/dev/null 2>&1 || true
+  dpkg --purge amazon-ssm-agent >/dev/null 2>&1 || true
+  if [ "$had_snap_agent" = true ]; then
+    snap_retry snap enable amazon-ssm-agent || true
+  fi
+  exit 1
+fi
+
+# The pinned agent is running. Removing the parked (disabled) snap is cleanup
+# only: a failure leaves an inert snap behind, never a second running agent,
+# so it must not fail the boot.
+if [ "$had_snap_agent" = true ]; then
+  if ! snap_retry snap remove --purge amazon-ssm-agent; then
+    echo "user-data: pinned SSM agent is running; could not remove the disabled snap agent" >&2
+  fi
+fi

@@ -363,7 +363,10 @@ def test_wake_role_can_only_describe_and_start_tagged_screeners() -> None:
 
 
 def test_ci_roots_include_the_screener_with_its_own_state_and_tag() -> None:
-    assert 'ci_roots = ["aws-generator-scorer", "aws-screener"]' in BOOTSTRAP_MAIN
+    assert (
+        'ci_roots = ["aws-generator-scorer", "aws-screener", "aws-cpm-scorer"]'
+        in BOOTSTRAP_MAIN
+    )
     assert '"${aws_s3_bucket.state.arn}/${root}/terraform.tfstate"' in BOOTSTRAP_MAIN
     assert "ci_stack_tags = local.ci_roots" in BOOTSTRAP_MAIN
     statements = _apply_statements()
@@ -421,7 +424,10 @@ def test_plan_role_reads_screener_identity_read_only() -> None:
     end = BOOTSTRAP_MAIN.index('data "aws_iam_policy_document" "apply" {')
     plan = _statements(BOOTSTRAP_MAIN[start:end])
     read = plan["ReadHostIdentities"]
-    assert "concat(local.scorer_iam, local.screener_node_iam)" in read
+    assert (
+        "concat(local.scorer_iam, local.screener_node_iam, local.cpm_scorer_iam)"
+        in read
+    )
     actions = set(re.findall(r'"(iam:\w+)"', read))
     assert all(a.split(":")[1].startswith(("Get", "List")) for a in actions), actions
 

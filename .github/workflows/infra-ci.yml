@@ -48,6 +48,7 @@ jobs:
           - infra/terraform/stacks/aws-bootstrap
           - infra/terraform/stacks/aws-generator-scorer
           - infra/terraform/stacks/aws-screener
+          - infra/terraform/stacks/aws-cpm-scorer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -105,6 +106,10 @@ jobs:
 
       - name: Test the AWS screener root with mocked providers
         if: matrix.root == 'infra/terraform/stacks/aws-screener'
+        run: terraform -chdir=${{ matrix.root }} test
+
+      - name: Test the AWS CPM scorer root with mocked providers
+        if: matrix.root == 'infra/terraform/stacks/aws-cpm-scorer'
         run: terraform -chdir=${{ matrix.root }} test
 
   ansible:

@@ -12,7 +12,7 @@ on:
         description: Terraform state root
         required: true
         type: choice
-        options: [gcp-platform, gcp-preview, cloudflare-dittobench, gcp-collector-custody, gcp-gamma-custody, gcp-subnet-recovery, aws-generator-scorer, aws-screener]
+        options: [gcp-platform, gcp-preview, cloudflare-dittobench, gcp-collector-custody, gcp-gamma-custody, gcp-subnet-recovery, aws-generator-scorer, aws-screener, aws-cpm-scorer]
       plan_sha:
         description: Exact main commit used by the plan (required for apply)
         required: false
@@ -131,7 +131,7 @@ jobs:
                 echo 'PLAN_BUCKET=sn118-gamma-custody-tfstate' >> "$GITHUB_ENV"
               fi
               ;;
-            aws-generator-scorer|aws-screener)
+            aws-generator-scorer|aws-screener|aws-cpm-scorer)
               test -z "$TF_TARGETS"
               test "$HOTKEY_ADMIN_PHASE" = absent
               test -z "$HOTKEY_ADMIN_REVISION"
@@ -414,7 +414,7 @@ jobs:
                 echo 'PLAN_BUCKET=sn118-gamma-custody-tfstate' >> "$GITHUB_ENV"
               fi
               ;;
-            aws-generator-scorer|aws-screener)
+            aws-generator-scorer|aws-screener|aws-cpm-scorer)
               test -z "$TF_TARGETS"
               test "$HOTKEY_ADMIN_PHASE" = absent
               test -z "$HOTKEY_ADMIN_REVISION"
