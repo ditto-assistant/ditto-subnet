@@ -425,18 +425,29 @@ async def select_round_columns(
     score, then to qualified generators that have never held a column, then
     to the public default generator (each default column runs on its own
     column seed, so the default can fill several without repeating cases).
-    Challenger columns go to qualified generators that have never been
-    scored, in challenger queue order (:mod:`generator_challenger_queue`:
-    template families interleaved, the most novel probe cases first within a
-    family position, then the oldest qualification), then to the next-best
-    scored ones. While ``challenger_columns`` is above zero, every template
-    family with a generator waiting gets one challenger column (its first in
-    queue order), past ``challenger_columns`` up to :data:`MAX_COLUMNS`, so a
-    generator qualified before a round opens is measured in that round
-    unless the round is full. A generator whose
-    column in an earlier round is still in flight is skipped as a
-    challenger: that round is already measuring it, and a void round returns
-    a never-scored one to its place in the queue.
+    Challenger columns give non-counted scored generators a path back in and
+    measure qualified generators that have never been scored:
+
+    * When ``challenger_columns >= 2``, one exploration column is reserved for
+      the least-recently-scored active owner outside the counted columns (not
+      currently in flight and without a newer unmeasured build waiting), ordered
+      by each owner's latest ``round_scored_index`` ascending so non-top-N
+      generators rotate back in instead of starving behind new uploads or
+      higher-ranked non-counted peers.
+    * Remaining challenger columns go to qualified generators that have never
+      been scored, in challenger queue order (:mod:`generator_challenger_queue`:
+      template families interleaved, the most novel probe cases first within a
+      family position, then the oldest qualification). While
+      ``challenger_columns`` is above zero, every template family with a
+      generator waiting gets one challenger column (its first in queue order),
+      past ``challenger_columns`` up to :data:`MAX_COLUMNS`, so a generator
+      qualified before a round opens is measured in that round unless the round
+      is full.
+    * Any spare challenger columns after waiting never-scored generators go to
+      the least-recently-scored active owners (same stalest-owner-first order).
+    A generator whose column in an earlier round is still in flight is skipped
+    as a challenger: that round is already measuring it, and a void round
+    returns a never-scored one to its place in the queue.
     One column per owner, so a miner with several hotkeys holds one column.
     """
     qualified = await _qualified_generators(session)
@@ -478,6 +489,35 @@ async def select_round_columns(
     challengers = settings.challenger_columns
     before = len(columns)
     waiting = [entry for entry in queue if entry.in_flight_round is None]
+    in_flight_owners = {
+        row.owner_key for row in qualified if row.submission_id in in_flight
+    }
+    waiting_owners = {entry.row.owner_key for entry in waiting}
+    # Measure staleness per owner by their latest scored round so an owner with
+    # multiple hotkeys cannot jump the queue using an older hotkey.
+    owner_last_round: dict[str, int] = {}
+    for row in scored:
+        last = row.round_scored_index or 0
+        prior = owner_last_round.get(row.owner_key)
+        if prior is None or last > prior:
+            owner_last_round[row.owner_key] = last
+    exploration_pool = sorted(
+        (
+            row
+            for row in scored
+            if row.submission_id not in in_flight
+            and row.owner_key not in in_flight_owners
+            and row.owner_key not in waiting_owners
+        ),
+        key=lambda row: (
+            owner_last_round[row.owner_key],
+            -(row.round_score or 0.0),
+            row.qualified_at or row.submitted_at,
+            str(row.submission_id),
+        ),
+    )
+    if challengers >= 2:
+        take(exploration_pool, 1, counted=False)
     if challengers:
         # The next-round guarantee: every template family with a generator
         # waiting for its first measurement gets one challenger column, past
@@ -495,7 +535,7 @@ async def select_round_columns(
         counted=False,
     )
     take(
-        [row for row in scored if row.submission_id not in in_flight],
+        exploration_pool,
         challengers - (len(columns) - before),
         counted=False,
     )
