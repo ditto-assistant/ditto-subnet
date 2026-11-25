@@ -120,6 +120,21 @@ class LeaseRevokedError(ValidatorError):
     """
 
 
+class ScoreSubmissionUnresolvedError(LeaseRevokedError):
+    """A score submission outlived its hard bound, past the ticket deadline.
+
+    The outcome is unknown: Platform may have committed the score before the
+    request stalled. A hand-back would be wrong either way (``scoring_error``
+    for a ticket that may be scored, and Platform accepts nothing for this
+    ticket past its deadline), so it gets the revocation's silence. Platform
+    settles the ticket itself: it is scored, or it expired and reopens.
+
+    A subclass so any ``LeaseRevokedError`` handler stays silent on the wire.
+    Each lane catches it first, ahead of its revocation handler, so the log says
+    what happened: nothing revoked the lease.
+    """
+
+
 class SandboxOomError(DittobenchError):
     """The harness reached its own memory cap: a failed agent run.
 

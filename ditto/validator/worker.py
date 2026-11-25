@@ -102,6 +102,7 @@ from ditto.validator.errors import (
     PlatformInfrastructureError,
     PlatformRetryLaterError,
     SandboxOomError,
+    ScoreSubmissionUnresolvedError,
     ValidatorInfrastructureError,
     WeightSubmissionError,
     container_log_tail,
@@ -487,6 +488,20 @@ _ACTIVE_TELEMETRY_HARD_TIMEOUT_SECONDS = 30.0
 # older than two minutes, so a report prepared at the abort point has to land
 # well inside that window regardless.
 _FAIL_REPORT_TIMEOUT_SECONDS = 30.0
+# Bound on the best-effort work behind an accepted score: publishing the signed
+# transcript (up to the platform's 32 MiB cap). Once the score is accepted the
+# lease budget no longer bounds the slot (#2966), so this is what stops a hung
+# upload from holding it. The score already stands; a lost upload only costs
+# the public artifact.
+_POST_SCORE_TIMEOUT_SECONDS = 300.0
+# Hard bound on an in-flight score submission, past the ticket deadline. The
+# lease budget ends a reporting margin before the deadline, too early for a
+# request Platform may already have committed (#2966), and the per-request HTTP
+# timeout never fires for a peer that answers slowly but never finishes.
+# ``submit_score`` starts its last replay at least _SCORE_SUBMIT_DEADLINE_MARGIN
+# before the deadline, so this grace only absorbs host/Platform clock skew and
+# a slow final answer.
+_SCORE_SUBMIT_GRACE_SECONDS = 120.0
 # Keep a successfully reported generic failure visible through at least one
 # progress reporting interval. A new ticket supersedes it immediately.
 _FAILED_PROGRESS_MIN_VISIBLE_SECONDS = 60.0
@@ -917,6 +932,24 @@ class _SlotState:
     # Only ever *requests* a stop: the scoring path owns the unwind, so the
     # scorer-side container kill and the slot reset keep their single home.
     revoked: asyncio.Event = field(default_factory=asyncio.Event)
+    # Set when the running lease's finished score goes to ``submit_score``.
+    # From then Platform's own answer decides the lease, not the roster: a
+    # submission that committed before its response (or retry) arrived has
+    # already left the roster, and cancelling it would lose an accepted score
+    # (#2966). A lease Platform really took back is refused with a 409, which
+    # ``_submit_report`` relabels as the revocation it was.
+    submitting_score: bool = False
+    # Set once Platform accepts that score. The ticket is ``SCORED`` and leaves
+    # the roster at once, while the slot is still publishing the transcript
+    # behind it: the lease is spent, not revoked, and neither a roster answer
+    # nor the lease deadline may unwind it.
+    score_accepted: bool = False
+    # The lease-budget timeout bounding the running lease, so submission can
+    # move it and acceptance can lift it for the post-score work.
+    lease_timeout: asyncio.Timeout | None = None
+    # Set when that timeout cut the score submission itself, whose outcome is
+    # then unknown (ScoreSubmissionUnresolvedError).
+    submission_unresolved: bool = False
 
 
 _CURRENT_SLOT: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -1813,6 +1846,19 @@ class ValidatorWorker:
                             slot_scored.append(
                                 scored_agent_stat(job.miner_hotkey, report, details)
                             )
+                        except ScoreSubmissionUnresolvedError as error:
+                            # A LeaseRevokedError, so silent on the wire for the
+                            # same reasons; logged on its own because nothing
+                            # revoked the lease.
+                            logger.warning(
+                                "score submission for agent %s on %s did not "
+                                "resolve; leaving the ticket to Platform: %s",
+                                job.agent_id,
+                                slot_id,
+                                error,
+                            )
+                            self._clear_active_ticket()
+                            slot_failed += 1
                         except LeaseRevokedError as error:
                             # Nothing is reported back, and that is the point.
                             # The platform revoked this lease itself, so there
@@ -2516,6 +2562,23 @@ class ValidatorWorker:
                 continue
             if slot.revoked.is_set():
                 continue
+            if slot.score_accepted:
+                # Platform dropped the lease because it accepted this slot's
+                # score, not because it took the lease back: the transcript
+                # upload behind the accepted score is still running (#2966).
+                continue
+            if slot.submitting_score:
+                # Recorded, not acted on: the in-flight submission's answer
+                # decides, and a refusal is then reported as this revocation.
+                logger.info(
+                    "platform stopped listing the lease for agent %s on %s "
+                    "while its score was being submitted; the submission's "
+                    "answer decides",
+                    agent_id,
+                    slot_id,
+                )
+                slot.revoked.set()
+                continue
             logger.warning(
                 "platform no longer holds the lease for agent %s on %s; "
                 "cancelling the run rather than spending the rest of the lease "
@@ -2870,6 +2933,8 @@ class ValidatorWorker:
         self._retain_failed_progress_until = 0.0
         self._active_agent_id = agent_id
         self._active_ticket_deadline = ticket_deadline
+        self._slot_state().submitting_score = False
+        self._slot_state().score_accepted = False
         self._slot_state().bench_version = bench_version
         self._active_run_token = None
         self._benchmark_progress = None
@@ -2878,6 +2943,9 @@ class ValidatorWorker:
         await self._publish_benchmark_progress("preparing")
 
     def _clear_active_ticket(self) -> None:
+        # ``submitting_score``/``score_accepted`` are left for the lease's
+        # revocation watchdog, which resets them once it is gone; the next
+        # ``_begin_active_ticket`` resets them too.
         self._active_agent_id = None
         self._active_ticket_deadline = None
         self._active_run_token = None
@@ -4071,12 +4139,26 @@ class ValidatorWorker:
                     job, "scoring_error", "confirmation_run_produced_no_report"
                 )
                 return True
-            await self._platform.submit_top5_confirmation_score(
-                job.agent_id,
-                report=report,
-                ticket_deadline=job.deadline,
+            await self._submit_within_deadline_grace(
+                lambda: self._platform.submit_top5_confirmation_score(
+                    job.agent_id,
+                    report=report,
+                    ticket_deadline=job.deadline,
+                ),
+                agent_id=job.agent_id,
+                deadline=job.deadline,
             )
             self._resolve_ticket_deadline(job.agent_id, job.deadline)
+        except ScoreSubmissionUnresolvedError as exc:
+            # Silent on the wire, like the revocation below, but logged as what
+            # it is: nothing revoked the lease (see the canonical lane).
+            logger.warning(
+                "top-five confirmation submission for agent %s on %s did not "
+                "resolve; leaving the ticket to Platform: %s",
+                job.agent_id if job is not None else None,
+                job.slot_id if job is not None else _slot_id,
+                exc,
+            )
         except LeaseRevokedError as exc:
             # Same wire rule as the canonical lane: the platform took this lease
             # back itself, so nothing is handed back. ``scoring_error`` would
@@ -4275,8 +4357,12 @@ class ValidatorWorker:
                 # else (an older scorer running the whole dataset) is refused
                 # here rather than posted as an attestation.
                 raise DittobenchError("oracle run results do not match the job")
-            accepted = await self._platform.submit_generator_round_score(
-                job, run_id=run_id, results=results
+            accepted = await self._submit_within_deadline_grace(
+                lambda: self._platform.submit_generator_round_score(
+                    job, run_id=run_id, results=results
+                ),
+                agent_id=job.agent_id,
+                deadline=job.deadline,
             )
             logger.info(
                 "generator round %s agent %s submitted (%d cases, accepted=%s)",
@@ -4284,6 +4370,13 @@ class ValidatorWorker:
                 job.agent_id,
                 len(results),
                 accepted.accepted,
+            )
+        except ScoreSubmissionUnresolvedError as exc:
+            logger.warning(
+                "generator round submission for agent %s did not resolve; "
+                "leaving it to Platform: %s",
+                job.agent_id,
+                exc,
             )
         except LeaseRevokedError as exc:
             logger.warning(
@@ -5184,10 +5277,22 @@ class ValidatorWorker:
                 f"ticket for agent {job.agent_id} has less than the reporting "
                 f"margin left before {job.deadline.isoformat()}; not starting"
             )
+        slot.submission_unresolved = False
         try:
-            async with asyncio.timeout(budget):
-                return await self._run_until_revoked(operation, job=job, slot=slot)
+            async with asyncio.timeout(budget) as lease_timeout:
+                slot.lease_timeout = lease_timeout
+                try:
+                    return await self._run_until_revoked(operation, job=job, slot=slot)
+                finally:
+                    slot.lease_timeout = None
         except TimeoutError as error:
+            if slot.submission_unresolved:
+                slot.submission_unresolved = False
+                raise ScoreSubmissionUnresolvedError(
+                    f"score submission for agent {job.agent_id} did not resolve "
+                    f"within {_SCORE_SUBMIT_GRACE_SECONDS:.0f}s past its ticket "
+                    f"deadline {job.deadline.isoformat()}; Platform settles it"
+                ) from error
             raise LeaseDeadlineError(
                 f"scoring agent {job.agent_id} did not resolve within the "
                 f"{budget:.0f}s its lease could fund before "
@@ -5223,22 +5328,45 @@ class ValidatorWorker:
         revocation racing in at the very end must not turn it into silence.
         """
         running = asyncio.current_task()
+        # ``cancelling()`` just before the watchdog's own cancel, or ``None``
+        # while the watchdog has not cancelled.
+        cancels_before_watchdog: int | None = None
 
         async def watch_for_revocation() -> None:
+            nonlocal cancels_before_watchdog
             await slot.revoked.wait()
-            if running is not None:
+            # Never cancel a submission or what follows it: Platform may already
+            # have accepted it (#2966), and its answer resolves the lease. The
+            # flags stay set until this watchdog is gone (see ``finally``), so a
+            # watchdog woken late, after the run cleared its ticket, still sees
+            # them.
+            if (
+                running is not None
+                and not slot.submitting_score
+                and not slot.score_accepted
+            ):
+                cancels_before_watchdog = running.cancelling()
                 running.cancel()
 
         watchdog = asyncio.create_task(watch_for_revocation())
         try:
             return await operation()
         except asyncio.CancelledError:
-            if not slot.revoked.is_set() or lease_budget_seconds(job.deadline) <= 0:
+            # Only the watchdog's own cancel is a revocation. ``slot.revoked``
+            # alone is not proof: a revocation seen mid-submission is recorded
+            # without cancelling, so a later cancel from an enclosing scope
+            # (shutdown, an outer ``wait_for``) must keep propagating.
+            if (
+                cancels_before_watchdog is None
+                or running is None
+                or lease_budget_seconds(job.deadline) <= 0
+            ):
                 raise
             # Balance the watchdog's cancel so an enclosing ``asyncio.timeout``
-            # does not later read this as its own expiry.
-            if running is not None:
-                running.uncancel()
+            # does not later read this as its own expiry. A cancel requested
+            # since the watchdog's came from someone else, and wins.
+            if running.uncancel() > cancels_before_watchdog:
+                raise
             raise LeaseRevokedError(
                 f"platform no longer holds the lease for agent {job.agent_id} "
                 f"on {job.slot_id}; stopping the run"
@@ -5250,6 +5378,9 @@ class ValidatorWorker:
             # awaiting it would risk swallowing this task's *own* cancellation
             # and losing the lease-deadline abort it was meant to preserve.
             watchdog.cancel()
+            # Only now can no watchdog act on this lease's submission state.
+            slot.submitting_score = False
+            slot.score_accepted = False
 
     async def _score_job(self, job: JobResponse) -> ScoreReport:
         """Score one issued ticket against its platform-pinned dataset.
@@ -5560,20 +5691,66 @@ class ValidatorWorker:
         own_memory = self._take_harness_memory(report.run_id)
         if harness_memory is None:
             harness_memory = own_memory
-        await self._platform.submit_score(
-            agent_id,
-            signature=signature,
-            report=report,
-            ticket_deadline=ticket_deadline,
-            # SN-500 telemetry, unsigned and only when the scorer measured it.
-            **(
-                {"harness_memory": harness_memory}
-                if isinstance(harness_memory, HarnessMemoryTelemetry)
-                else {}
-            ),
-        )
+        lease_slot = self._running_lease_slot(agent_id, ticket_deadline)
+        if lease_slot is not None and ticket_deadline is not None:
+            lease_slot.submitting_score = True
+            self._bound_submission_past_deadline(lease_slot, ticket_deadline)
+        try:
+            await self._platform.submit_score(
+                agent_id,
+                signature=signature,
+                report=report,
+                ticket_deadline=ticket_deadline,
+                # SN-500 telemetry, unsigned and only when the scorer measured it.
+                **(
+                    {"harness_memory": harness_memory}
+                    if isinstance(harness_memory, HarnessMemoryTelemetry)
+                    else {}
+                ),
+            )
+        except asyncio.CancelledError:
+            # The submission's own bound fired mid-request: Platform may have
+            # committed the score, so this must not read as a lease deadline.
+            if (
+                lease_slot is not None
+                and lease_slot.lease_timeout is not None
+                and lease_slot.lease_timeout.expired()
+            ):
+                lease_slot.submission_unresolved = True
+            raise
+        except ValueError as error:
+            # A 200 whose body did not parse or validate. Platform may still have
+            # committed the score, so this is never relabelled as a revocation.
+            # Classify it as an infrastructure failure so the slot hands it back
+            # instead of letting the bare error escape the sweep.
+            raise PlatformInfrastructureError(
+                f"score submission returned an invalid response: {error}"
+            ) from error
+        except PlatformError as error:
+            if (
+                lease_slot is not None
+                and lease_slot.revoked.is_set()
+                and not isinstance(error, PlatformInfrastructureError)
+            ):
+                # The roster dropped this lease mid-submission and Platform then
+                # refused the score (a definitive 4xx): a revocation, which
+                # hands nothing back, as if the watchdog had cancelled the run
+                # before it submitted. A 5xx/transport failure that outlasted
+                # ``submit_score``'s retries, or an answer that did not parse,
+                # says nothing about why the roster dropped the lease -- an
+                # accepted score drops it too -- so it keeps its ordinary
+                # handling. That hand-back is safe either way: ``fail_job``
+                # finds no open ticket for a withdrawn or scored lease and
+                # charges nothing.
+                raise LeaseRevokedError(
+                    f"platform no longer holds the lease for agent {agent_id} "
+                    f"on {lease_slot.slot_id}; score refused: {error}"
+                ) from error
+            raise
         if ticket_deadline is not None:
             self._resolve_ticket_deadline(agent_id, ticket_deadline)
+        if lease_slot is not None:
+            self._mark_score_accepted(lease_slot)
         logger.info(
             "scored agent %s (miner=%s composite=%.3f seed=%d)",
             agent_id,
@@ -5581,7 +5758,25 @@ class ValidatorWorker:
             report.composite,
             report.seed,
         )
-        await self._publish_transcript(agent_id, report, transcript_sha256)
+        try:
+            async with asyncio.timeout(_POST_SCORE_TIMEOUT_SECONDS):
+                await self._publish_transcript(agent_id, report, transcript_sha256)
+        except TimeoutError:
+            logger.warning(
+                "transcript publication for agent %s (run=%s) did not finish "
+                "within %.0fs; the accepted score stands without it",
+                agent_id,
+                report.run_id,
+                _POST_SCORE_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            # Nothing after acceptance may reach a lane's hand-back handler.
+            logger.warning(
+                "transcript publication failed for agent %s (run=%s)",
+                agent_id,
+                report.run_id,
+                exc_info=True,
+            )
         if self._after_score is not None and report.bench_version is not None:
             try:
                 self._after_score(agent_id, report.bench_version)
@@ -5592,6 +5787,104 @@ class ValidatorWorker:
                     exc_info=True,
                 )
         return report
+
+    def _running_lease_slot(
+        self, agent_id: UUID, ticket_deadline: datetime | None
+    ) -> _SlotState | None:
+        """The current slot, when it is running exactly this lease.
+
+        An unleased re-score shares the slot context but must never mark
+        whatever lease the slot happens to hold.
+        """
+        slot = self._slot_state()
+        if (
+            ticket_deadline is None
+            or slot.active_agent_id != agent_id
+            or slot.ticket_deadline != ticket_deadline
+        ):
+            return None
+        return slot
+
+    @staticmethod
+    def _bound_submission_past_deadline(
+        slot: _SlotState, ticket_deadline: datetime
+    ) -> None:
+        """Bound the submission by its ticket deadline plus a grace.
+
+        The lease budget ends a reporting margin before the deadline, and even
+        a cut at the deadline itself would cancel a score Platform committed
+        just before it, or under host/Platform clock skew, and hand back
+        ``scoring_error`` for a scored ticket (#2966). The per-request HTTP
+        timeout does not bound a peer that answers slowly but never finishes,
+        so the slot keeps a hard bound ``_SCORE_SUBMIT_GRACE_SECONDS`` past the
+        deadline. If that fires mid-request the outcome is unknown and nothing
+        is handed back (:class:`ScoreSubmissionUnresolvedError`). Acceptance
+        lifts the bound entirely (:meth:`_mark_score_accepted`).
+        """
+        lease_timeout = slot.lease_timeout
+        if lease_timeout is None or lease_timeout.expired():
+            return
+        current = lease_timeout.when()
+        if current is None:
+            return
+        deadline = (
+            ticket_deadline
+            if ticket_deadline.tzinfo is not None
+            else ticket_deadline.replace(tzinfo=UTC)
+        )
+        remaining = (deadline - datetime.now(UTC)).total_seconds()
+        at = asyncio.get_running_loop().time() + remaining + _SCORE_SUBMIT_GRACE_SECONDS
+        if at > current:
+            lease_timeout.reschedule(at)
+
+    @staticmethod
+    async def _submit_within_deadline_grace[T](
+        submit: Callable[[], Awaitable[T]],
+        *,
+        agent_id: UUID,
+        deadline: datetime,
+    ) -> T:
+        """Bound a submission made after its lease work, like the canonical one.
+
+        The top-five confirmation and generator-round lanes submit after
+        ``_run_within_lease`` returns, so neither the lease timeout nor the
+        per-request HTTP timeout bounds a peer that answers slowly but never
+        finishes. The bound matches :meth:`_bound_submission_past_deadline`: the
+        ticket deadline plus ``_SCORE_SUBMIT_GRACE_SECONDS``. Cut there, the
+        outcome is unknown, so it raises
+        :class:`ScoreSubmissionUnresolvedError` and nothing is handed back.
+        """
+        aware = (
+            deadline if deadline.tzinfo is not None else deadline.replace(tzinfo=UTC)
+        )
+        remaining = (aware - datetime.now(UTC)).total_seconds()
+        bound = asyncio.timeout(max(remaining + _SCORE_SUBMIT_GRACE_SECONDS, 0.0))
+        try:
+            async with bound:
+                return await submit()
+        except TimeoutError as error:
+            # Only this bound's own expiry is an unresolved submission.
+            if not bound.expired():
+                raise
+            raise ScoreSubmissionUnresolvedError(
+                f"score submission for agent {agent_id} did not resolve within "
+                f"{_SCORE_SUBMIT_GRACE_SECONDS:.0f}s past its ticket deadline "
+                f"{aware.isoformat()}; Platform settles it"
+            ) from error
+
+    @staticmethod
+    def _mark_score_accepted(slot: _SlotState) -> None:
+        """Mark the slot's running lease as spent by its own accepted score.
+
+        Platform has made the ticket ``SCORED`` and stops listing it in the
+        roster at once, so from here a heartbeat would read as a revocation and
+        the lease budget would turn a slow transcript upload into a
+        ``scoring_error`` hand-back for a ticket that is already scored (#2966).
+        """
+        slot.score_accepted = True
+        lease_timeout = slot.lease_timeout
+        if lease_timeout is not None and not lease_timeout.expired():
+            lease_timeout.reschedule(None)
 
     async def _publish_transcript(
         self, agent_id: UUID, report: ScoreReport, transcript_sha256: str | None
@@ -5705,6 +5998,10 @@ class ValidatorWorker:
                 report,
                 ticket_deadline=ticket_deadline,
             )
+        except LeaseRevokedError:
+            # A refused submission on a lease the roster already dropped: the
+            # same silence as a watchdog revocation, with no failure progress.
+            raise
         except Exception:
             previous = self._benchmark_progress
             completed = previous.completed if previous is not None else None
