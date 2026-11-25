@@ -79,3 +79,11 @@ catalog of 1,454 tools (100k–200k tokens).
 Split by seed, never by case. Cases from one seed share a haystack, so a
 case-level split leaks evidence. The public generator is unlimited, so hold out
 whole seeds for validation and test.
+
+## Related
+
+- [competition-v1.md](competition-v1.md): the v1 build contract.
+- [bittensor-compute.md](bittensor-compute.md): proposal to run the scorer on
+  Bittensor GPU subnets (Lium first) beside the AWS lane.
+- [open-questions.md](open-questions.md): open questions for ML review
+  (train-on-test within a season, noise, copying, metric, determinism).

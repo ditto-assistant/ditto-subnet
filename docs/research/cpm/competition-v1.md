@@ -368,7 +368,9 @@ Platform's models in `apps/platform/ditto/api_models/model_context.py`.
     run offline.
 - It shells out to a pinned `cmd/generate` binary built from
   `research/dittobench-datagen`, and imports the exporter's label logic.
-- It runs on an AWS GPU host (a g6e.xlarge, L40S).
+- It runs on an AWS GPU host (a g6e.xlarge, L40S). A Bittensor-compute lane
+  (Lium pods, untrusted quorum) is proposed in
+  [bittensor-compute.md](bittensor-compute.md).
 
 ### 6.2 Miner CLI
 
