@@ -28,6 +28,9 @@ from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticReport
 from ditto.api_models.source_disclosure import SourceDisclosure, release_confirmation
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.source_emission_collector import (
+    SOURCE_EMISSION_CURSOR_STALL_SECONDS,
+)
 from ditto.db.models import (
     Agent,
     AgentKingship,
@@ -96,6 +99,20 @@ def _catch_up(cursor: Any) -> CatchUpStatus | None:
     # labelled with the planner running now.
     planner = "reveal" if _REVEAL_PLAN_MODE == "primary" else "event"
     return CatchUpStatus.model_validate({"planner": planner, **summary})
+
+
+def _cursor_stalled(cursor: Any, now: datetime) -> bool | None:
+    """Whether the collector cursor has gone the stall window without moving.
+
+    Only a committed block moves ``updated_at``; a blocked sweep records its
+    reason and leaves it alone, so the age holds whatever the reason says, or
+    when there is none. It is age alone and reads no chain state: a paused
+    finalization reads as a stall too, which is still worth an operator's look.
+    """
+    if cursor is None:
+        return None
+    age = (now - cursor.updated_at).total_seconds()
+    return age > SOURCE_EMISSION_CURSOR_STALL_SECONDS
 
 
 @router.get("", response_model=AdminArtifactReleaseSettingsResponse)
@@ -204,6 +221,7 @@ async def get_settings(
             .limit(65)
         )
     )
+    now = datetime.now(UTC)
     return AdminArtifactReleaseSettingsResponse(
         current=_revision(rows[0]) if rows else _default_revision(),
         history=[_revision(row) for row in rows],
@@ -220,6 +238,9 @@ async def get_settings(
             collector_cursor_hash=cursor.block_hash if cursor else None,
             collector_runtime_code_hash=cursor.runtime_code_hash if cursor else None,
             collector_blocked_reason=cursor.last_blocked_reason if cursor else None,
+            collector_cursor_advanced_at=cursor.updated_at if cursor else None,
+            collector_stalled=_cursor_stalled(cursor, now),
+            collector_stall_after_seconds=SOURCE_EMISSION_CURSOR_STALL_SECONDS,
             reveal_plan_shadow=_reveal_plan_shadow(cursor),
             catch_up=_catch_up(cursor),
             last_payout_block=last_payout.block if last_payout else None,
@@ -233,7 +254,7 @@ async def get_settings(
                 ReceiptDiagnosticRow(
                     report=ReceiptDiagnosticReport.model_validate(row.report),
                     received_at=row.received_at,
-                    stale=(datetime.now(UTC) - row.received_at).total_seconds() > 300,
+                    stale=(now - row.received_at).total_seconds() > 300,
                 )
                 for row in diagnostic_rows[:64]
             ],

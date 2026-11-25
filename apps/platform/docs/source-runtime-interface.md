@@ -47,6 +47,12 @@ constant, which is not pinned: they check its value against each range.
 
 ## When the collector stops
 
+`release_gate.collector_stalled` turns true once the cursor has gone an hour
+(`SOURCE_EMISSION_CURSOR_STALL_SECONDS`) without committing a block; the slowest
+sweep that still makes progress stays well inside that. It keys on the advance
+time alone, so it also catches a collector that stopped without recording a
+reason. Read it before trusting an `embargoed` row with no `available_at`.
+
 `collector_blocked_reason` on Backroom `get_source_release_policy` names the
 runtime and the consumed entries that moved, for example:
 

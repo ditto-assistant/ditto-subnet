@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -412,6 +413,9 @@ async def test_release_gate_reports_real_receipts_and_bounded_pending_rows(
     assert gate["automatic_confirmation_enabled"] is True
     assert gate["collector_cursor_block"] is None
     assert gate["collector_runtime_code_hash"] is None
+    # No cursor yet: whether it is moving is unknown, not "current".
+    assert gate["collector_cursor_advanced_at"] is None
+    assert gate["collector_stalled"] is None
     assert gate["pending_receipt_count"] == 0
     assert gate["unresolved_payout_count"] == 0
     assert gate["confirmed_kings"] == 1
@@ -530,3 +534,99 @@ async def test_release_gate_reports_how_catch_up_ranges_replayed(
         "/api/v1/admin/artifact-release-settings", headers=_HEADERS
     )
     assert response.json()["release_gate"]["catch_up"]["planner"] == "event"
+
+
+async def test_release_gate_flags_a_cursor_that_stopped_moving(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """#2704: a stalled collector must read differently from a current one."""
+    from sqlalchemy import update
+
+    from ditto.api_server.source_emission_collector import (
+        SOURCE_EMISSION_CURSOR_STALL_SECONDS,
+        SourceEmissionCollector,
+    )
+    from ditto.db.models import SourceEmissionCollectorCursor
+    from ditto.db.queries.source_emission_collector import (
+        advance_source_emission_cursor,
+    )
+
+    _install(app, session_maker)
+    netuid = app.state.config.chain.netuid
+    advanced_at = datetime.now(UTC) - timedelta(minutes=5)
+    async with session_maker() as session, session.begin():
+        assert await advance_source_emission_cursor(
+            session,
+            netuid=netuid,
+            block=9200000,
+            block_hash="0x" + "ab" * 32,
+            expected_block=None,
+            expected_block_hash=None,
+            now=advanced_at,
+        )
+
+    async def gate() -> dict[str, Any]:
+        response = await client.get(
+            "/api/v1/admin/artifact-release-settings", headers=_HEADERS
+        )
+        assert response.status_code == 200
+        return response.json()["release_gate"]
+
+    current = await gate()
+    assert current["collector_stalled"] is False
+    assert current["collector_stall_after_seconds"] == (
+        SOURCE_EMISSION_CURSOR_STALL_SECONDS
+    )
+    assert datetime.fromisoformat(current["collector_cursor_advanced_at"]) == (
+        advanced_at
+    )
+
+    # A blocked sweep records why and leaves the advance time alone, which is
+    # what lets the age measure the stall.
+    collector = SourceEmissionCollector(
+        app_state=app.state, session_maker=session_maker, interval_seconds=0.0
+    )
+
+    async def blocked() -> None:
+        collector._stop.set()
+        raise RuntimeError("source runtime fingerprint is not audited")
+
+    collector.sweep = blocked  # type: ignore[method-assign]
+    await collector._run()
+    reported = await gate()
+    assert reported["collector_blocked_reason"] == (
+        "RuntimeError: source runtime fingerprint is not audited"
+    )
+    assert (
+        reported["collector_cursor_advanced_at"]
+        == (current["collector_cursor_advanced_at"])
+    )
+    # A transient failure inside the window is not a stall.
+    assert reported["collector_stalled"] is False
+
+    # The same reason an hour on is.
+    async with session_maker() as session, session.begin():
+        await session.execute(
+            update(SourceEmissionCollectorCursor)
+            .where(SourceEmissionCollectorCursor.netuid == netuid)
+            .values(
+                updated_at=datetime.now(UTC)
+                - timedelta(seconds=SOURCE_EMISSION_CURSOR_STALL_SECONDS + 60)
+            )
+        )
+    stalled = await gate()
+    assert stalled["collector_stalled"] is True
+    assert stalled["collector_blocked_reason"] is not None
+
+    # So is a cursor that stopped without saying why.
+    async with session_maker() as session, session.begin():
+        await session.execute(
+            update(SourceEmissionCollectorCursor)
+            .where(SourceEmissionCollectorCursor.netuid == netuid)
+            .values(last_blocked_reason=None)
+        )
+    silent = await gate()
+    assert silent["collector_blocked_reason"] is None
+    assert silent["collector_stalled"] is True

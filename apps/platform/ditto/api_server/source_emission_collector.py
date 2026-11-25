@@ -72,6 +72,12 @@ logger = logging.getLogger(__name__)
 _SWEEP_BATCH_BLOCKS = 16
 _SWEEP_CATCHUP_BATCH_BLOCKS = 128
 _SWEEP_CATCHUP_MIN_BACKLOG = 1000
+# Release gate reports the cursor as stalled once it has not moved for this
+# long (#2704). The slowest sweep that still makes progress tries three
+# providers, each with the 600 s catch-up budget, so a healthy collector can go
+# about half an hour without committing a block; an hour cannot be that. The
+# chain finalizes ~300 blocks in that time, so the cursor is falling behind.
+SOURCE_EMISSION_CURSOR_STALL_SECONDS = 3600
 # Each reopened payout re-reads a full historical receipt. Bound that work so a
 # rescan cannot consume the sweep deadline that also covers the block scan.
 _RECEIPT_REFETCH_LIMIT = 5

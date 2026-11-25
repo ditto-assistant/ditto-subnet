@@ -46197,12 +46197,18 @@ export interface components {
             catch_up?: components["schemas"]["CatchUpStatus"] | null;
             /** Collector Blocked Reason */
             collector_blocked_reason?: string | null;
+            /** Collector Cursor Advanced At */
+            collector_cursor_advanced_at?: string | null;
             /** Collector Cursor Block */
             collector_cursor_block?: number | null;
             /** Collector Cursor Hash */
             collector_cursor_hash?: string | null;
             /** Collector Runtime Code Hash */
             collector_runtime_code_hash?: string | null;
+            /** Collector Stall After Seconds */
+            collector_stall_after_seconds?: number | null;
+            /** Collector Stalled */
+            collector_stalled?: boolean | null;
             /** Confirmed Kings */
             confirmed_kings: number;
             /**

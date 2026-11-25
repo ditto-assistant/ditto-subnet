@@ -480,9 +480,15 @@ gate diagnostics. `release_gate.archive_provider`, when present, reports the
 running Platform's configured archive host, authentication mode (`none`,
 `query`, or `path`), and credential presence. It never returns the
 provider URL or key. This is configuration evidence, not a provider health or
-authentication result; older responses without the field mean unknown. Use
-the durable collector cursor and exact-agent payout receipts to verify source
-release recovery. Requires `backroom:read` and changes nothing.
+authentication result; older responses without the field mean unknown.
+`release_gate.collector_stalled` is true once the collector cursor has not
+committed a block for `collector_stall_after_seconds` (one hour), whether or
+not `collector_blocked_reason` says why; `collector_cursor_advanced_at` is when
+it last did. A blocked sweep never moves that time, so a stall reads the same
+on every call rather than flickering with the reason. It is an age signal and
+reads no chain state, so a paused chain reads as a stall too. Null means
+unknown, not current. Use the durable collector cursor and exact-agent payout receipts to
+verify source release recovery. Requires `backroom:read` and changes nothing.
 
 `get_scoring_lease_settings` / `set_scoring_lease_settings` (#1156) read and
 revise the deadline stamped on new canonical and score-retest replacement

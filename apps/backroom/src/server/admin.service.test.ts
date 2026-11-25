@@ -1712,6 +1712,35 @@ describe('artifact release administration', () => {
     expect((await fetchArtifactReleaseControl()).release_gate).toBeUndefined()
   })
 
+  it('carries the collector stall signal and never invents one for an older Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const gate = {
+      version: 'completed-winner-emission-v2', automatic_confirmation_enabled: true,
+      collector_cursor_block: 9200000,
+      collector_blocked_reason: null,
+      pending_kings: 3, confirmed_kings: 1, rows: [], rows_limit: 25, rows_has_more: false,
+    }
+    const stalled = {
+      ...gate,
+      collector_cursor_advanced_at: '2026-11-24T10:00:00Z',
+      collector_stalled: true,
+      collector_stall_after_seconds: 3600,
+    }
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ ...control, release_gate: stalled }))
+      .mockResolvedValueOnce(Response.json({ ...control, release_gate: gate })))
+    // A stall with no blocked reason is still a stall.
+    expect((await fetchArtifactReleaseControl()).release_gate).toMatchObject({
+      collector_stalled: true,
+      collector_blocked_reason: null,
+      collector_cursor_advanced_at: '2026-11-24T10:00:00Z',
+    })
+    // Absent means unknown: it must not read as a current collector.
+    const older = (await fetchArtifactReleaseControl()).release_gate
+    expect(older).toBeDefined()
+    expect(older?.collector_stalled).toBeUndefined()
+  })
+
   it('writes CAS, reason, confirmation, and operator attribution before refreshing', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi
