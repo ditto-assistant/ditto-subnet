@@ -1230,16 +1230,33 @@ async def advance_frontier_rounds(
         ):
             frontier = dict(row.frontier or {})
             if frontier.get("held_reason") != held:
-                if frontier.get("state") == STATE_ORACLE_PENDING:
-                    from ditto.api_server.generator_rounds import expire_round_tickets
+                try:
+                    async with session.begin_nested():
+                        if frontier.get("state") == STATE_ORACLE_PENDING:
+                            from ditto.api_server.generator_rounds import (
+                                expire_round_tickets,
+                            )
 
-                    await expire_round_tickets(
-                        session, row, now=now, detail=f"frontier held: {held}"[:500]
+                            await expire_round_tickets(
+                                session,
+                                row,
+                                now=now,
+                                detail=f"frontier held: {held}"[:500],
+                            )
+                            await close_stale_oracle_attempts(session, row, now=now)
+                        frontier["held_reason"] = held
+                        frontier["held_at"] = _iso(now)
+                        row.frontier = frontier
+                        await session.flush()
+                except Exception as exc:  # noqa: BLE001 - isolate one round
+                    logger.exception(
+                        "frontier hold failed for round %s", row.round_index
                     )
-                    await close_stale_oracle_attempts(session, row, now=now)
-                frontier["held_reason"] = held
-                frontier["held_at"] = _iso(now)
-                row.frontier = frontier
+                    notes.append(
+                        f"round {row.round_index} frontier hold failed: "
+                        f"{type(exc).__name__}: {exc}"[:300]
+                    )
+                    continue
                 logger.warning(
                     "frontier round %s held for operator action: %s",
                     row.round_index,

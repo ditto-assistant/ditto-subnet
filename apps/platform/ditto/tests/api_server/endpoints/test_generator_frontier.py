@@ -1011,6 +1011,37 @@ class TestFrontierLane:
                     now=datetime.now(UTC),
                 )
 
+    async def test_hold_write_failure_is_isolated_to_its_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A database error while holding one round rolls back only that
+        savepoint and records a per-round note instead of aborting the sweep."""
+        import ditto.api_server.generator_rounds as rounds_mod
+
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_oracle_timeout_hours=1)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        deadline = datetime.fromisoformat(job["deadline"])
+
+        async def boom(*_args: Any, **_kwargs: Any) -> int:
+            raise RuntimeError("transient db error")
+
+        monkeypatch.setattr(rounds_mod, "expire_round_tickets", boom)
+        notes = await lane.tick(now=deadline + timedelta(hours=2))
+        assert (
+            notes
+            and "frontier hold failed: RuntimeError: transient db error" in notes[0]
+        )
+        # Savepoint rolled back cleanly: round stays open and unstamped for retry.
+        frontier = await lane.frontier(round_index)
+        assert frontier["state"] == STATE_ORACLE_PENDING
+        assert frontier["hold_reason"] is None
+
     async def test_no_oracle_job_without_the_scorer_mode(
         self,
         app: FastAPI,
