@@ -2352,3 +2352,25 @@ class TestFrontierOracleRerun:
         assert rerun.status_code == 200, rerun.text
         assert rerun.json()["state"] == STATE_ORACLE_PENDING
         assert rerun.json()["frontier_weight"] == 0.0
+
+
+def test_oracle_inference_config_scales_token_budget_for_large_candidate_rounds(
+    app: FastAPI,
+) -> None:
+    from ditto.api_models.inference_concurrency_settings import MAX_CHAT_TOKEN_BUDGET
+    from ditto.api_server.endpoints.validator_generator_round import (
+        ORACLE_TOKENS_PER_CANDIDATE,
+        _oracle_inference_config,
+    )
+
+    base = app.state.config.inference_proxy
+    # Small candidate counts keep the base token_budget unchanged.
+    assert _oracle_inference_config(base, 0) is base
+    assert _oracle_inference_config(base, 10) is base
+    # Large rounds (e.g. 191 candidates) scale linearly up to MAX_CHAT_TOKEN_BUDGET.
+    large = _oracle_inference_config(base, 191)
+    assert large.token_budget == 191 * ORACLE_TOKENS_PER_CANDIDATE
+    assert large.token_budget <= MAX_CHAT_TOKEN_BUDGET
+    # Clamped at MAX_CHAT_TOKEN_BUDGET for extreme candidate counts.
+    huge = _oracle_inference_config(base, 1000)
+    assert huge.token_budget == MAX_CHAT_TOKEN_BUDGET
