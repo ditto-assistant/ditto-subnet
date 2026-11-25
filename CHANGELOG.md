@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v0.506.0 (2026-11-25)
+
+### Bug Fixes
+
+- **backroom**: Reconcile a quarantine batch whose answer was lost
+  ([#3628](https://github.com/ditto-assistant/ditto-subnet/pull/3628),
+  [`6ec9c8e`](https://github.com/ditto-assistant/ditto-subnet/commit/6ec9c8ee6014560cee0cec2e663234bd2fd55917))
+
+- **backroom**: Stop settings writes filling omitted fields with read defaults
+  ([#3627](https://github.com/ditto-assistant/ditto-subnet/pull/3627),
+  [`6845068`](https://github.com/ditto-assistant/ditto-subnet/commit/6845068a6ccb178051452cd4e319a826c269187f))
+
+- **platform,backroom**: Hold zero-credit and skipped-audit frontier rounds instead of auto-settling
+  ([#3631](https://github.com/ditto-assistant/ditto-subnet/pull/3631),
+  [`bceef4e`](https://github.com/ditto-assistant/ditto-subnet/commit/bceef4ead13da23d6b594339dee624973a1f387f))
+
+### Features
+
+- **platform**: Reserve stalest-owner exploration slot in generator round selection
+  ([#3632](https://github.com/ditto-assistant/ditto-subnet/pull/3632),
+  [`4737696`](https://github.com/ditto-assistant/ditto-subnet/commit/47376965345bb41ddbed7307142f949d362e84ce))
+
+- **platform,backroom**: Flag a stalled source-emission collector cursor
+  ([#3629](https://github.com/ditto-assistant/ditto-subnet/pull/3629),
+  [`86a3031`](https://github.com/ditto-assistant/ditto-subnet/commit/86a3031553b317a4b89bdccae889a4855aa8afb7))
+
+
 ## v0.505.1 (2026-11-24)
 
 ### Bug Fixes
