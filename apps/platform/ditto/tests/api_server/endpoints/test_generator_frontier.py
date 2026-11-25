@@ -34,6 +34,7 @@ from ditto.api_models.generator_round_validator import (
 )
 from ditto.api_models.generator_rounds import (
     frontier_audit_confirmation,
+    frontier_rerun_confirmation,
     frontier_settle_confirmation,
 )
 from ditto.api_models.private_dataset import PrivateDatasetRequest
@@ -2118,3 +2119,201 @@ def test_an_escalation_agent_seated_on_the_panel_is_never_leased() -> None:
     assert frontier["escalation"]["skipped_columns"] == {
         "c1": "escalation agent sat on the round panel"
     }
+
+
+class TestFrontierOracleRerun:
+    """Operator re-run of held or zero-credit settled frontier lanes."""
+
+    async def test_rerun_reopens_zero_credit_settled_round_and_audits(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_audit_cases=2)
+        round_index = await lane.score_round()
+        # Simulate a legacy zero-credit settled round (pre-#3631 exhaustion).
+        resp = await client.post(
+            f"{_ROUNDS_URL}/{round_index}/frontier/settle",
+            headers=_ADMIN,
+            json={
+                "reason": "legacy oracle attempts exhausted before hold guard",
+                "actor": "backroom:test",
+                "confirmation": frontier_settle_confirmation(round_index),
+            },
+        )
+        assert resp.status_code == 200 and resp.json()["applied"] == {}
+
+        # Switch live settings to GLM-5.3-Flash before triggering the rerun.
+        await _apply_settings(
+            client,
+            mode="enforce",
+            validator_rounds_enabled=True,
+            frontier_oracle_agent_id=str(lane.oracle),
+            frontier_oracle_model=FRONTIER_ORACLE_MODEL,
+            frontier_audit_cases=2,
+        )
+        # Wrong confirmation is refused.
+        bad = await client.post(
+            f"{_ROUNDS_URL}/{round_index}/frontier/rerun",
+            headers=_ADMIN,
+            json={
+                "reason": "rerun zero-credit round on glm-5.3-flash",
+                "actor": "backroom:test",
+                "confirmation": frontier_settle_confirmation(round_index),
+            },
+        )
+        assert bad.status_code == 409
+
+        rerun = await client.post(
+            f"{_ROUNDS_URL}/{round_index}/frontier/rerun",
+            headers=_ADMIN,
+            json={
+                "reason": "rerun zero-credit round on glm-5.3-flash",
+                "actor": "backroom:test",
+                "confirmation": frontier_rerun_confirmation(round_index),
+            },
+        )
+        assert rerun.status_code == 200, rerun.text
+        view = rerun.json()
+        assert view["state"] == STATE_ORACLE_PENDING
+        assert view["oracle_model"] == FRONTIER_ORACLE_MODEL
+        assert view["oracle_attempts"] == 0
+        assert view["applied"] is None
+        assert view["settled_at"] is None
+        assert view["hold_reason"] is None
+
+        # A live oracle lease cannot be rerun under a validator.
+        monkeypatch.setattr(lane_mod, "oracle_model_capable", lambda *_a: True)
+        job = await lane.lease_oracle()
+        while_running = await client.post(
+            f"{_ROUNDS_URL}/{round_index}/frontier/rerun",
+            headers=_ADMIN,
+            json={
+                "reason": "attempt rerun while validator lease is live",
+                "actor": "backroom:test",
+                "confirmation": frontier_rerun_confirmation(round_index),
+            },
+        )
+        assert while_running.status_code == 409
+
+        # The oracle reports passes and enters audit_pending (never direct settle).
+        await lane.report_oracle(job, set(lane.candidates))
+        after_report = await lane.frontier(round_index)
+        assert after_report["state"] == STATE_AUDIT_PENDING
+        assert len(after_report["audits"]) == 1
+        assert after_report["audits"][0]["status"] == "pending"
+
+        # A healthy audit_pending round with attested cases is refused for rerun.
+        healthy_audit = await client.post(
+            f"{_ROUNDS_URL}/{round_index}/frontier/rerun",
+            headers=_ADMIN,
+            json={
+                "reason": "must not clobber healthy audit_pending round",
+                "actor": "backroom:test",
+                "confirmation": frontier_rerun_confirmation(round_index),
+            },
+        )
+        assert healthy_audit.status_code == 409
+
+        # Ruling the audit valid settles the round with nonzero frontier credit.
+        rule = await client.post(
+            f"{_ROUNDS_URL}/{round_index}/frontier/audits/{lane.miner_column}",
+            headers=_ADMIN,
+            json={
+                "valid": True,
+                "invalid_case_ids": [],
+                "reason": "sampled cases verified valid memory questions",
+                "actor": "backroom:test",
+                "confirmation": frontier_audit_confirmation(
+                    round_index, lane.miner_column, True
+                ),
+            },
+        )
+        assert rule.status_code == 200, rule.text
+        await lane.tick()
+        settled = await lane.frontier(round_index)
+        assert settled["state"] == STATE_SETTLED
+        assert settled["applied"] == {lane.miner_column: lane.candidates}
+
+        # Once settled with nonzero frontier credit, rerun is refused.
+        nonzero_settled = await client.post(
+            f"{_ROUNDS_URL}/{round_index}/frontier/rerun",
+            headers=_ADMIN,
+            json={
+                "reason": "must not rerun nonzero settled round",
+                "actor": "backroom:test",
+                "confirmation": frontier_rerun_confirmation(round_index),
+            },
+        )
+        assert nonzero_settled.status_code == 409
+
+    async def test_rerun_reopens_held_round_and_locks_tickets_before_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import ditto.api_server.endpoints.admin_generator_rounds as admin_mod
+
+        lane = _Lane(client, session_maker)
+        await lane.setup(
+            app, monkeypatch, frontier_oracle_timeout_hours=1, frontier_audit_cases=2
+        )
+        round_index = await lane.score_round()
+        # Active oracle_pending round (not held) is refused.
+        not_held = await client.post(
+            f"{_ROUNDS_URL}/{round_index}/frontier/rerun",
+            headers=_ADMIN,
+            json={
+                "reason": "active oracle_pending round is not held",
+                "actor": "backroom:test",
+                "confirmation": frontier_rerun_confirmation(round_index),
+            },
+        )
+        assert not_held.status_code == 409
+
+        # Let the oracle time out so the sweep holds the round.
+        later = datetime.now(UTC) + timedelta(hours=2)
+        notes = await lane.tick(now=later)
+        assert notes and "frontier held (oracle timed out)" in notes[0]
+        assert (await lane.frontier(round_index))["hold_reason"] == "oracle timed out"
+
+        order: list[str] = []
+        real_lock, real_get = admin_mod.lock_oracle_tickets, admin_mod.get_round
+
+        async def lock(session: AsyncSession, index: int) -> Any:
+            tickets = await real_lock(session, index)
+            order.append(f"tickets:{len(tickets)}")
+            return tickets
+
+        async def get(session: AsyncSession, index: int, **kwargs: Any) -> Any:
+            if kwargs.get("for_update"):
+                order.append("round")
+            return await real_get(session, index, **kwargs)
+
+        monkeypatch.setattr(admin_mod, "lock_oracle_tickets", lock)
+        monkeypatch.setattr(admin_mod, "get_round", get)
+
+        rerun = await client.post(
+            f"{_ROUNDS_URL}/{round_index}/frontier/rerun",
+            headers=_ADMIN,
+            json={
+                "reason": "reopen timed-out held round after oracle fix",
+                "actor": "backroom:test",
+                "confirmation": frontier_rerun_confirmation(round_index),
+            },
+        )
+        assert rerun.status_code == 200, rerun.text
+        assert order[:2] == ["tickets:0", "round"]
+        assert rerun.json()["state"] == STATE_ORACLE_PENDING
+        assert rerun.json()["hold_reason"] is None
+        async with session_maker() as session:
+            row = await get_round(session, round_index)
+            assert row is not None and row.frontier is not None
+            prior_runs = row.frontier.get("prior_runs") or []
+            assert len(prior_runs) == 1
+            assert prior_runs[0]["held_reason"] == "oracle timed out"

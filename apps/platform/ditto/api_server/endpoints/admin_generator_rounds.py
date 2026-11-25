@@ -48,6 +48,7 @@ from ditto.api_models.generator_rounds import (
     GeneratorFrontierAuditDetail,
     GeneratorFrontierAuditListResponse,
     GeneratorFrontierAuditRuling,
+    GeneratorFrontierRerunRequest,
     GeneratorFrontierSettleRequest,
     GeneratorFrontierView,
     GeneratorPrescreenView,
@@ -59,6 +60,7 @@ from ditto.api_models.generator_rounds import (
     GeneratorRoundSkippedAgent,
     GeneratorRoundSkipView,
     frontier_audit_confirmation,
+    frontier_rerun_confirmation,
     frontier_settle_confirmation,
     void_round_confirmation,
 )
@@ -82,6 +84,7 @@ from ditto.api_server.generator_frontier import (
     frontier_view,
     lock_oracle_tickets,
     pending_audits,
+    rerun_frontier_oracle,
     rule_audit,
     settle_frontier,
 )
@@ -669,6 +672,60 @@ async def admin_settle_frontier(
         actor=actor,
         reason=reason,
         detail={"applied": applied},
+    )
+    await session.commit()
+    return await admin_round_frontier(round_index, _admin, session)
+
+
+@router.post(
+    "/rounds/{round_index}/frontier/rerun", response_model=GeneratorFrontierView
+)
+async def admin_rerun_frontier(
+    round_index: int,
+    payload: GeneratorFrontierRerunRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> GeneratorFrontierView:
+    """Re-run a held or zero-credit settled round's frontier oracle under the
+    current generator-competition oracle settings, routing its results through
+    the normal oracle -> audit -> settle lifecycle."""
+    expected = frontier_rerun_confirmation(round_index)
+    if payload.confirmation != expected:
+        raise HTTPException(
+            status_code=409, detail=f"confirmation must be exactly {expected}"
+        )
+    reason, actor = _check_reason(payload.reason, payload.actor)
+    # Lock oracle tickets before the round, matching result submission order.
+    await lock_oracle_tickets(session, round_index)
+    row = await get_round(session, round_index, for_update=True)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown round")
+    if row.status != "scored" or not row.frontier:
+        raise HTTPException(status_code=404, detail="round has no frontier lane")
+    settings = (await load_settings(session)).settings
+    try:
+        prior = await rerun_frontier_oracle(
+            session,
+            row,
+            settings=settings,
+            reason=reason,
+            actor=actor,
+            now=datetime.now(UTC),
+        )
+    except FrontierRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    record_operator_action(
+        session,
+        action="frontier_rerun",
+        subject=f"round:{round_index}",
+        actor=actor,
+        reason=reason,
+        detail={
+            "prior": prior,
+            "oracle_model": (row.frontier or {}).get("oracle_model"),
+            "oracle_agent_id": (row.frontier or {}).get("oracle_agent_id"),
+            "audit_cases": (row.frontier or {}).get("audit_cases"),
+        },
     )
     await session.commit()
     return await admin_round_frontier(round_index, _admin, session)

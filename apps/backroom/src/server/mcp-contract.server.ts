@@ -72,6 +72,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'release_generator_round_lease',
   'rule_generator_frontier_audit',
   'settle_generator_round_frontier',
+  'rerun_generator_round_frontier',
   'register_default_generator',
   'create_default_generator_upload',
   'set_model_context_settings',

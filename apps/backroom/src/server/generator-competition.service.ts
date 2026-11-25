@@ -45,6 +45,7 @@ import {
   generatorFrontierAuditListSchema,
   generatorFrontierSchema,
   listGeneratorFrontierAuditsInputSchema,
+  rerunGeneratorFrontierInputSchema,
   ruleGeneratorFrontierAuditInputSchema,
   settleGeneratorFrontierInputSchema,
   GENERATOR_SETTINGS_SCOPE,
@@ -477,7 +478,7 @@ export async function registerDefaultGenerator(rawInput: unknown, actor: string)
 
 // --- frontier cases ----------------------------------------------------------
 
-type FrontierWriteKind = 'rule' | 'settle'
+type FrontierWriteKind = 'rule' | 'settle' | 'rerun'
 
 // Keep Platform's refusal text and name what was not applied. A 409 is a
 // state conflict (already ruled or settled, no open audit, a case outside the
@@ -488,7 +489,11 @@ export function frontierRefusal(kind: FrontierWriteKind, cause: unknown) {
   if (!(cause instanceof PlatformAdminError)) return null
   if (cause.status !== 409 && cause.status !== 422) return null
   const nothing =
-    kind === 'rule' ? 'Nothing was ruled' : 'Nothing was settled'
+    kind === 'rule'
+      ? 'Nothing was ruled'
+      : kind === 'rerun'
+        ? 'Nothing was re-run'
+        : 'Nothing was settled'
   const recovery =
     cause.status === 422
       ? kind === 'rule'
@@ -496,7 +501,9 @@ export function frontierRefusal(kind: FrontierWriteKind, cause: unknown) {
         : 'correct the refused fields (a reason of at least 8 characters) and resubmit.'
       : kind === 'rule'
         ? 're-read get_generator_round_frontier and get_generator_frontier_audit: the audit may already be ruled or the round settled, and an invalid ruling may name only cases from the sample; resubmit with the exact confirmation they imply.'
-        : 're-read get_generator_round_frontier: the round may already be settled or have no frontier lane.'
+        : kind === 'rerun'
+          ? 're-read get_generator_round_frontier: only held or zero-credit settled rounds with no live oracle lease can be re-run.'
+          : 're-read get_generator_round_frontier: the round may already be settled or have no frontier lane.'
   return new Error(`${cause.message}. ${nothing}: ${recovery}`)
 }
 
@@ -564,6 +571,19 @@ export async function settleGeneratorRoundFrontier(rawInput: unknown, actor: str
   return frontierWrite('settle', async () =>
     generatorFrontierSchema.parse(
       await platformAdminRequest(`${BASE}/rounds/${input.roundIndex}/frontier/settle`, {
+        method: 'POST',
+        actor,
+        body: { reason: input.reason, actor, confirmation: input.confirmation },
+      }),
+    ),
+  )
+}
+
+export async function rerunGeneratorRoundFrontier(rawInput: unknown, actor: string) {
+  const input = rerunGeneratorFrontierInputSchema.parse(rawInput)
+  return frontierWrite('rerun', async () =>
+    generatorFrontierSchema.parse(
+      await platformAdminRequest(`${BASE}/rounds/${input.roundIndex}/frontier/rerun`, {
         method: 'POST',
         actor,
         body: { reason: input.reason, actor, confirmation: input.confirmation },
