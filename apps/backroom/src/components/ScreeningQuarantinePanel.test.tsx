@@ -571,6 +571,8 @@ describe('ScreeningQuarantinePanel', () => {
       applied_count: 2,
       already_applied_count: 0,
       failed_count: 0,
+      unconfirmed_count: 0,
+      reconciled_after: null,
     })
     vi.mocked(listScreeningQuarantines).mockResolvedValue({
       items: [],
@@ -611,6 +613,104 @@ describe('ScreeningQuarantinePanel', () => {
         data: expect.objectContaining({ confirmed: true }),
       }),
     )
+  })
+
+  it('keeps unconfirmed rows selected after a batch answer was lost', async () => {
+    const second = {
+      ...quarantine,
+      quarantine_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      agent_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      attempt_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      agent_name: 'Second review agent',
+    }
+    vi.mocked(previewScreeningQuarantineDecisions).mockResolvedValue({
+      preview_token: '1234567890.abcdefghijklmnopqrstuvwxyz1234567890abcdef',
+      expires_at: '2026-07-17T16:10:00Z',
+      ready_count: 2,
+      already_applied_count: 0,
+      blocked_count: 0,
+      items: [quarantine, second].map((item) => ({
+        quarantine_id: item.quarantine_id,
+        agent_id: item.agent_id,
+        agent_name: item.agent_name,
+        artifact_sha256: item.artifact_sha256,
+        resolution: 'rescreen' as const,
+        reason: 'Re-run both artifacts against the current screening policy',
+        disposition: 'ready' as const,
+        resulting_agent_status: 'screening_failed',
+        public_reason_code: 'operator_rescreen',
+        public_record_hash: 'ab'.repeat(32),
+        terminal_reconciliation: false,
+        terminal_ruling: null,
+        message: 'will set submission status to screening_failed',
+      })),
+    })
+    vi.mocked(executeScreeningQuarantineDecisions).mockResolvedValue({
+      items: [
+        {
+          quarantine_id: quarantine.quarantine_id,
+          status: 'already_applied' as const,
+          agent_status: 'screening_failed',
+          terminal_reconciliation: false,
+          terminal_ruling: null,
+          message: 'Recorded on Platform (read back after the batch request timed out)',
+        },
+        {
+          quarantine_id: second.quarantine_id,
+          status: 'unconfirmed' as const,
+          agent_status: null,
+          terminal_reconciliation: false,
+          terminal_ruling: null,
+          message: 'Not confirmed after the batch request timed out',
+        },
+      ],
+      applied_count: 0,
+      already_applied_count: 1,
+      failed_count: 0,
+      unconfirmed_count: 1,
+      reconciled_after: 'timeout',
+    })
+    // The recorded release has left the active list; the unconfirmed one has not.
+    vi.mocked(listScreeningQuarantines).mockResolvedValue({
+      items: [second],
+      count: 1,
+      terminal_ghost_count: 0,
+      actionable_count: 1,
+      oldest_actionable_created_at: null,
+    })
+
+    render(
+      <ScreeningQuarantinePanel
+        initialItems={[quarantine, second]}
+        initialSubmissions={[submission]}
+        readOnly={false}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all shown quarantines' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Shared batch reason' }), {
+      target: { value: 'Re-run both artifacts against the current screening policy' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply reason to selected' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Preview 2 decisions' }))
+
+    await waitFor(() =>
+      expect(previewScreeningQuarantineDecisions).toHaveBeenCalledTimes(1),
+    )
+    expect(executeScreeningQuarantineDecisions).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(screen.getByText(/Preview only/)).toBeTruthy()
+    expect(screen.getAllByText(/Public audit operator_rescreen/).length).toBe(2)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Confirm and execute reviewed decisions' }),
+    )
+    await waitFor(() =>
+      expect(screen.getByText(/read back from Platform: 1 recorded, 0 failed, 1 not confirmed/)).toBeTruthy(),
+    )
+    expect(screen.getByText(/aaaaaaaa…: Not confirmed after the batch request timed out/)).toBeTruthy()
+    // The unconfirmed row stays selected for the next preview; the recorded one leaves.
+    expect(screen.getByRole('button', { name: 'Preview 1 decision' })).toBeTruthy()
   })
 
   it('allows a detailed source-evidence resolution reason over 500 characters', () => {

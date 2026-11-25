@@ -2835,21 +2835,129 @@ export async function previewScreeningQuarantineBatch(rawInput: unknown, actor: 
   return screeningQuarantineBatchPreviewResponseSchema.parse(payload)
 }
 
+// Platform applies a batch one decision at a time and prepares a release
+// dataset for each release, so a batch of up to 50 can outlast the generic
+// 20 s deadline while it keeps committing (#3042).
+const QUARANTINE_BATCH_TIMEOUT_MS = 60_000
+// A proxy can answer these after the batch reached Platform, while Platform is
+// still committing (502 bad gateway, 504 and Cloudflare 524 timeouts).
+const GATEWAY_LOST_ANSWER = new Set([502, 504, 524])
+
 export async function executeScreeningQuarantineBatch(rawInput: unknown, actor: string) {
   const input = screeningQuarantineBatchExecuteInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    '/api/v1/admin/screening-quarantines/batch-resolve',
-    {
-      method: 'POST',
-      actor,
-      body: {
-        decisions: input.decisions.map(toPlatformBatchDecision),
-        preview_token: input.previewToken,
-        confirmed: input.confirmed,
+  const decisions = input.decisions.map(toPlatformBatchDecision)
+  let payload: unknown
+  try {
+    payload = await platformAdminRequest(
+      '/api/v1/admin/screening-quarantines/batch-resolve',
+      {
+        method: 'POST',
+        actor,
+        body: {
+          decisions,
+          preview_token: input.previewToken,
+          confirmed: input.confirmed,
+        },
+        timeoutMs: QUARANTINE_BATCH_TIMEOUT_MS,
       },
-    },
-  )
+    )
+  } catch (error) {
+    // Only a lost answer is uncertain: the batch may have reached Platform and
+    // committed some or all of its decisions. A read-back is read-only, so a
+    // gateway answer that came before Platform saw the batch costs nothing.
+    if (
+      !(error instanceof PlatformAdminError) ||
+      !(
+        error.failure === 'timeout' ||
+        error.failure === 'transport' ||
+        (error.status !== null && GATEWAY_LOST_ANSWER.has(error.status))
+      )
+    ) {
+      throw error
+    }
+    return reconcileScreeningQuarantineBatch(decisions, actor, error)
+  }
   return screeningQuarantineBatchExecuteResponseSchema.parse(payload)
+}
+
+/**
+ * Report what a batch whose answer was lost actually recorded (#3042).
+ *
+ * The read-back is the read-only batch preview of the same decisions: an item
+ * Platform recorded reads `already_applied`. A `not_found` item is `failed`:
+ * applying a decision never removes its quarantine, so the batch cannot have
+ * applied it. Nothing else can be confirmed: Platform may still be working
+ * through the batch, and a released agent that has moved past `evaluating`
+ * previews as a conflict. So every other item is `unconfirmed` with Platform's
+ * current message, and the operator previews again before executing it.
+ */
+async function reconcileScreeningQuarantineBatch(
+  decisions: ReturnType<typeof toPlatformBatchDecision>[],
+  actor: string,
+  uncertain: PlatformAdminError,
+) {
+  let preview: z.infer<typeof screeningQuarantineBatchPreviewResponseSchema>
+  try {
+    preview = screeningQuarantineBatchPreviewResponseSchema.parse(
+      await platformAdminRequest('/api/v1/admin/screening-quarantines/batch-preview', {
+        method: 'POST',
+        actor,
+        body: { decisions },
+      }),
+    )
+  } catch (cause) {
+    throw new PlatformAdminError(
+      uncertain.failure,
+      `${uncertain.message} Some decisions may have been applied, and reading them back failed too (${
+        cause instanceof Error ? cause.message : String(cause)
+      }). Preview the batch again before executing anything.`,
+      uncertain.status,
+      uncertain.errorCode,
+    )
+  }
+  const lost =
+    uncertain.failure === 'timeout' || uncertain.status === 504 || uncertain.status === 524
+      ? 'timed out'
+      : 'lost its answer'
+  const items = preview.items.map((item) =>
+    item.disposition === 'already_applied'
+      ? {
+          quarantine_id: item.quarantine_id,
+          status: 'already_applied' as const,
+          agent_status: item.resulting_agent_status,
+          terminal_reconciliation: item.terminal_reconciliation,
+          terminal_ruling: item.terminal_ruling,
+          message: `Recorded on Platform (read back after the batch request ${lost}): ${item.message}`,
+        }
+      : item.disposition === 'not_found'
+        ? {
+            quarantine_id: item.quarantine_id,
+            status: 'failed' as const,
+            agent_status: null,
+            terminal_reconciliation: false,
+            terminal_ruling: null,
+            message: `Not applied: ${item.message}`,
+          }
+        : {
+            quarantine_id: item.quarantine_id,
+            status: 'unconfirmed' as const,
+            agent_status: null,
+            // The preview's ruling is the proposed decision's, not an outcome.
+            terminal_reconciliation: false,
+            terminal_ruling: null,
+            message: `Not confirmed after the batch request ${lost}; Platform may still be applying it. Preview again before executing it. Platform reports: ${item.message}`,
+          },
+  )
+  const count = (status: (typeof items)[number]['status']) =>
+    items.filter((item) => item.status === status).length
+  return screeningQuarantineBatchExecuteResponseSchema.parse({
+    items,
+    applied_count: 0,
+    already_applied_count: count('already_applied'),
+    failed_count: count('failed'),
+    unconfirmed_count: count('unconfirmed'),
+    reconciled_after: uncertain.failure === 'server' ? 'gateway' : uncertain.failure,
+  })
 }
 
 export async function fetchScreeningDisputes(
