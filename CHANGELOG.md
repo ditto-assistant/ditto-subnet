@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.508.0 (2026-11-25)
+
+### Features
+
+- **platform,backroom**: Add audited frontier oracle rerun endpoint for held and zero-credit rounds
+  ([#3634](https://github.com/ditto-assistant/ditto-subnet/pull/3634),
+  [`785b107`](https://github.com/ditto-assistant/ditto-subnet/commit/785b107eda9193072a8da289428213c78c9de3da))
+
+
 ## v0.507.0 (2026-11-25)
 
 ### Documentation
