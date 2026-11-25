@@ -1182,6 +1182,133 @@ async def settle_frontier(
     return applied
 
 
+async def rerun_frontier_oracle(
+    session: AsyncSession,
+    row: GeneratorRound,
+    *,
+    settings: GeneratorCompetitionSettings,
+    reason: str,
+    actor: str,
+    now: datetime,
+) -> dict[str, Any]:
+    """Reset a held or zero-credit settled round's frontier lane so the oracle
+    runs again under the current oracle settings and proceeds through the full
+    audit stage.
+
+    Refuses rounds with a live oracle lease, rounds that already settled with
+    nonzero frontier credit, and healthy open rounds (e.g. ``audit_pending``
+    with attested cases or active ``oracle_pending`` within timeout/attempts).
+    Returns a summary of the superseded prior lane state for audit logging."""
+    if row.status != "scored" or not row.frontier:
+        raise FrontierRejected(f"round {row.round_index} has no frontier lane")
+    if row.dataset_sha256 is None or row.dataset_bytes is None:
+        raise FrontierRejected(f"round {row.round_index} dataset is unavailable")
+    if not settings.frontier_enabled:
+        raise FrontierRejected(
+            "frontier scoring is not enabled in current generator competition settings"
+        )
+    frontier = dict(row.frontier)
+    candidates = list(frontier.get("candidates") or ())
+    if not candidates:
+        raise FrontierRejected(f"round {row.round_index} has no frontier candidates")
+    if await live_oracle_lease(session, row, now=now) is not None:
+        raise FrontierRejected(f"round {row.round_index} has a live oracle lease")
+
+    state = frontier.get("state")
+    hold: str | None = None
+    if state == STATE_SETTLED:
+        applied = frontier.get("applied") or {}
+        has_applied = any(bool(ids) for ids in applied.values())
+        has_frontier_verdict = any(
+            case.get("status") == CASE_FRONTIER
+            for column in (row.score or {}).get("columns", ())
+            for case in (column.get("pack") or {}).get("cases", ())
+        )
+        if has_applied or has_frontier_verdict:
+            raise FrontierRejected(
+                f"round {row.round_index} already settled with nonzero frontier credit"
+            )
+    else:
+        hold = frontier.get("held_reason") or frontier_hold_reason(
+            row, now=now, oracle_running=False
+        )
+        if hold is None:
+            raise FrontierRejected(
+                f"round {row.round_index} frontier is neither held nor settled "
+                f"with zero credit (state {state!r})"
+            )
+
+    from ditto.api_server.generator_rounds import expire_round_tickets
+
+    await expire_round_tickets(
+        session,
+        row,
+        now=now,
+        detail=f"frontier rerun ({actor}): {reason}"[:500],
+    )
+    await close_stale_oracle_attempts(session, row, now=now)
+
+    prior_run: dict[str, Any] = {
+        "state": state,
+        "oracle_model": frontier.get("oracle_model"),
+        "oracle_attempts": int(frontier.get("oracle_attempts") or 0),
+        "settle_reason": frontier.get("settle_reason"),
+        "settled_at": frontier.get("settled_at"),
+        "held_reason": frontier.get("held_reason") or hold,
+        "oracle_run_id": (frontier.get("oracle") or {}).get("run_id"),
+        "rerun_at": _iso(now),
+        "rerun_actor": actor,
+        "rerun_reason": reason,
+    }
+    prior_runs = [*list(frontier.get("prior_runs") or ()), prior_run]
+
+    reopened: dict[str, Any] = {
+        "version": int(frontier.get("version") or FRONTIER_DOCUMENT_VERSION),
+        "state": STATE_ORACLE_PENDING,
+        "oracle_agent_id": str(settings.frontier_oracle_agent_id),
+        "frontier_weight": (
+            float(frontier["frontier_weight"])
+            if frontier.get("frontier_weight") is not None
+            else 0.0
+        ),
+        "audit_cases": settings.frontier_audit_cases,
+        "audit_grace_hours": settings.frontier_audit_grace_hours,
+        "oracle_timeout_hours": settings.frontier_oracle_timeout_hours,
+        "oracle_model": settings.frontier_oracle_model,
+        "solve_threshold": float(frontier.get("solve_threshold") or 0.5),
+        "candidates": candidates,
+        "created_at": _iso(now),
+        "oracle_attempts": 0,
+        "oracle": None,
+        "attested": {},
+        "audits": {},
+        "phase": PHASE_ORACLE,
+        "escalation_policy": (
+            {
+                "agent_id": str(settings.frontier_escalation_agent_id),
+                "solve_threshold": settings.frontier_escalation_solve_threshold,
+                "max_cases": settings.frontier_escalation_max_cases,
+                "max_cases_per_column": (
+                    settings.frontier_escalation_max_cases_per_column
+                ),
+                "max_failed_fraction": settings.frontier_escalation_max_failed_fraction,
+            }
+            if settings.frontier_escalation_enabled
+            else None
+        ),
+        "escalation": None,
+        "prior_runs": prior_runs,
+        **(
+            {"base_columns": frontier["base_columns"]}
+            if "base_columns" in frontier
+            else {}
+        ),
+    }
+    row.frontier = reopened
+    await session.flush()
+    return prior_run
+
+
 async def advance_frontier_rounds(
     session: AsyncSession,
     *,

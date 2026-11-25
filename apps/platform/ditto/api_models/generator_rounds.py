@@ -754,6 +754,11 @@ def frontier_settle_confirmation(round_index: int) -> str:
     return f"SETTLE GENERATOR FRONTIER {round_index}"
 
 
+def frontier_rerun_confirmation(round_index: int) -> str:
+    """The exact confirmation an operator types to re-run a round's frontier oracle."""
+    return f"RERUN GENERATOR FRONTIER {round_index}"
+
+
 class GeneratorFrontierOracleView(RoundModel):
     """The oracle run's outcome on a round's frontier candidates."""
 
@@ -938,3 +943,15 @@ class GeneratorFrontierSettleRequest(BaseModel):
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
     """``SETTLE GENERATOR FRONTIER {round}``."""
+
+
+class GeneratorFrontierRerunRequest(BaseModel):
+    """Re-run a held or zero-credit settled round's frontier oracle through the
+    normal oracle -> audit -> settle lifecycle."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+    """``RERUN GENERATOR FRONTIER {round}``."""

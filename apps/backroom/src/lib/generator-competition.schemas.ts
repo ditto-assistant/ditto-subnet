@@ -48,6 +48,10 @@ export function frontierSettleConfirmation(roundIndex: number) {
   return `SETTLE GENERATOR FRONTIER ${roundIndex}`
 }
 
+export function frontierRerunConfirmation(roundIndex: number) {
+  return `RERUN GENERATOR FRONTIER ${roundIndex}`
+}
+
 export function generatorSettingsConfirmation(mode: string) {
   return `APPLY GENERATOR COMPETITION ${mode.toUpperCase()}`
 }
@@ -1092,6 +1096,23 @@ export const settleGeneratorFrontierInputSchema = z
   })
   .superRefine((input, context) => {
     const expected = frontierSettleConfirmation(input.roundIndex)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
+        path: ['confirmation'],
+      })
+    }
+  })
+
+export const rerunGeneratorFrontierInputSchema = z
+  .object({
+    roundIndex: z.number().int().nonnegative(),
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = frontierRerunConfirmation(input.roundIndex)
     if (input.confirmation !== expected) {
       context.addIssue({
         code: 'custom',

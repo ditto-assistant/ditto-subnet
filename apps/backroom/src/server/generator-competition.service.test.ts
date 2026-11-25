@@ -952,6 +952,7 @@ describe('generator competition MCP tools', () => {
         })
       }
       if (path.endsWith('/rounds/7/frontier/settle')) return Response.json({ ...frontier, state: 'settled', applied: { c1: ['c1/k2', 'c1/k5'] } })
+      if (path.endsWith('/rounds/7/frontier/rerun')) return Response.json({ ...frontier, state: 'oracle_pending', oracle_attempts: 0, oracle: null, attested: {}, audits: [], applied: null })
       if (path.endsWith('/rounds/7/frontier/audits/c1')) return Response.json({ ...frontier, audits: [{ ...audit, status: 'passed' }] })
       if (path.endsWith('/rounds/7/frontier')) return Response.json(frontier)
       return Response.json({ detail: 'unexpected' }, { status: 404 })
@@ -1029,6 +1030,21 @@ describe('generator competition MCP tools', () => {
         arguments: { roundIndex: 7, reason: 'oracle agent misconfigured', confirmation: 'SETTLE GENERATOR FRONTIER 7' },
       }))).toMatchObject({ state: 'settled' })
       expect(calls[0][2]).toMatchObject({ confirmation: 'SETTLE GENERATOR FRONTIER 7', actor: session.email })
+      calls.length = 0
+      const badRerun = await client.callTool({
+        name: 'rerun_generator_round_frontier',
+        arguments: { roundIndex: 7, reason: 'rerun on glm-5.3-flash oracle', confirmation: 'SETTLE GENERATOR FRONTIER 7' },
+      })
+      expect(badRerun.isError).toBe(true)
+      expect(calls).toEqual([])
+      expect(json(await client.callTool({
+        name: 'rerun_generator_round_frontier',
+        arguments: { roundIndex: 7, reason: 'rerun on glm-5.3-flash oracle', confirmation: 'RERUN GENERATOR FRONTIER 7' },
+      }))).toMatchObject({ state: 'oracle_pending', oracle_model: 'z-ai/glm-5.3-flash' })
+      expect(calls[0]).toEqual([
+        'POST', '/api/v1/admin/generator-competition/rounds/7/frontier/rerun',
+        { reason: 'rerun on glm-5.3-flash oracle', actor: session.email, confirmation: 'RERUN GENERATOR FRONTIER 7' },
+      ])
     } finally {
       await client.close()
       await server.close()

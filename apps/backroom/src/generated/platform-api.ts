@@ -2490,6 +2490,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/frontier/rerun": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Rerun Frontier
+         * @description Re-run a held or zero-credit settled round's frontier oracle under the
+         *     current generator-competition oracle settings, routing its results through
+         *     the normal oracle -> audit -> settle lifecycle.
+         */
+        post: operations["admin_rerun_frontier_api_v1_admin_generator_competition_rounds__round_index__frontier_rerun_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/rounds/{round_index}/frontier/settle": {
         parameters: {
             query?: never;
@@ -27996,6 +28018,22 @@ export interface components {
             run_id: string;
             /** Validator Hotkey */
             validator_hotkey: string;
+        };
+        /**
+         * GeneratorFrontierRerunRequest
+         * @description Re-run a held or zero-credit settled round's frontier oracle through the
+         *     normal oracle -> audit -> settle lifecycle.
+         */
+        GeneratorFrontierRerunRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * GeneratorFrontierSettleRequest
@@ -57153,6 +57191,43 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["GeneratorFrontierAuditRuling"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_rerun_frontier_api_v1_admin_generator_competition_rounds__round_index__frontier_rerun_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorFrontierRerunRequest"];
             };
         };
         responses: {

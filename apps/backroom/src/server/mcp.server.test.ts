@@ -748,6 +748,7 @@ describe('Backroom MCP tools', () => {
         'get_generator_frontier_audit',
         'rule_generator_frontier_audit',
         'settle_generator_round_frontier',
+        'rerun_generator_round_frontier',
         'register_default_generator',
         'create_default_generator_upload',
         'get_model_context_settings',
@@ -1224,7 +1225,10 @@ describe('Backroom MCP tools', () => {
     // The two SN-500 harness memory reads (paged list and per-agent; one-line
     // summaries, detail in tool help) add 1,228 bytes: measured 255,496
     // bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(256_000)
+    // The audited frontier oracle rerun write (rerun_generator_round_frontier;
+    // one-line summary, detail in tool help) adds 707 bytes: measured 256,203
+    // bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(256_800)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

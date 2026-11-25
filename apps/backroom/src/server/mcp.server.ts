@@ -103,6 +103,7 @@ import {
   fetchGeneratorFrontierAudit,
   fetchGeneratorRoundFrontier,
   listGeneratorFrontierAudits,
+  rerunGeneratorRoundFrontier,
   ruleGeneratorFrontierAudit,
   settleGeneratorRoundFrontier,
 } from './generator-competition.service'
@@ -126,6 +127,7 @@ import {
   voidGeneratorRoundInputSchema,
   generatorFrontierAuditInputSchema,
   listGeneratorFrontierAuditsInputSchema,
+  rerunGeneratorFrontierInputSchema,
   ruleGeneratorFrontierAuditInputSchema,
   settleGeneratorFrontierInputSchema,
   generatorPromotionInputSchema,
@@ -933,6 +935,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_generator_frontier_audit: 'One column\'s frontier audit cases with evidence and memory search. Artifact scope.',
   rule_generator_frontier_audit: 'Rule a frontier audit VALID or INVALID; RULE FRONTIER AUDIT {round} {column} ... Write.',
   settle_generator_round_frontier: 'Settle a round\'s frontier now with SETTLE GENERATOR FRONTIER {n}. Write.',
+  rerun_generator_round_frontier: 'Re-run a held/zero-credit frontier oracle with RERUN GENERATOR FRONTIER {n}. Write.',
   register_default_generator: 'Register the public default generator (uploadKey or sourceBase64) that fills empty counted columns.',
   create_default_generator_upload: 'Presigned five-minute PUT for one default-generator archive under this operator\'s prefix.',
   rescore_generator_submission: 'Re-qualify an active generator now on fresh seeds.',
@@ -2193,6 +2196,12 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     description: 'Settle a round\'s frontier lane now instead of waiting for its audits\' grace or the oracle\'s timeout: attestations of columns whose audit did not fail are applied (none while the oracle has not reported), and the lane closes. Use it when the oracle agent is misconfigured or an audit cannot be ruled. Audited. Confirmation: SETTLE GENERATOR FRONTIER {roundIndex}. Requires backroom:write.',
     inputSchema: settleGeneratorFrontierInputSchema, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => settleGeneratorRoundFrontier(input, props.session.email)))
+
+  registerTool('rerun_generator_round_frontier', {
+    title: 'Rerun generator round frontier',
+    description: 'Re-run the frontier oracle on a held or zero-credit settled round under the current oracle settings (such as after rolling out a new frontier_oracle_model), routing its new attestations through the full oracle -> audit -> settle lifecycle. Refuses healthy open rounds, live oracle leases, and rounds that already settled with nonzero frontier credit. Audited. Confirmation: RERUN GENERATOR FRONTIER {roundIndex}. Requires backroom:write.',
+    inputSchema: rerunGeneratorFrontierInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => rerunGeneratorRoundFrontier(input, props.session.email)))
 
   registerTool('create_default_generator_upload', {
     title: 'Create default generator upload',
