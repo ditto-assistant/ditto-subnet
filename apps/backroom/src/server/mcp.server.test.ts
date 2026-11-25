@@ -11156,6 +11156,7 @@ describe('Backroom MCP tools', () => {
       arguments: {
         expectedRevision: 0,
         mode: 'enforce',
+        threshold: 40,
         reason: revision.reason,
         confirmation: 'APPLY UNRELEASED COPY ENFORCE',
       },
@@ -11173,6 +11174,7 @@ describe('Backroom MCP tools', () => {
         arguments: {
           expectedRevision: 0,
           mode: 'enforce',
+          threshold: 40,
           reason: revision.reason,
           confirmation: 'APPLY UNRELEASED COPY ENFORCE',
         },

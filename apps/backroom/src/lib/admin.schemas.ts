@@ -304,8 +304,31 @@ export const fanoutShadowOutcomeSchema = z.enum([
   'skipped',
 ])
 export const policyManifestProfileSchema = z.enum(['core', 'l1', 'l1_l2'])
-export const screenerReviewSettingsSchema = z
-  .object({
+
+type WithoutDefaults<T extends z.ZodRawShape> = {
+  [K in keyof T]: T[K] extends z.ZodDefault<infer Inner> ? Inner : T[K]
+}
+
+/**
+ * A whole-policy write shape: every field of a read shape, its read default
+ * removed.
+ *
+ * A settings revision stores the whole policy and Platform appends it
+ * verbatim, so an omitted field is not "leave it alone": it is a write of the
+ * read default. Read defaults exist so an older Platform or revision still
+ * parses; on a write they would let an MCP caller that changes one knob
+ * silently reset every other one it left out (#2979).
+ */
+export function requireEveryField<T extends z.ZodRawShape>(shape: T): WithoutDefaults<T> {
+  return Object.fromEntries(
+    Object.entries(shape).map(([key, field]) => [
+      key,
+      field instanceof z.ZodDefault ? field.unwrap() : field,
+    ]),
+  ) as WithoutDefaults<T>
+}
+
+const screenerReviewSettingsBaseSchema = z.object({
     mode: screenerReviewModeSchema,
     l2_model: screenerReviewModelSchema,
     l2_fallback_models: z.array(screenerReviewModelSchema).max(2),
@@ -354,8 +377,12 @@ export const screenerReviewSettingsSchema = z
     audit_retention_days: z.number().int().min(1).max(365),
     policy_manifest_profile: policyManifestProfileSchema.default('l1'),
     policy_manifest_rotation_id: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/).default('v8-luna-source-review-behavioral-oracle'),
-  })
-  .superRefine((value, context) => {
+})
+
+function checkScreenerReviewSettings(
+  value: z.infer<typeof screenerReviewSettingsBaseSchema>,
+  context: z.RefinementCtx,
+) {
     const chain = [value.l2_model, ...value.l2_fallback_models]
     if (new Set(chain).size !== chain.length) {
       context.addIssue({ code: 'custom', message: 'Model chain cannot contain duplicates' })
@@ -391,7 +418,14 @@ export const screenerReviewSettingsSchema = z
         path: ['fanout_shadow_image_source_sha'],
       })
     }
-  })
+}
+
+export const screenerReviewSettingsSchema =
+  screenerReviewSettingsBaseSchema.superRefine(checkScreenerReviewSettings)
+
+export const screenerReviewSettingsWriteSchema = z
+  .object(requireEveryField(screenerReviewSettingsBaseSchema.shape))
+  .superRefine(checkScreenerReviewSettings)
 
 export const screenerReviewRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
@@ -507,7 +541,7 @@ export const screenerReviewControlSchema = z.object({
 export const applyScreenerReviewSettingsInputSchema = z.object({
   scope: z.string().regex(/^(?:\*|[a-zA-Z0-9._-]{1,63})$/),
   expectedRevision: z.number().int().nonnegative(),
-  settings: screenerReviewSettingsSchema,
+  settings: screenerReviewSettingsWriteSchema,
   reason: auditReasonSchema(8),
   confirmation: z.string(),
 })
@@ -771,6 +805,10 @@ export const screenerProviderSettingsSchema = z.object({
   gce_overflow_max_instances: z.number().int().min(0).max(32).default(6),
 })
 
+export const screenerProviderSettingsWriteSchema = z.object(
+  requireEveryField(screenerProviderSettingsSchema.shape),
+)
+
 export const screenerProviderSettingsRevisionSchema = z.object({
   environment: z.string().min(1),
   revision: z.number().int().nonnegative(),
@@ -788,7 +826,7 @@ export const screenerProviderSettingsControlSchema = z.object({
 
 export const setScreenerProviderSettingsInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
-  settings: screenerProviderSettingsSchema,
+  settings: screenerProviderSettingsWriteSchema,
   reason: auditReasonSchema(8),
   confirmation: z.string(),
 })
@@ -2539,30 +2577,11 @@ export const continualRetestSettingsSchema =
 //
 // Refinement is applied after the extend rather than inherited: zod refuses to
 // overwrite keys on a schema that already carries refinements.
-export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSchema
+export const continualRetestSettingsWriteSchema = z
+  .object(requireEveryField(continualRetestSettingsBaseSchema.shape))
   .extend({
-    tie_weighting_mode: z.enum(['disabled', 'fleet_ready']),
-    statistical_band_mode: z.enum(['disabled', 'fleet_ready']),
-    ledger_pin_mode: z.enum(['live', 'epoch']),
-    crown_incumbent_mode: z.enum(['disabled', 'fleet_ready']),
-    crown_gate_mode: z.enum(['disabled', 'fleet_ready']),
-    crown_duel_mode: z.enum(['disabled', 'fleet_ready']),
+    // Reads stay lenient up to the served ceiling; writes keep the lane's cap.
     min_dethrone_confirmations: z.number().int().min(2).max(MAX_MIN_DETHRONE_CONFIRMATIONS),
-    champion_standing_rank: z.number().int().min(1).max(EMISSION_SET_SIZE),
-    wave_membership: z.enum(['strict', 'participants', 'per_agent']),
-    wave_cadence_tempos: z.number().int().min(0).max(MAX_WAVE_CADENCE_TEMPOS),
-    wave_seeds_per_window: z.number().int().min(1).max(MAX_WAVE_SEEDS_PER_WINDOW),
-    retest_mode: z.enum(['continual', 'season_duel']),
-    season_duel_seeds: z.number().int().min(MIN_SEASON_DUEL_SEEDS).max(MAX_SEASON_DUEL_SEEDS),
-    season_duel_rotation_seeds: z.boolean(),
-    retest_cohort_size: z.number().int().min(EMISSION_SET_SIZE).max(MAX_RETEST_COHORT_SIZE),
-    retest_eligibility_mode: z.enum(['fixed', 'statistical']),
-    retest_eligibility_z: z.number().min(0).max(MAX_RETEST_ELIGIBILITY_Z),
-    retest_cohort_max_size: z
-      .number()
-      .int()
-      .min(EMISSION_SET_SIZE)
-      .max(MAX_RETEST_COHORT_SIZE),
   })
   .superRefine(checkCohortCeiling)
   .superRefine(checkSeasonDuelSeeds)
@@ -3579,8 +3598,7 @@ export const DEFAULT_MEMORY_FACTOR_FREE_MIB = 512
 export const DEFAULT_MEMORY_FACTOR_FLOOR_BPS = 9_000
 export const MIN_MEMORY_FACTOR_FLOOR_BPS = 5_000
 
-export const benchmarkRuntimeSettingsSchema = z
-  .object({
+const benchmarkRuntimeSettingsBaseSchema = z.object({
     case_concurrency: z.number().int().min(1).max(MAX_BENCHMARK_CASE_CONCURRENCY),
     relay_delay_fingerprint_mode: z.enum(['off', 'shadow']),
     relay_delay_fingerprint_min_ms: z.number().int().min(0).max(MAX_RELAY_DELAY_FINGERPRINT_MS),
@@ -3609,14 +3627,28 @@ export const benchmarkRuntimeSettingsSchema = z
       .min(MIN_MEMORY_FACTOR_FLOOR_BPS)
       .max(10_000)
       .default(DEFAULT_MEMORY_FACTOR_FLOOR_BPS),
-  })
-  .refine(
-    (value) => value.relay_delay_fingerprint_min_ms <= value.relay_delay_fingerprint_max_ms,
-    {
-      message: 'Relay delay minimum may not exceed the maximum',
-      path: ['relay_delay_fingerprint_min_ms'],
-    },
-  )
+})
+
+const relayDelayBoundsAreOrdered = (value: {
+  relay_delay_fingerprint_min_ms: number
+  relay_delay_fingerprint_max_ms: number
+}) => value.relay_delay_fingerprint_min_ms <= value.relay_delay_fingerprint_max_ms
+const relayDelayBoundsIssue = {
+  message: 'Relay delay minimum may not exceed the maximum',
+  path: ['relay_delay_fingerprint_min_ms'],
+}
+
+export const benchmarkRuntimeSettingsSchema = benchmarkRuntimeSettingsBaseSchema.refine(
+  relayDelayBoundsAreOrdered,
+  relayDelayBoundsIssue,
+)
+
+// The read defaults above keep a Platform that predates a field parsing; a
+// write that omitted one would reset it (an `enforce` memory factor back to
+// `shadow`), so every field is required here (#2979).
+const benchmarkRuntimeSettingsWriteSchema = z
+  .object(requireEveryField(benchmarkRuntimeSettingsBaseSchema.shape))
+  .refine(relayDelayBoundsAreOrdered, relayDelayBoundsIssue)
 
 export const DEFAULT_BENCHMARK_RUNTIME_SETTINGS = {
   case_concurrency: 4,
@@ -3816,7 +3848,7 @@ export const inferenceConcurrencySettingsSchema =
 // never silently switch the decision lane off (or on).
 const inferenceConcurrencySettingsWriteSchema = inferenceConcurrencySettingsBaseSchema
   .extend({
-    benchmark_runtime: benchmarkRuntimeSettingsSchema,
+    benchmark_runtime: benchmarkRuntimeSettingsWriteSchema,
     decision_lane: decisionLaneSettingsSchema.optional(),
     // Optional on writes for the same reason: an omitted value keeps the
     // effective route, so a concurrency change never flips provider routing.
@@ -11354,7 +11386,7 @@ export const unreleasedCopyOverviewSchema = z.object({
 export const applyUnreleasedCopySettingsInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   mode: unreleasedCopyModeSchema,
-  threshold: z.number().positive().max(100000).default(40),
+  threshold: z.number().positive().max(100000),
   reason: auditReasonSchema(8),
   confirmation: z.string(),
 })
