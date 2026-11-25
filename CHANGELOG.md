@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.507.0 (2026-11-25)
+
+### Documentation
+
+- Audit SN118 miner agents for direct Ditto product improvements
+  ([#3626](https://github.com/ditto-assistant/ditto-subnet/pull/3626),
+  [`c5deccc`](https://github.com/ditto-assistant/ditto-subnet/commit/c5deccc93e26ef8eeb962386a90f585354eb0e52))
+
+### Features
+
+- **platform,relay,infra**: Include z-ai/glm-5.3-flash in inference allowed_models
+  ([#3633](https://github.com/ditto-assistant/ditto-subnet/pull/3633),
+  [`38951e3`](https://github.com/ditto-assistant/ditto-subnet/commit/38951e3dcdf5b66510d83da2048e820dbd54745b))
+
+
 ## v0.506.0 (2026-11-25)
 
 ### Bug Fixes
