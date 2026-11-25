@@ -1837,6 +1837,109 @@ class TestChallengerQueue:
         await _apply_settings(client, counted_columns=1, challenger_columns=0)
         assert [counted for _, counted in await columns()] == [True]
 
+    async def test_exploration_slot_prevents_non_top5_starvation(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Scored generators outside the counted top-N rotate back in via the
+        reserved exploration slot (stalest owner first), even while fresh
+        challengers are waiting, and an owner with multiple hotkeys cannot jump
+        ahead using an older hotkey."""
+        _install(app, session_maker)
+        await _apply_settings(client, counted_columns=5, challenger_columns=3)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        now = datetime.now(UTC)
+
+        # 5 top counted owners (scored recently in round 26176), 2 non-top-5
+        # scored owners (one stale from 26138 like d9ca2ce6, one from 26152
+        # like ae6f499b), one multi-hotkey owner with an old hotkey at 26130
+        # and a recent hotkey at 26175, plus 3 waiting fresh challengers.
+        specs = [
+            # name, owner, score, scored_index
+            ("top-1", "top1", 0.50, 26176),
+            ("top-2", "top2", 0.45, 26176),
+            ("top-3", "top3", 0.40, 26176),
+            ("top-4", "top4", 0.35, 26176),
+            ("top-5", "top5", 0.30, 26176),
+            ("stale-old", "stale1", 0.09, 26138),
+            ("stale-mid", "stale2", 0.001, 26152),
+            ("multi-old", "multi", 0.05, 26130),
+            ("multi-new", "multi", 0.25, 26175),
+            ("fresh-1", "fresh1", None, None),
+            ("fresh-2", "fresh2", None, None),
+            ("fresh-3", "fresh3", None, None),
+        ]
+        ids: dict[str, UUID] = {}
+        for index, (name, owner, _, _) in enumerate(specs):
+            ids[name] = await _seed_generator(
+                session_maker,
+                hotkey=f"5Gen-{name}",
+                owner=f"coldkey:{owner}",
+                salt=f"{name}-{index}",
+            )
+        async with session_maker() as session, session.begin():
+            for index, (name, _, score, scored_index) in enumerate(specs):
+                row = await session.get(GeneratorSubmission, ids[name])
+                assert row is not None
+                row.module = f"example.com/{name}"
+                row.qualified_at = now - timedelta(hours=len(specs) - index)
+                row.round_score = score
+                row.round_scored_index = scored_index
+
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        columns = preview["columns"]
+        assert len(columns) == 8
+        counted_ids = [c["submission_id"] for c in columns if c["counted"]]
+        challenger_ids = [c["submission_id"] for c in columns if not c["counted"]]
+        assert counted_ids == [str(ids[f"top-{i}"]) for i in range(1, 6)]
+        # Exploration slot picks stale-old (26138), NOT multi-old (owner's
+        # latest scored round is 26175); remaining 2 slots go to waiting fresh
+        # challengers.
+        assert challenger_ids == [
+            str(ids["stale-old"]),
+            str(ids["fresh-1"]),
+            str(ids["fresh-2"]),
+        ]
+
+        # Once stale-old is re-scored in round 26177, the exploration slot
+        # advances to stale-mid (26152).
+        async with session_maker() as session, session.begin():
+            row = await session.get(GeneratorSubmission, ids["stale-old"])
+            assert row is not None
+            row.round_scored_index = 26177
+        preview2 = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        challenger_ids_2 = [
+            c["submission_id"] for c in preview2["columns"] if not c["counted"]
+        ]
+        assert challenger_ids_2 == [
+            str(ids["stale-mid"]),
+            str(ids["fresh-1"]),
+            str(ids["fresh-2"]),
+        ]
+
+        # Once fresh challengers drain, all spare challenger slots rotate
+        # stalest-owner-first (stale-mid 26152, then multi-new 26175 — picking
+        # multi's best active submission rather than multi-old — then stale-old
+        # 26177).
+        async with session_maker() as session, session.begin():
+            for name in ("fresh-1", "fresh-2", "fresh-3"):
+                row = await session.get(GeneratorSubmission, ids[name])
+                assert row is not None
+                row.status = "superseded"
+        preview3 = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        challenger_ids_3 = [
+            c["submission_id"] for c in preview3["columns"] if not c["counted"]
+        ]
+        assert challenger_ids_3 == [
+            str(ids["stale-mid"]),
+            str(ids["multi-new"]),
+            str(ids["stale-old"]),
+        ]
+
     async def test_a_partial_probe_copy_waits_behind_new_cases(
         self,
         app: FastAPI,
