@@ -34,6 +34,7 @@ seasons use the same rails: validators advertising ``season_commitments`` poll
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
@@ -61,9 +62,11 @@ from ditto.api_models.generator_round_validator import (
     GeneratorRoundScoreResponse,
 )
 from ditto.api_models.inference_concurrency_settings import (
+    MAX_CHAT_TOKEN_BUDGET,
     InferenceConcurrencySettings,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.api_server.config import InferenceProxyConfig
 from ditto.api_server.dueling_season_commitments import (
     SeasonCommitmentReportRejected,
     claim_season_commitment_publication,
@@ -606,6 +609,33 @@ async def _record_prescreen_score(
     )
 
 
+# Measured GLM-5.3-Flash frontier oracle runs spend ~430k-485k prompt tokens
+# per candidate case across 2-3 turns on long-context packs. The default
+# per-grant chat_token_budget (25M-40M) fits ~85-90 candidates, so 100+
+# candidate rounds (e.g. R26151 with 187, R26152 with 191) exhaust their grant
+# mid-run. Scale only the frontier oracle's grant token_budget with candidate
+# count, clamped to MAX_CHAT_TOKEN_BUDGET (200M), without raising miner or
+# panel grant budgets.
+ORACLE_TOKENS_PER_CANDIDATE = 750_000
+
+
+def _oracle_inference_config(
+    inference_config: InferenceProxyConfig, candidate_count: int
+) -> InferenceProxyConfig:
+    if candidate_count <= 0:
+        return inference_config
+    budget = min(
+        MAX_CHAT_TOKEN_BUDGET,
+        max(
+            inference_config.token_budget,
+            candidate_count * ORACLE_TOKENS_PER_CANDIDATE,
+        ),
+    )
+    if budget == inference_config.token_budget:
+        return inference_config
+    return replace(inference_config, token_budget=budget)
+
+
 async def _lease_oracle_job(
     session,  # type: ignore[no-untyped-def]
     *,
@@ -689,7 +719,7 @@ async def _lease_oracle_job(
         grant = await ensure_inference_grant(
             session,
             ticket=ticket,
-            config=inference_config,
+            config=_oracle_inference_config(inference_config, len(candidates)),
             model=oracle_run_model(frontier, bench_version=bench_version),
         )
         if grant is None:
