@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.508.1 (2026-11-25)
+
+### Bug Fixes
+
+- **platform**: Scale frontier oracle grant token_budget with candidate count
+  ([#3635](https://github.com/ditto-assistant/ditto-subnet/pull/3635),
+  [`ae7a845`](https://github.com/ditto-assistant/ditto-subnet/commit/ae7a845446cda68f622974e1dbf81b28fef2a858))
+
+
 ## v0.508.0 (2026-11-25)
 
 ### Features
