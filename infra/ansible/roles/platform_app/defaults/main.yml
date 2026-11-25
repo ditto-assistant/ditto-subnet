@@ -254,7 +254,7 @@ platform_confirmation_backpressure_retry: false
 platform_inference_proxy_enabled: false
 platform_inference_proxy_required: false
 secret_platform_openrouter_key: validator-openrouter-key
-platform_inference_allowed_models: qwen/qwen3-32b,openai/gpt-oss-20b
+platform_inference_allowed_models: qwen/qwen3-32b,openai/gpt-oss-20b,z-ai/glm-5.3-flash
 platform_inference_provider: nebius
 # Initial v7 mode: one reviewed logical route, OpenRouter speed sorting, and
 # healthy fallback. The DB-backed per-provider optimizer remains dark.

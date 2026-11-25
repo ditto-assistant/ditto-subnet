@@ -661,7 +661,7 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		DecisionGlobalRPM:            6000,
 	}
 
-	models := strings.Split(r.str("DITTO_INFERENCE_ALLOWED_MODELS", "qwen/qwen3-32b,openai/gpt-oss-20b"), ",")
+	models := strings.Split(r.str("DITTO_INFERENCE_ALLOWED_MODELS", "qwen/qwen3-32b,openai/gpt-oss-20b,z-ai/glm-5.3-flash"), ",")
 	for _, m := range models {
 		if m = strings.TrimSpace(m); m != "" {
 			ip.AllowedModels = append(ip.AllowedModels, m)
