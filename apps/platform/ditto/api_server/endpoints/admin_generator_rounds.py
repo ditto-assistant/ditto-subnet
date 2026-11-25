@@ -660,6 +660,7 @@ async def admin_settle_frontier(
         params=params,
         reason=f"operator ({actor}): {reason}",
         now=datetime.now(UTC),
+        operator_override=True,
     )
     record_operator_action(
         session,

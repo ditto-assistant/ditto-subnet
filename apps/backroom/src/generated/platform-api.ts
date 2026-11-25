@@ -28047,6 +28047,8 @@ export interface components {
             escalation?: components["schemas"]["GeneratorFrontierEscalationView"] | null;
             /** Frontier Weight */
             frontier_weight: number;
+            /** Hold Reason */
+            hold_reason?: string | null;
             oracle: components["schemas"]["GeneratorFrontierOracleView"] | null;
             /**
              * Oracle Agent Id

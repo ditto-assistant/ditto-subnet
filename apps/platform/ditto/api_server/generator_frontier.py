@@ -23,11 +23,13 @@ generator-competition.md``, "Frontier cases"):
    Platform cannot grind the choice. Operators rule each audit in Backroom; an
    invalid case voids every attestation on the column.
 4. **Settle.** Once every audit is ruled, or ``frontier_audit_grace_hours``
-   pass, or the oracle never reports within ``frontier_oracle_timeout_hours``,
-   :func:`settle_frontier` applies :func:`apply_frontier` to the stored
+   pass, :func:`settle_frontier` applies :func:`apply_frontier` to the stored
    verdicts: attested unsolved cases become ``frontier``, and the column
    score, verdict rows, and the generator's ``round_score`` are rewritten.
-   The pre-frontier column scores stay on the round.
+   The pre-frontier column scores stay on the round. Rounds whose oracle
+   times out or exhausts its attempts, whose oracle credits zero cases across
+   every column, or whose audit stage was skipped are held for operator action
+   (:func:`frontier_hold_reason`) instead of auto-settling to zero.
 
 **Escalation** (``frontier_escalation_agent_id``, off by default). A case the
 panel and the oracle both fail stays unsolved, so a hard but valid case
@@ -595,7 +597,8 @@ async def oracle_round(
         if row is None or await live_oracle_lease(session, row, now=now) is not None:
             continue
         if (
-            settle_reason(row, now=now) is not None
+            frontier_hold_reason(row, now=now) is not None
+            or settle_reason(row, now=now) is not None
             or escalation_expired(row, now=now) is not None
         ):
             continue
@@ -815,6 +818,8 @@ def record_oracle_results(
         "results": [r.model_dump(mode="json") for r in results],
     }
     frontier = dict(row.frontier or {})
+    frontier.pop("held_reason", None)
+    frontier.pop("held_at", None)
     fingerprints = _case_fingerprints(row)
     if in_escalation(frontier):
         escalation = dict(frontier["escalation"])
@@ -964,20 +969,43 @@ def rule_audit(
     return audit
 
 
-def settle_reason(
+def _attested_columns(frontier: dict[str, Any]) -> set[str]:
+    """Column ids with at least one attested case."""
+    return {
+        column_id
+        for column_id, case_ids in (frontier.get("attested") or {}).items()
+        if case_ids
+    }
+
+
+def frontier_hold_reason(
     row: GeneratorRound, *, now: datetime, oracle_running: bool = False
 ) -> str | None:
-    """Why the round's frontier lane should settle now, or None to wait.
+    """Why the round's frontier lane is held for operator action instead of
+    auto-settling or re-leasing, or None.
 
     While an oracle lease is running the lane waits for it, past the timeout
-    and the attempt cap alike: its ticket TTL bounds the wait, and settling
-    under it would throw away a run that may yet deliver."""
+    and the attempt cap alike: its ticket TTL bounds the wait, and holding or
+    settling under it would throw away a run that may yet deliver.
+
+    Once no lease is running, a lane is held (never auto-settled to zero credit
+    or with its audit stage skipped) when:
+
+    * ``oracle_pending`` (oracle phase) reached ``oracle_timeout_hours`` or
+      ``MAX_ORACLE_ATTEMPTS`` without a valid oracle report;
+    * ``audit_pending`` has frontier candidates but zero attested cases across
+      every column; or
+    * ``audit_pending`` has ``audit_cases > 0`` yet one or more attested
+      columns (or the whole lane) has no audit entry.
+    """
     frontier = row.frontier or {}
     state = frontier.get("state")
+    if state == STATE_SETTLED:
+        return None
     if in_escalation(frontier):
         # The oracle reported: an escalation that never reports opens the
-        # audits (close_escalation, escalation_expired), never a settle that
-        # would skip them.
+        # audits (close_escalation, escalation_expired), where the checks below
+        # apply to the oracle's own attestations.
         return None
     if state == STATE_ORACLE_PENDING:
         if oracle_running:
@@ -989,16 +1017,43 @@ def settle_reason(
         if int(frontier.get("oracle_attempts") or 0) >= MAX_ORACLE_ATTEMPTS:
             return "oracle attempts exhausted"
         return None
-    if state != STATE_AUDIT_PENDING:
-        return None
-    audits = (frontier.get("audits") or {}).values()
-    if all(audit["status"] != AUDIT_PENDING for audit in audits):
-        return "audits ruled" if frontier.get("audits") else "no audit required"
-    opened = _parse(frontier.get("audit_opened_at")) or now
-    grace = timedelta(hours=int(frontier.get("audit_grace_hours") or 24))
-    if now - opened >= grace:
-        return "audit grace elapsed"
+    if state == STATE_AUDIT_PENDING:
+        if not (frontier.get("candidates") or ()):
+            return None
+        attested_columns = _attested_columns(frontier)
+        if not attested_columns:
+            return "oracle credited zero cases across every column"
+        audit_cases = int(frontier.get("audit_cases") or 0)
+        audits = frontier.get("audits") or {}
+        if audit_cases > 0 and not (attested_columns <= set(audits)):
+            return "audit stage skipped"
     return None
+
+
+def settle_reason(
+    row: GeneratorRound, *, now: datetime, oracle_running: bool = False
+) -> str | None:
+    """Why the round's frontier lane should auto-settle now, or None to wait.
+
+    Lanes held by :func:`frontier_hold_reason` (oracle timeout/exhaustion, zero
+    oracle attestations across every column, or a skipped audit stage) never
+    auto-settle; they wait for explicit operator action.
+    """
+    frontier = row.frontier or {}
+    if frontier_hold_reason(row, now=now, oracle_running=oracle_running) is not None:
+        return None
+    if frontier.get("state") != STATE_AUDIT_PENDING:
+        return None
+    audits = frontier.get("audits") or {}
+    if audits:
+        if all(audit["status"] != AUDIT_PENDING for audit in audits.values()):
+            return "audits ruled"
+        opened = _parse(frontier.get("audit_opened_at")) or now
+        grace = timedelta(hours=int(frontier.get("audit_grace_hours") or 24))
+        if now - opened >= grace:
+            return "audit grace elapsed"
+        return None
+    return "no audit required"
 
 
 async def settle_frontier(
@@ -1008,14 +1063,41 @@ async def settle_frontier(
     params: dict[str, Any],
     reason: str,
     now: datetime,
+    operator_override: bool = False,
 ) -> dict[str, list[str]]:
     """Apply the round's surviving attestations and close its frontier lane.
 
     A column whose audit failed applies none. ``params`` is the round's own
-    ``score_params()``. Returns the case ids applied per column."""
+    ``score_params()``. Returns the case ids applied per column.
+
+    Without ``operator_override=True``, refuses to settle a round that has not
+    reached ``audit_pending``, whose oracle credited zero cases across every
+    column, or whose audit stage was skipped despite ``audit_cases > 0``.
+    """
     frontier = dict(row.frontier or {})
     if frontier.get("state") == STATE_SETTLED:
         return dict(frontier.get("applied") or {})
+    if not operator_override:
+        state = frontier.get("state")
+        if state != STATE_AUDIT_PENDING:
+            raise FrontierRejected(
+                f"refusing to settle round {row.round_index} from state {state!r} "
+                "without completing the audit stage"
+            )
+        if frontier.get("candidates"):
+            attested_columns = _attested_columns(frontier)
+            if not attested_columns:
+                raise FrontierRejected(
+                    f"refusing to settle round {row.round_index}: oracle credited "
+                    "zero cases across every column"
+                )
+            audit_cases = int(frontier.get("audit_cases") or 0)
+            audits_present = frontier.get("audits") or {}
+            if audit_cases > 0 and not (attested_columns <= set(audits_present)):
+                raise FrontierRejected(
+                    f"refusing to settle round {row.round_index}: audit stage was "
+                    "skipped"
+                )
     if frontier.get("state") == STATE_ORACLE_PENDING:
         # An operator settle can land under a running oracle lease: expire it
         # (revoking its inference) and close its attempt, so the validator
@@ -1143,6 +1225,28 @@ async def advance_frontier_rounds(
             await close_stale_oracle_attempts(session, row, now=now)
             close_escalation(row, reason=expired, now=now)
             notes.append(f"round {row.round_index} frontier {expired}")
+        if not running and (
+            held := frontier_hold_reason(row, now=now, oracle_running=running)
+        ):
+            frontier = dict(row.frontier or {})
+            if frontier.get("held_reason") != held:
+                if frontier.get("state") == STATE_ORACLE_PENDING:
+                    from ditto.api_server.generator_rounds import expire_round_tickets
+
+                    await expire_round_tickets(
+                        session, row, now=now, detail=f"frontier held: {held}"[:500]
+                    )
+                    await close_stale_oracle_attempts(session, row, now=now)
+                frontier["held_reason"] = held
+                frontier["held_at"] = _iso(now)
+                row.frontier = frontier
+                logger.warning(
+                    "frontier round %s held for operator action: %s",
+                    row.round_index,
+                    held,
+                )
+                notes.append(f"round {row.round_index} frontier held ({held})")
+            continue
         reason = settle_reason(row, now=now, oracle_running=running)
         if reason is None:
             continue
@@ -1270,9 +1374,15 @@ def frontier_view(row: GeneratorRound) -> GeneratorFrontierView | None:
         frontier
     )
     base = frontier.get("base_columns")
+    state = frontier["state"]
+    hold_reason: str | None = None
+    if state != STATE_SETTLED:
+        hold_reason = frontier.get("held_reason")
+        if hold_reason is None and state == STATE_AUDIT_PENDING:
+            hold_reason = frontier_hold_reason(row, now=datetime.now(UTC))
     return GeneratorFrontierView(
         round_index=row.round_index,
-        state=frontier["state"],
+        state=state,
         oracle_agent_id=UUID(frontier["oracle_agent_id"]),
         oracle_model=oracle_run_model(
             frontier,
@@ -1297,6 +1407,7 @@ def frontier_view(row: GeneratorRound) -> GeneratorFrontierView | None:
         created_at=created,
         settled_at=_parse(frontier.get("settled_at")),
         settle_reason=frontier.get("settle_reason"),
+        hold_reason=hold_reason,
     )
 
 

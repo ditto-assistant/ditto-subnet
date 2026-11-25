@@ -991,6 +991,7 @@ export const generatorFrontierSchema = z.object({
   created_at: z.string(),
   settled_at: z.string().nullable().optional(),
   settle_reason: z.string().nullable().optional(),
+  hold_reason: z.string().nullable().optional().default(null),
 })
 
 // The MCP paging contract (docs/mcp.md, Paging): count is the queue total,

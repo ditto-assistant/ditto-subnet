@@ -837,8 +837,8 @@ class GeneratorFrontierView(RoundModel):
     """Round case ids the panel left unsolved on miner columns."""
     oracle_attempts: int
     oracle_deadline: datetime | None
-    """When the round settles with no attestations if the oracle never
-    reports (while ``oracle_pending``)."""
+    """When the round stops leasing and holds for operator action if the oracle
+    never reports (while ``oracle_pending``)."""
     oracle: GeneratorFrontierOracleView | None
     escalation: GeneratorFrontierEscalationView | None = None
     """The escalation tier, when the round's policy ran one after the
@@ -854,6 +854,9 @@ class GeneratorFrontierView(RoundModel):
     created_at: datetime
     settled_at: datetime | None = None
     settle_reason: str | None = None
+    hold_reason: str | None = None
+    """Why auto-settlement is holding this lane for operator action (oracle
+    timeout/exhaustion, zero oracle attestations, or a skipped audit stage)."""
 
 
 class GeneratorFrontierAuditListResponse(RoundModel):

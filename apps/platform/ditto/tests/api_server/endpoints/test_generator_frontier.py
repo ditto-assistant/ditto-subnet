@@ -45,13 +45,16 @@ from ditto.api_server.generator_frontier import (
     STATE_AUDIT_PENDING,
     STATE_ORACLE_PENDING,
     STATE_SETTLED,
+    FrontierRejected,
     advance_frontier_rounds,
     apply_frontier,
     frontier_audit_sample,
+    frontier_hold_reason,
     oracle_inference_refusal,
     oracle_run_model,
     record_oracle_results,
     select_escalation,
+    settle_frontier,
     settle_reason,
 )
 from ditto.api_server.generator_rounds import get_round, round_column_seed
@@ -850,30 +853,163 @@ class TestFrontierLane:
         # A settled round leases no oracle run.
         assert await _lease_job(client) is None
 
-    async def test_oracle_timeout_and_attempt_cap_settle_without_credit(
+    async def test_oracle_timeout_and_attempt_cap_hold_instead_of_settling(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """Exhausting oracle attempts or timing out holds the round for
+        operator action instead of auto-settling to zero with no audit stage."""
         lane = _Lane(client, session_maker)
         await lane.setup(app, monkeypatch, frontier_oracle_timeout_hours=2)
         round_index = await lane.score_round()
+        now = datetime.now(UTC)
+        async with session_maker() as session:
+            row = await get_round(session, round_index)
+            assert row is not None
+            assert frontier_hold_reason(row, now=now) is None
+            assert settle_reason(row, now=now) is None
+            assert (
+                frontier_hold_reason(row, now=now + timedelta(hours=2))
+                == "oracle timed out"
+            )
+            assert settle_reason(row, now=now + timedelta(hours=2)) is None
+
+            capped = dict(row.frontier or {})
+            capped["oracle_attempts"] = MAX_ORACLE_ATTEMPTS
+            row.frontier = capped
+            assert frontier_hold_reason(row, now=now) == "oracle attempts exhausted"
+            assert settle_reason(row, now=now) is None
+            # While the final lease is still live, the round is neither held nor
+            # settled under it.
+            assert frontier_hold_reason(row, now=now, oracle_running=True) is None
+            with pytest.raises(FrontierRejected, match="audit stage"):
+                await settle_frontier(
+                    session,
+                    row,
+                    params=GeneratorCompetitionSettings().score_params(),
+                    reason="oracle attempts exhausted",
+                    now=now,
+                )
+            await session.commit()
+
+        # Automatic ticks record the hold once, leave the round unsettled, and
+        # stop re-leasing oracle jobs until an operator intervenes.
+        notes = await lane.tick(now=now)
+        assert notes and "frontier held (oracle attempts exhausted)" in notes[0]
+        assert await lane.tick(now=now + timedelta(minutes=5)) == []
+        frontier = await lane.frontier(round_index)
+        assert frontier["state"] == STATE_ORACLE_PENDING
+        assert frontier["hold_reason"] == "oracle attempts exhausted"
+        assert frontier["settled_at"] is None
+        assert await _lease_job(client) is None
+
+        # Explicit operator settlement still succeeds.
+        resp = await client.post(
+            f"{_ROUNDS_URL}/{round_index}/frontier/settle",
+            headers=_ADMIN,
+            json={
+                "reason": "operator reviewed exhausted oracle round",
+                "actor": "backroom:test",
+                "confirmation": frontier_settle_confirmation(round_index),
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["state"] == STATE_SETTLED
+        assert resp.json()["hold_reason"] is None
+
+    async def test_zero_oracle_credit_holds_instead_of_settling_no_audit_required(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An accepted oracle run that passes zero cases across every column
+        must not auto-settle vacuously as 'no audit required'."""
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_audit_cases=2)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        await lane.report_oracle(job, set())
+
+        frontier = await lane.frontier(round_index)
+        assert frontier["state"] == STATE_AUDIT_PENDING
+        assert frontier["attested"] == {}
+        assert frontier["audits"] == []
+        assert (
+            frontier["hold_reason"] == "oracle credited zero cases across every column"
+        )
+
+        # Even well past audit grace, auto-settlement refuses to settle to 0.
+        notes = await lane.tick()
+        assert (
+            notes
+            and "frontier held (oracle credited zero cases across every column)"
+            in notes[0]
+        )
+        assert await lane.tick(now=datetime.now(UTC) + timedelta(hours=48)) == []
+        frontier = await lane.frontier(round_index)
+        assert frontier["state"] == STATE_AUDIT_PENDING
+        assert frontier["settled_at"] is None
+
+        # Direct auto-settle guard refuses without operator_override=True.
+        async with session_maker() as session:
+            row = await get_round(session, round_index)
+            assert row is not None
+            with pytest.raises(FrontierRejected, match="zero cases across every"):
+                await settle_frontier(
+                    session,
+                    row,
+                    params=GeneratorCompetitionSettings().score_params(),
+                    reason="no audit required",
+                    now=datetime.now(UTC),
+                )
+
+    async def test_skipped_audit_stage_holds_and_refuses_auto_settle(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A round with attested cases and audit_cases > 0 whose audits are
+        missing cannot auto-settle without the audit stage."""
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_audit_cases=2)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        await lane.report_oracle(job, set(lane.candidates[:3]))
+
+        async with session_maker() as session:
+            row = await get_round(session, round_index)
+            assert row is not None
+            tampered = dict(row.frontier or {})
+            tampered["audits"] = {}
+            row.frontier = tampered
+            await session.commit()
+
+        frontier = await lane.frontier(round_index)
+        assert frontier["state"] == STATE_AUDIT_PENDING
+        assert frontier["hold_reason"] == "audit stage skipped"
+        notes = await lane.tick()
+        assert notes and "frontier held (audit stage skipped)" in notes[0]
+        assert (await lane.frontier(round_index))["state"] == STATE_AUDIT_PENDING
+
         async with session_maker() as session:
             row = await get_round(session, round_index)
             assert row is not None
             assert settle_reason(row, now=datetime.now(UTC)) is None
-            assert (
-                settle_reason(row, now=datetime.now(UTC) + timedelta(hours=2))
-                == "oracle timed out"
-            )
-            capped = dict(row.frontier or {})
-            capped["oracle_attempts"] = MAX_ORACLE_ATTEMPTS
-            row.frontier = capped
-            assert (
-                settle_reason(row, now=datetime.now(UTC)) == "oracle attempts exhausted"
-            )
+            with pytest.raises(FrontierRejected, match="audit stage was skipped"):
+                await settle_frontier(
+                    session,
+                    row,
+                    params=GeneratorCompetitionSettings().score_params(),
+                    reason="no audit required",
+                    now=datetime.now(UTC),
+                )
 
     async def test_no_oracle_job_without_the_scorer_mode(
         self,
@@ -1373,9 +1509,10 @@ async def test_the_settlement_sweep_locks_an_expired_oracle_ticket_first(
 ) -> None:
     """A submission can lock its ticket just before the deadline and then wait
     on the round. Past the deadline the lease no longer counts as live, so the
-    sweep may settle and expire that ticket: it must lock the ticket before
-    the round, as the submission does, or the two can deadlock."""
+    sweep holds the round and closes its stale attempt: it must lock the ticket
+    before the round, as the submission does, or the two can deadlock."""
     import ditto.api_server.generator_frontier as frontier_mod
+    import ditto.api_server.generator_rounds as rounds_mod
 
     lane = _Lane(client, session_maker)
     await lane.setup(app, monkeypatch, frontier_oracle_timeout_hours=1)
@@ -1383,8 +1520,9 @@ async def test_the_settlement_sweep_locks_an_expired_oracle_ticket_first(
     job = await lane.lease_oracle()
     deadline = datetime.fromisoformat(job["deadline"])
     order: list[str] = []
-    real_lock, real_settle = (
+    real_lock, real_expire, real_settle = (
         frontier_mod.lock_oracle_tickets,
+        rounds_mod.expire_round_tickets,
         frontier_mod.settle_frontier,
     )
 
@@ -1393,17 +1531,23 @@ async def test_the_settlement_sweep_locks_an_expired_oracle_ticket_first(
         order.append(f"tickets:{index}:{len(tickets)}")
         return tickets
 
+    async def expire(session: AsyncSession, row: Any, **kwargs: Any) -> Any:
+        order.append(f"expire:{row.round_index}")
+        return await real_expire(session, row, **kwargs)
+
     async def settle(session: AsyncSession, row: Any, **kwargs: Any) -> Any:
         order.append(f"settle:{row.round_index}")
         return await real_settle(session, row, **kwargs)
 
     monkeypatch.setattr(frontier_mod, "lock_oracle_tickets", lock)
+    monkeypatch.setattr(rounds_mod, "expire_round_tickets", expire)
     monkeypatch.setattr(frontier_mod, "settle_frontier", settle)
     # Past the ticket deadline (the lease no longer counts as live) and the
     # oracle timeout, with the ticket still ISSUED.
     notes = await lane.tick(now=deadline + timedelta(hours=2))
-    assert notes and "oracle timed out" in notes[0]
-    assert order == [f"tickets:{round_index}:1", f"settle:{round_index}"]
+    assert notes and "frontier held (oracle timed out)" in notes[0]
+    assert order == [f"tickets:{round_index}:1", f"expire:{round_index}"]
+    assert (await lane.frontier(round_index))["state"] == STATE_ORACLE_PENDING
     async with session_maker() as session:
         ticket = await session.scalar(
             select(ValidatorTicket).where(
