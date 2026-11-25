@@ -138,6 +138,14 @@ class SourceReleaseGateStatus(BaseModel):
     collector_cursor_hash: str | None = None
     collector_runtime_code_hash: str | None = None
     collector_blocked_reason: str | None = None
+    # When the cursor last moved. It moves only when a block commits (a
+    # blocked sweep writes collector_blocked_reason alone), so its age is how
+    # long the collector has been stuck while the chain kept finalizing.
+    collector_cursor_advanced_at: datetime | None = None
+    # The cursor has not moved for collector_stall_after_seconds. None when no
+    # cursor exists or the Platform predates this field: unknown, not current.
+    collector_stalled: bool | None = None
+    collector_stall_after_seconds: int | None = None
     reveal_plan_shadow: RevealPlanShadowStatus | None = None
     catch_up: CatchUpStatus | None = None
     last_payout_block: int | None = None

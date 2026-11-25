@@ -66,7 +66,9 @@ Production uses Taostats. Its configuration needs no separate archive secret:
    WebSocket connection: HTTP 401` from the first provider, while Taostats
    validator-name enrichment still refreshes, means the key is valid but its
    plan does not include archive RPC (a paid tier); the collector then falls
-   through to the throttled public archives.
+   through to the throttled public archives. `collector_stalled: true` means
+   the cursor has committed nothing for `collector_stall_after_seconds`, which
+   no amount of rereading the reason will change.
 4. Once the cursor passes a champion's completed payout, verify the exact
    agent ID and artifact SHA in the payout receipt rows, then the agent's
    public artifact status. Release time remains the verified payout timestamp
