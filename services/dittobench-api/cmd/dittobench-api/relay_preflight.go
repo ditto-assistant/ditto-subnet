@@ -544,10 +544,18 @@ func relayDegradedSince(start, end relayHealthSnapshot) error {
 				errAgentInferenceDeclined, denials,
 			)
 		}
+		if absences > 0 && costAbsences > 0 {
+			// Both gaps at once: report each by its own count, so neither is
+			// read as the other.
+			return fmt.Errorf(
+				"%w: platform sent %d terminal allowance decline(s) while this session had no authenticated budget evidence, and %d cost ceiling decline(s) with %w",
+				errBudgetEvidenceAbsent, absences, costAbsences, errCostCeilingEvidenceAbsent,
+			)
+		}
 		if absences > 0 {
 			return fmt.Errorf(
 				"%w: platform sent %d terminal allowance decline(s) while this session had no authenticated budget evidence",
-				errBudgetEvidenceAbsent, absences+costAbsences,
+				errBudgetEvidenceAbsent, absences,
 			)
 		}
 		if costAbsences > 0 {
@@ -849,6 +857,9 @@ var (
 	errRelayRecoveryExhausted       = errors.New("provider recovery exhausted")
 	errGrantDeclineEvidenceMismatch = errors.New("grant decline contradicted broker budget evidence")
 	errBudgetEvidenceAbsent         = errors.New("grant decline lacked authenticated budget evidence")
+	// errCostCeilingEvidenceAbsent marks a run that also saw request/token
+	// evidence gaps; a 4110-only gap is named by allowanceWallCost instead.
+	errCostCeilingEvidenceAbsent = errors.New("no authenticated enforcing cost ceiling")
 )
 
 // relayFinalizeFailure classifies a finalize-path relay failure.
@@ -1004,10 +1015,15 @@ func relayFinalizeFailure(err error) *store.Failure {
 		// allowlists; a 4110 without a ceiling says which evidence was missing.
 		diagnostics := map[string]any{"relay_cause": "budget_evidence_absent"}
 		var wall allowanceWall
-		if errors.As(err, &wall) && wall == allowanceWallCost {
+		switch {
+		case errors.As(err, &wall) && wall == allowanceWallCost:
 			diagnostics["wall"] = string(wall)
 			diagnostics["cost_ceiling_evidence_armed"] = false
-		} else {
+		case errors.Is(err, errCostCeilingEvidenceAbsent):
+			// Both gaps, and no single wall describes the run.
+			diagnostics["budget_evidence_armed"] = false
+			diagnostics["cost_ceiling_evidence_armed"] = false
+		default:
 			diagnostics["budget_evidence_armed"] = false
 		}
 		return &store.Failure{

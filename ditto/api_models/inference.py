@@ -71,7 +71,7 @@ class InferenceExchangeResponse(BaseModel):
     # Per-run dollar cost ceiling (ditto-subnet#3271), stamped on the grant at
     # mint. Absent from an older Platform; the broker then never confirms a
     # 4110 as the agent's.
-    cost_ceiling_microusd: Annotated[int, Field(ge=1)] | None = None
+    cost_ceiling_microusd: Annotated[int, Field(ge=1, le=(1 << 64) - 1)] | None = None
     cost_ceiling_mode: Literal["off", "shadow", "enforce"] | None = None
 
     @field_validator("expires_at")

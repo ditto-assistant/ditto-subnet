@@ -1448,6 +1448,10 @@ async def test_exchange_inference_grant_heals_half_a_cost_ceiling(
             "X-Ditto-Cost-Ceiling-Microusd": "0",
             "X-Ditto-Cost-Ceiling-Mode": "enforce",
         },
+        {
+            "X-Ditto-Cost-Ceiling-Microusd": str(1 << 64),
+            "X-Ditto-Cost-Ceiling-Mode": "enforce",
+        },
     ],
 )
 async def test_exchange_inference_grant_drops_an_unusable_cost_ceiling(
@@ -1458,6 +1462,37 @@ async def test_exchange_inference_grant_drops_an_unusable_cost_ceiling(
     assert response.cost_ceiling_microusd is None
     assert response.cost_ceiling_mode is None
     assert response.request_budget == 8192
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"cost_ceiling_microusd": 0, "cost_ceiling_mode": "enforce"},
+        {"cost_ceiling_microusd": 1 << 64, "cost_ceiling_mode": "enforce"},
+        {"cost_ceiling_microusd": True, "cost_ceiling_mode": "enforce"},
+        {"cost_ceiling_microusd": "1000", "cost_ceiling_mode": "enforce"},
+        {"cost_ceiling_microusd": 1000, "cost_ceiling_mode": "enforced"},
+        {"cost_ceiling_microusd": 1000, "cost_ceiling_mode": 3},
+    ],
+)
+async def test_exchange_inference_grant_survives_a_malformed_body_ceiling(
+    malformed: dict[str, object],
+) -> None:
+    """A bad body ceiling is healed from the headers or dropped, never fatal."""
+    healed = await _exchange_with(
+        {
+            "X-Ditto-Cost-Ceiling-Microusd": "1000",
+            "X-Ditto-Cost-Ceiling-Mode": "shadow",
+        },
+        malformed,
+    )
+    assert healed.cost_ceiling_microusd == 1000
+    assert healed.cost_ceiling_mode == "shadow"
+
+    dropped = await _exchange_with({}, malformed)
+    assert dropped.cost_ceiling_microusd is None
+    assert dropped.cost_ceiling_mode is None
+    assert dropped.request_budget == 8192
 
 
 async def test_exchange_inference_grant_json_survives_partial_headers() -> None:

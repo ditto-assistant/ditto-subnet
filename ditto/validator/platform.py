@@ -221,6 +221,8 @@ _INFERENCE_BUDGET_EVIDENCE_FIELDS = tuple(_INFERENCE_BUDGET_EVIDENCE_HEADERS)
 _COST_CEILING_HEADER = "X-Ditto-Cost-Ceiling-Microusd"
 _COST_CEILING_MODE_HEADER = "X-Ditto-Cost-Ceiling-Mode"
 _COST_CEILING_MODES = frozenset({"off", "shadow", "enforce"})
+# The broker decodes the ceiling as a uint64; anything larger cannot arm it.
+_COST_CEILING_MAX = (1 << 64) - 1
 _CODING_AUTHORING_LEASE_MAX_BYTES = 2 << 20
 _CODING_AUTHORING_FREEZE_MAX_BYTES = 64 << 10
 _CODING_GRADING_LEASE_MAX_BYTES = 2 << 20
@@ -351,9 +353,35 @@ def _cost_ceiling_evidence(response: httpx.Response) -> dict[str, object]:
         ceiling = int(raw_ceiling)
     except ValueError:
         return {}
-    if ceiling < 1:
+    if not _usable_cost_ceiling(ceiling):
         return {}
     return {"cost_ceiling_microusd": ceiling, "cost_ceiling_mode": mode}
+
+
+def _usable_cost_ceiling(value: object) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 1 <= value <= _COST_CEILING_MAX
+    )
+
+
+def _without_unusable_cost_ceiling(raw: object) -> object:
+    """Drop a malformed body ceiling field before the exchange is validated.
+
+    A bad ceiling or mode must not fail the whole exchange: the pair is then
+    healed from the headers or dropped, as for a body that omitted it.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    cleaned = dict(raw)
+    ceiling = cleaned.get("cost_ceiling_microusd")
+    if ceiling is not None and not _usable_cost_ceiling(ceiling):
+        del cleaned["cost_ceiling_microusd"]
+    mode = cleaned.get("cost_ceiling_mode")
+    if mode is not None and mode not in _COST_CEILING_MODES:
+        del cleaned["cost_ceiling_mode"]
+    return cleaned
 
 
 # Platform names the gate behind each lease-lane 204 in this header. Set in
@@ -1961,7 +1989,9 @@ class PlatformClient:
                 f"inference exchange failed: {error}"
             ) from error
         if response.status_code == 200:
-            exchange = InferenceExchangeResponse.model_validate(response.json())
+            exchange = InferenceExchangeResponse.model_validate(
+                _without_unusable_cost_ceiling(response.json())
+            )
             # JSON is authoritative. Prefer it when complete so a Cloudflare
             # hop that drops X-Ditto-* headers cannot disarm the broker.
             if (

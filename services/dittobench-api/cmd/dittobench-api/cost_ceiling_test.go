@@ -533,3 +533,35 @@ func TestTrustedChatAdvertisesNoCostSpend(t *testing.T) {
 		t.Fatalf("trusted reader's header became ledger evidence: %d", session.ledgerCostMicrousd)
 	}
 }
+
+func TestMixedEvidenceAbsencesReportEachGap(t *testing.T) {
+	start := relayHealthSnapshot{}
+	end := relayHealthSnapshot{GrantDenials: 3, BudgetEvidenceAbsences: 2, CostCeilingAbsences: 1}
+	err := relayDegradedSince(start, end)
+	if !errors.Is(err, errBudgetEvidenceAbsent) || !errors.Is(err, errCostCeilingEvidenceAbsent) {
+		t.Fatalf("mixed absences: %v", err)
+	}
+	if !strings.Contains(err.Error(), "sent 2 terminal allowance decline(s)") ||
+		!strings.Contains(err.Error(), "and 1 cost ceiling decline(s)") {
+		t.Fatalf("mixed absences conflated the counts: %v", err)
+	}
+	var wall allowanceWall
+	if errors.As(err, &wall) {
+		t.Fatalf("mixed absences named wall %q", wall)
+	}
+	failure := relayFinalizeFailure(err)
+	if failure.Kind != "validator_infrastructure" || !failure.Retryable ||
+		failure.Diagnostics["relay_cause"] != "budget_evidence_absent" ||
+		failure.Diagnostics["budget_evidence_armed"] != false ||
+		failure.Diagnostics["cost_ceiling_evidence_armed"] != false {
+		t.Fatalf("mixed absence failure=%+v", failure)
+	}
+	if _, ok := failure.Diagnostics["wall"]; ok {
+		t.Fatalf("mixed absences diagnostics named a wall: %+v", failure.Diagnostics)
+	}
+	// Budget gaps alone keep their own count and never mention the ceiling.
+	budgetOnly := relayDegradedSince(start, relayHealthSnapshot{GrantDenials: 2, BudgetEvidenceAbsences: 2})
+	if errors.Is(budgetOnly, errCostCeilingEvidenceAbsent) || !strings.Contains(budgetOnly.Error(), "sent 2 terminal") {
+		t.Fatalf("budget-only absences: %v", budgetOnly)
+	}
+}
