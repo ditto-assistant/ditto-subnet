@@ -635,8 +635,11 @@ the ceiling still completes. The run then ends as
 `sandbox_failure / inference_allowance_exhausted` (non-retryable) with
 `diagnostics.wall = "cost"`. The scorer charges this to the agent only when its
 own record of the platform's settled ledger total confirms the ceiling was
-reached; a platform refusal (`4110 COST_CEILING_EXHAUSTED`) it cannot confirm
-stays a no-fault infrastructure failure and the run is re-leased.
+reached. A refusal that arrives while sibling calls are still in flight waits
+for their settled totals before it is judged, so a harness's concurrent calls
+cannot turn a genuine ceiling into a re-lease. A platform refusal
+(`4110 COST_CEILING_EXHAUSTED`) it still cannot confirm stays a no-fault
+infrastructure failure and the run is re-leased.
 
 **v13 attribution contract.** Under `bench_version >= 13` a chat completion
 made while several cases are in flight that names no case (neither the

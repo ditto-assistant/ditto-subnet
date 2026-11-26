@@ -145,8 +145,21 @@ func (b *inferenceBroker) handleDecision(w http.ResponseWriter, r *http.Request,
 	session.mu.Lock()
 	session.decisionDispatches++
 	session.decisionPendingBytes += pending
+	beginLedgerDispatchLocked(session)
 	session.mu.Unlock()
 	response, err := b.client.Do(upstream)
+	// Decision spend is ledger cost under the run's ceiling (#3271): keep the
+	// settled total the relay reports so a 4110 on any lane can be confirmed.
+	var ledgerHeader http.Header
+	if err == nil {
+		ledgerHeader = response.Header
+	}
+	session.mu.Lock()
+	confirmed := endLedgerDispatchLocked(session, ledgerHeader)
+	session.mu.Unlock()
+	if confirmed {
+		b.notifyTerminalAgentFailure(session)
+	}
 	if err != nil {
 		// No response at all: the same no-fault relay-unavailable class the
 		// chat lane reports. A call cancelled by the harness or by run
@@ -157,12 +170,6 @@ func (b *inferenceBroker) handleDecision(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	defer response.Body.Close()
-	// Decision spend is ledger cost under the run's ceiling (#3271): keep the
-	// settled total the relay reports so a later 4110 on any lane can be
-	// confirmed, and let the harness pace itself on this lane too.
-	session.mu.Lock()
-	observeLedgerCostLocked(session, response.Header)
-	session.mu.Unlock()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, decisionResponseLimit+1))
 	if err != nil || len(responseBody) > decisionResponseLimit {
 		// The relay answered, so it may have metered the call; with the body

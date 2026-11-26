@@ -1407,6 +1407,30 @@ async def test_exchange_inference_grant_reads_the_cost_ceiling() -> None:
 
 
 @pytest.mark.parametrize(
+    "half",
+    [{"cost_ceiling_mode": "enforce"}, {"cost_ceiling_microusd": 2_500_000}],
+)
+async def test_exchange_inference_grant_heals_half_a_cost_ceiling(
+    half: dict[str, object],
+) -> None:
+    """Half a ceiling in the body comes from the headers, or not at all."""
+    healed = await _exchange_with(
+        {
+            "X-Ditto-Cost-Ceiling-Microusd": "1000",
+            "X-Ditto-Cost-Ceiling-Mode": "enforce",
+        },
+        half,
+    )
+    assert healed.cost_ceiling_microusd == 1000
+    assert healed.cost_ceiling_mode == "enforce"
+
+    dropped = await _exchange_with({}, half)
+    assert dropped.cost_ceiling_microusd is None
+    assert dropped.cost_ceiling_mode is None
+    assert dropped.request_budget == 8192
+
+
+@pytest.mark.parametrize(
     "headers",
     [
         {},

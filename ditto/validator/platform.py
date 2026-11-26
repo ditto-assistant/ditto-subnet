@@ -1964,8 +1964,20 @@ class PlatformClient:
             exchange = InferenceExchangeResponse.model_validate(response.json())
             # JSON is authoritative. Prefer it when complete so a Cloudflare
             # hop that drops X-Ditto-* headers cannot disarm the broker.
-            if exchange.cost_ceiling_mode is None:
-                exchange = exchange.model_copy(update=_cost_ceiling_evidence(response))
+            if (
+                exchange.cost_ceiling_mode is None
+                or exchange.cost_ceiling_microusd is None
+            ):
+                # The ceiling travels as a pair. A body with half of it is
+                # healed from the paired headers, or dropped whole, so the
+                # broker never receives a ceiling it can neither arm nor check.
+                exchange = exchange.model_copy(
+                    update={
+                        "cost_ceiling_microusd": None,
+                        "cost_ceiling_mode": None,
+                        **_cost_ceiling_evidence(response),
+                    }
+                )
             json_evidence = _json_budget_evidence(exchange)
             if json_evidence is not None:
                 return exchange

@@ -63,6 +63,11 @@ type relayHealthSnapshot struct {
 	// confirmed as the run's dollar cost ceiling (4110). Omitted when zero so
 	// a relay without a ceiling reports the same bytes as before.
 	CostCeilingAgentDeclines uint64 `json:"cost_ceiling_agent_declines,omitempty"`
+	// CostCeilingAbsences is the subset of grant denials where the Platform
+	// sent 4110 but this session had no authenticated enforcing cost ceiling.
+	// Counted apart from BudgetEvidenceAbsences, which is about the
+	// request/token budgets; omitted when zero.
+	CostCeilingAbsences uint64 `json:"cost_ceiling_evidence_absences,omitempty"`
 	// AgentRequestRejections counts pre-reservation 4xx: the platform refusing
 	// the harness's request bytes (schema, size, model) without reserving
 	// capacity or contacting a provider. Already fails the run via
@@ -122,6 +127,7 @@ type relayExecutionSummary struct {
 	DeclineEvidenceMismatches uint64                     `json:"decline_evidence_mismatches,omitempty"`
 	BudgetEvidenceAbsences    uint64                     `json:"budget_evidence_absences,omitempty"`
 	CostCeilingAgentDeclines  uint64                     `json:"cost_ceiling_agent_declines,omitempty"`
+	CostCeilingAbsences       uint64                     `json:"cost_ceiling_evidence_absences,omitempty"`
 	AgentRequestRejections    uint64                     `json:"agent_request_rejections,omitempty"`
 	Admission                 map[string]admissionBucket `json:"admission,omitempty"`
 	CapacityExhaustions       uint64                     `json:"capacity_exhaustions,omitempty"`
@@ -522,11 +528,15 @@ func relayDegradedSince(start, end relayHealthSnapshot) error {
 		// its grant. A platform failure can therefore never start billing a
 		// miner, no matter what else happened alongside it.
 		absences := end.BudgetEvidenceAbsences - start.BudgetEvidenceAbsences
+		costAbsences := end.CostCeilingAbsences - start.CostCeilingAbsences
 		if agentDeclines == denials {
-			if end.CostCeilingAgentDeclines > start.CostCeilingAgentDeclines {
+			// Name the cost wall only when it was the only wall spent. A run
+			// that also hit its token or request wall gets the generic line.
+			costDeclines := end.CostCeilingAgentDeclines - start.CostCeilingAgentDeclines
+			if costDeclines > 0 && costDeclines == denials {
 				return fmt.Errorf(
 					"%w: the harness spent its own cost ceiling (%w) %d time(s) during benchmark — the lease was alive and the platform healthy",
-					errAgentInferenceDeclined, allowanceWallCost, denials,
+					errAgentInferenceDeclined, allowanceWallCost, costDeclines,
 				)
 			}
 			return fmt.Errorf(
@@ -537,7 +547,13 @@ func relayDegradedSince(start, end relayHealthSnapshot) error {
 		if absences > 0 {
 			return fmt.Errorf(
 				"%w: platform sent %d terminal allowance decline(s) while this session had no authenticated budget evidence",
-				errBudgetEvidenceAbsent, absences,
+				errBudgetEvidenceAbsent, absences+costAbsences,
+			)
+		}
+		if costAbsences > 0 {
+			return fmt.Errorf(
+				"%w: platform sent %d cost ceiling decline(s) (%w) while this session had no authenticated enforcing cost ceiling",
+				errBudgetEvidenceAbsent, costAbsences, allowanceWallCost,
 			)
 		}
 		if evidenceMismatches > 0 {
@@ -615,6 +631,7 @@ func relayRestarted(start, end relayHealthSnapshot) bool {
 		end.DeclineEvidenceMismatches < start.DeclineEvidenceMismatches ||
 		end.BudgetEvidenceAbsences < start.BudgetEvidenceAbsences ||
 		end.CostCeilingAgentDeclines < start.CostCeilingAgentDeclines ||
+		end.CostCeilingAbsences < start.CostCeilingAbsences ||
 		end.AgentRequestRejections < start.AgentRequestRejections ||
 		end.CapacityExhaustions < start.CapacityExhaustions ||
 		end.RecoveryWaits < start.RecoveryWaits ||
@@ -630,7 +647,7 @@ func relayRestarted(start, end relayHealthSnapshot) bool {
 		end.DeclineEvidenceMismatches-start.DeclineEvidenceMismatches > end.GrantDenials-start.GrantDenials ||
 		end.BudgetEvidenceAbsences-start.BudgetEvidenceAbsences > end.GrantDenials-start.GrantDenials ||
 		end.CostCeilingAgentDeclines-start.CostCeilingAgentDeclines > end.GrantAgentDeclines-start.GrantAgentDeclines ||
-		(end.GrantAgentDeclines-start.GrantAgentDeclines)+(end.DeclineEvidenceMismatches-start.DeclineEvidenceMismatches)+(end.BudgetEvidenceAbsences-start.BudgetEvidenceAbsences) > end.GrantDenials-start.GrantDenials
+		(end.GrantAgentDeclines-start.GrantAgentDeclines)+(end.DeclineEvidenceMismatches-start.DeclineEvidenceMismatches)+(end.BudgetEvidenceAbsences-start.BudgetEvidenceAbsences)+(end.CostCeilingAbsences-start.CostCeilingAbsences) > end.GrantDenials-start.GrantDenials
 }
 
 func relayExecutionSince(start, end relayHealthSnapshot) (relayExecutionSummary, error) {
@@ -648,6 +665,7 @@ func relayExecutionSince(start, end relayHealthSnapshot) (relayExecutionSummary,
 		DeclineEvidenceMismatches: end.DeclineEvidenceMismatches - start.DeclineEvidenceMismatches,
 		BudgetEvidenceAbsences:    end.BudgetEvidenceAbsences - start.BudgetEvidenceAbsences,
 		CostCeilingAgentDeclines:  end.CostCeilingAgentDeclines - start.CostCeilingAgentDeclines,
+		CostCeilingAbsences:       end.CostCeilingAbsences - start.CostCeilingAbsences,
 		AgentRequestRejections:    end.AgentRequestRejections - start.AgentRequestRejections,
 		Admission:                 admissionSince(start.Admission, end.Admission),
 		CapacityExhaustions:       end.CapacityExhaustions - start.CapacityExhaustions,
@@ -895,14 +913,20 @@ func relayFinalizeFailure(err error) *store.Failure {
 		// would spend the same allowance the same way on a fresh grant. This is
 		// one of two bins in this function that costs a miner an attempt, and
 		// every condition reaching it is one the agent controls outright.
-		diagnostics := map[string]any{
-			"budget_evidence_armed": true,
-		}
 		// Which wall was spent (ditto-subnet#3271), when the decline named
 		// one. The code stays inference_allowance_exhausted on purpose: every
-		// deployed validator already treats it as terminal.
+		// deployed validator already treats it as terminal. A cost wall is
+		// confirmed by the cost ceiling, not the request/token budgets, so it
+		// names that evidence instead.
+		diagnostics := map[string]any{}
 		var wall allowanceWall
-		if errors.As(err, &wall) && wall != "" {
+		hasWall := errors.As(err, &wall) && wall != ""
+		if hasWall && wall == allowanceWallCost {
+			diagnostics["cost_ceiling_evidence_armed"] = true
+		} else {
+			diagnostics["budget_evidence_armed"] = true
+		}
+		if hasWall {
 			diagnostics["wall"] = string(wall)
 		}
 		return &store.Failure{
@@ -976,14 +1000,21 @@ func relayFinalizeFailure(err error) *store.Failure {
 			},
 		}
 	case errors.Is(err, errBudgetEvidenceAbsent):
+		// The relay cause stays budget_evidence_absent, the one every validator
+		// allowlists; a 4110 without a ceiling says which evidence was missing.
+		diagnostics := map[string]any{"relay_cause": "budget_evidence_absent"}
+		var wall allowanceWall
+		if errors.As(err, &wall) && wall == allowanceWallCost {
+			diagnostics["wall"] = string(wall)
+			diagnostics["cost_ceiling_evidence_armed"] = false
+		} else {
+			diagnostics["budget_evidence_armed"] = false
+		}
 		return &store.Failure{
-			Kind:      "validator_infrastructure",
-			Code:      "model_relay_unavailable",
-			Retryable: true,
-			Diagnostics: map[string]any{
-				"relay_cause":           "budget_evidence_absent",
-				"budget_evidence_armed": false,
-			},
+			Kind:        "validator_infrastructure",
+			Code:        "model_relay_unavailable",
+			Retryable:   true,
+			Diagnostics: diagnostics,
 		}
 	default:
 		return &store.Failure{

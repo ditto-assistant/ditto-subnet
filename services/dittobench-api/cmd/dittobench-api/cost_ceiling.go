@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -36,6 +37,17 @@ func validCostCeilingMode(mode string) bool {
 	default:
 		return false
 	}
+}
+
+// validCostCeilingActivation accepts a ceiling with a known mode, or neither
+// (an older Platform, or no ceiling stamped). A ceiling without a mode, or a
+// mode without a ceiling, is a broken exchange: the broker could neither arm
+// nor confirm it, so the activation is refused rather than run unguarded.
+func validCostCeilingActivation(ceiling uint64, mode string) bool {
+	if !validCostCeilingMode(mode) {
+		return false
+	}
+	return (ceiling > 0) == (mode != "")
 }
 
 // costCeilingArmedLocked reports whether the grant carries a ceiling the
@@ -75,6 +87,81 @@ func observeLedgerCostLocked(session *brokerSession, header http.Header) {
 	if value > session.ledgerCostMicrousd {
 		session.ledgerCostMicrousd = value
 	}
+}
+
+// beginLedgerDispatchLocked counts one signed Platform call (any lane) whose
+// response, and so whose ledger header, the broker has not yet read. Pair it
+// with exactly one endLedgerDispatchLocked.
+func beginLedgerDispatchLocked(session *brokerSession) {
+	session.ledgerDispatchesInFlight++
+}
+
+// endLedgerDispatchLocked books one Platform call's response: its ledger
+// header when there is one (nil for a transport failure), then any 4110 that
+// was waiting on it. It reports whether that settled a pending 4110 as the
+// agent's, so the caller notifies the terminal failure once it has released
+// the session lock.
+func endLedgerDispatchLocked(session *brokerSession, header http.Header) (agentDecline bool) {
+	if header != nil {
+		observeLedgerCostLocked(session, header)
+	}
+	if session.ledgerDispatchesInFlight > 0 {
+		session.ledgerDispatchesInFlight--
+	}
+	return reconcileCostCeilingDeclinesLocked(session)
+}
+
+// reconcileCostCeilingDeclinesLocked settles the 4110s that arrived before
+// the broker could confirm them. Calls settle at the Platform before their
+// responses reach the broker, so with siblings in flight a genuine 4110 can
+// arrive while the observed ledger total still trails the ceiling. Such a
+// decline waits, counted only in grantDenials, until a sibling's ledger header
+// proves the ceiling spent (agent fault) or the last sibling has answered
+// without proving it (evidence mismatch, platform fault). It reports whether
+// declines were confirmed as the agent's.
+func reconcileCostCeilingDeclinesLocked(session *brokerSession) bool {
+	pending := session.costCeilingPendingDeclines
+	if pending == 0 {
+		return false
+	}
+	if costCeilingSpentLocked(session) {
+		session.costCeilingPendingDeclines = 0
+		session.grantAgentDeclines += pending
+		session.costCeilingAgentDeclines += pending
+		noteAgentDeclineWallLocked(session, platformDeclineCostCeilingExhausted)
+		return true
+	}
+	if session.ledgerDispatchesInFlight == 0 {
+		session.costCeilingPendingDeclines = 0
+		session.declineEvidenceMismatches += pending
+	}
+	return false
+}
+
+// attributeCostCeilingDeclineLocked classifies one 4110. The ceiling spans
+// every lane, so its evidence is the shared settled ledger total, never either
+// lane's request/token budgets, and a missing ceiling is counted apart from
+// missing budgets.
+func attributeCostCeilingDeclineLocked(session *brokerSession) (agentDecline bool, attribution string) {
+	if !sessionHasCostEvidenceLocked(session) {
+		session.costCeilingAbsences++
+		return false, "platform fault: no authenticated enforcing cost ceiling; will not charge the miner"
+	}
+	if costCeilingSpentLocked(session) {
+		session.grantAgentDeclines++
+		session.costCeilingAgentDeclines++
+		noteAgentDeclineWallLocked(session, platformDeclineCostCeilingExhausted)
+		return true, "AGENT fault: the harness spent its own cost ceiling"
+	}
+	if session.ledgerDispatchesInFlight > 0 {
+		session.costCeilingPendingDeclines++
+		return false, fmt.Sprintf(
+			"pending: settled ledger %d/%d microusd; waiting on %d in-flight call(s) to settle before charging anyone",
+			session.ledgerCostMicrousd, session.costCeilingMicrousd, session.ledgerDispatchesInFlight,
+		)
+	}
+	session.declineEvidenceMismatches++
+	return false, "platform fault: cost ceiling code contradicted the broker's settled ledger evidence"
 }
 
 // setHarnessCostHeadersLocked lets a harness pace itself against the run's

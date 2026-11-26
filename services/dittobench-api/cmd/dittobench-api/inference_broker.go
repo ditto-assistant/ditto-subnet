@@ -329,6 +329,19 @@ type brokerSession struct {
 	// costCeilingAgentDeclines is the subset of grantAgentDeclines confirmed
 	// as the cost ceiling (4110), so finalize can name the wall it spent.
 	costCeilingAgentDeclines uint64
+	// costCeilingAbsences counts 4110s received while this session had no
+	// authenticated enforcing ceiling. Kept apart from budgetEvidenceAbsences
+	// so a cost-ceiling rollout gap is not reported as missing request/token
+	// budgets.
+	costCeilingAbsences uint64
+	// ledgerDispatchesInFlight counts signed Platform calls on any lane whose
+	// response, and so whose ledger header, has not been read yet. A 4110 that
+	// arrives ahead of that evidence waits in costCeilingPendingDeclines rather
+	// than being judged on a stale total (reconcileCostCeilingDeclinesLocked).
+	ledgerDispatchesInFlight uint64
+	// costCeilingPendingDeclines are 4110s counted in grantDenials but not yet
+	// attributed either way.
+	costCeilingPendingDeclines uint64
 	// agentDeclineWall is the wall of the first confirmed agent decline.
 	agentDeclineWall allowanceWall
 	// budgetEvidenceAbsences counts terminal allowance codes received while
@@ -1132,20 +1145,7 @@ func attributePlatformDeclineLocked(session *brokerSession, code int, embedding 
 		return false, attribution
 	}
 	if code == platformDeclineCostCeilingExhausted {
-		// The ceiling spans both lanes, so its evidence is the shared ledger
-		// total, not either lane's request/token budgets.
-		if !sessionHasCostEvidenceLocked(session) {
-			session.budgetEvidenceAbsences++
-			return false, "platform fault: no authenticated enforcing cost ceiling; will not charge the miner"
-		}
-		if costCeilingSpentLocked(session) {
-			session.grantAgentDeclines++
-			session.costCeilingAgentDeclines++
-			noteAgentDeclineWallLocked(session, code)
-			return true, "AGENT fault: the harness spent its own cost ceiling"
-		}
-		session.declineEvidenceMismatches++
-		return false, "platform fault: cost ceiling code contradicted the broker's settled ledger evidence"
+		return attributeCostCeilingDeclineLocked(session)
 	}
 	if !sessionHasBudgetEvidenceLocked(session, embedding) {
 		session.budgetEvidenceAbsences++
@@ -2712,7 +2712,7 @@ func (b *inferenceBroker) activate(w http.ResponseWriter, r *http.Request) {
 		len(activation.Bearer) > 4096 || grantErr != nil || activation.Generation < 1 ||
 		!activation.ExpiresAt.After(now) || activation.ExpiresAt.After(now.Add(brokerMaximumSessionTTL)) ||
 		b.platformProxyURL == "" || transportURL == "" || activation.ProxyURL != b.platformProxyURL ||
-		!validBudgetEvidence || !validCostCeilingMode(activation.CostCeilingMode) ||
+		!validBudgetEvidence || !validCostCeilingActivation(activation.CostCeilingMicrousd, activation.CostCeilingMode) ||
 		(hasRouteIdentity && (!validBrokerTicketIdentity(ticketIdentity, now) ||
 			activation.ExpiresAt.After(activation.TicketDeadline) || activation.Provider == "" ||
 			activation.ProfileRevision == "" || activation.Model == "")) {
@@ -3760,6 +3760,8 @@ func (b *inferenceBroker) handleEmbeddingWithLease(w http.ResponseWriter, r *htt
 	}
 
 	var decoded embeddingResponse
+	platformEmbedding := (ablationScope != nil && ablationScope.lane == ablation.LaneOrdinary) ||
+		usesPlatformEmbedding(benchVersion)
 	if ablationScope != nil && ablationScope.lane == ablation.LaneOrdinary {
 		// The ordinary confirmation trace is still provider-backed.  Its
 		// response is then replayed by the paid-free intervention round; only
@@ -3856,7 +3858,10 @@ func (b *inferenceBroker) handleEmbeddingWithLease(w http.ResponseWriter, r *htt
 		snapshot.EmbeddingDelivered++
 		session.caseSnapshots[caseGeneration] = snapshot
 	}
-	setHarnessCostHeadersLocked(session, w.Header())
+	if platformEmbedding {
+		// A local embedding never reads the ledger, so it advertises nothing.
+		setHarnessCostHeadersLocked(session, w.Header())
+	}
 	session.mu.Unlock()
 	writeJSON(w, http.StatusOK, decoded)
 }
@@ -4011,16 +4016,24 @@ func (b *inferenceBroker) forwardPlatformEmbedding(
 		session.caseSnapshots[caseGeneration] = snapshot
 	}
 	session.embeddingChargeUpperBound += uint64(len(body))
+	beginLedgerDispatchLocked(session)
 	session.mu.Unlock()
 	response, err := b.client.Do(upstream)
+	var ledgerHeader http.Header
+	if err == nil {
+		ledgerHeader = response.Header
+	}
+	session.mu.Lock()
+	confirmed := endLedgerDispatchLocked(session, ledgerHeader)
+	session.mu.Unlock()
+	if confirmed {
+		b.notifyTerminalAgentFailure(session)
+	}
 	if err != nil {
 		// No response at all: transport/connection fault, the transient class.
 		return embeddingResponse{}, platformEmbeddingTransient{err: err}
 	}
 	defer response.Body.Close()
-	session.mu.Lock()
-	observeLedgerCostLocked(session, response.Header)
-	session.mu.Unlock()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, embeddingResponseLimit+1))
 	atCapacity := err == nil && platformEmbeddingIsAtCapacity(response)
 	if err != nil || len(responseBody) > embeddingResponseLimit || response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -4220,6 +4233,7 @@ func (b *inferenceBroker) health(w http.ResponseWriter, session *brokerSession) 
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
 		BudgetEvidenceAbsences:    session.budgetEvidenceAbsences,
 		CostCeilingAgentDeclines:  session.costCeilingAgentDeclines,
+		CostCeilingAbsences:       session.costCeilingAbsences,
 		AgentRequestRejections:    session.agentRequestRejections,
 		Admission:                 cloneAdmission(session.admission),
 		CapacityExhaustions:       session.capacityExhaustions,
@@ -4457,6 +4471,7 @@ func (b *inferenceBroker) proxy(
 			session.mu.Lock()
 			session.chatDispatches++
 			session.chatChargeUpperBound += currentChargeUpperBound
+			beginLedgerDispatchLocked(session)
 			session.mu.Unlock()
 		}
 		session.mu.Lock()
@@ -4472,6 +4487,20 @@ func (b *inferenceBroker) proxy(
 			resp, requestErr = b.client.Do(req)
 		}
 		totalLatency += uint64(time.Since(started).Milliseconds())
+		if legacyGateway == "" && trustedChatHandler == nil {
+			// Book the settled ledger total the Platform reported, including on
+			// a decline, before anything else reads it (#3271).
+			var ledgerHeader http.Header
+			if requestErr == nil {
+				ledgerHeader = resp.Header
+			}
+			session.mu.Lock()
+			confirmed := endLedgerDispatchLocked(session, ledgerHeader)
+			session.mu.Unlock()
+			if confirmed {
+				b.notifyTerminalAgentFailure(session)
+			}
+		}
 		if requestErr != nil {
 			if requestCtx.Err() != nil {
 				return
@@ -4488,11 +4517,6 @@ func (b *inferenceBroker) proxy(
 			session.mu.Unlock()
 		}
 		responseFailureClass = resp.Header.Get(minerRecoverableFailureHeader)
-		if legacyGateway == "" && trustedChatHandler == nil {
-			session.mu.Lock()
-			observeLedgerCostLocked(session, resp.Header)
-			session.mu.Unlock()
-		}
 		candidateBody, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
 		_ = resp.Body.Close()
 		if readErr != nil || len(candidateBody) > 16<<20 {
@@ -4718,9 +4742,13 @@ func (b *inferenceBroker) proxy(
 			return
 		}
 	}
-	session.mu.Lock()
-	setHarnessCostHeadersLocked(session, w.Header())
-	session.mu.Unlock()
+	if legacyGateway == "" && trustedChatHandler == nil {
+		// Only the Platform path observes the ledger; a trusted reader or a
+		// legacy gateway would advertise a stale spend.
+		session.mu.Lock()
+		setHarnessCostHeadersLocked(session, w.Header())
+		session.mu.Unlock()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
@@ -4788,6 +4816,7 @@ func (b *inferenceBroker) snapshot(id string) (relayHealthSnapshot, error) {
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
 		BudgetEvidenceAbsences:    session.budgetEvidenceAbsences,
 		CostCeilingAgentDeclines:  session.costCeilingAgentDeclines,
+		CostCeilingAbsences:       session.costCeilingAbsences,
 		AgentRequestRejections:    session.agentRequestRejections,
 		Admission:                 cloneAdmission(session.admission),
 		CapacityExhaustions:       session.capacityExhaustions,
