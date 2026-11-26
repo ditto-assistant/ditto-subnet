@@ -381,6 +381,45 @@ async def test_shadow_admits_and_counts_would_decline(session: AsyncSession) -> 
 
 
 @pytest.mark.asyncio
+async def test_shadow_counts_nothing_when_a_later_gate_declines(
+    session: AsyncSession,
+) -> None:
+    """A rolled-back admission leaves neither the grant nor the metric counted."""
+    config = _ceiling_config(5, "shadow")
+    async with session.begin():
+        _ticket, grant, bearer, now = await _live_grant(session, config)
+        assert (
+            await _chat(session, grant=grant, bearer=bearer, now=now, config=config)
+            is None
+        )
+        grant_id = grant.grant_id
+    chat_before = _would_decline("chat")
+    with pytest.raises(RuntimeError):
+        async with session.begin():
+            grant = await session.get(InferenceGrant, grant_id)
+            assert grant is not None
+            accepted = await begin_inference_request(
+                session,
+                grant_id=grant_id,
+                nonce=uuid4(),
+                bearer=bearer,
+                model=_CHAT_MODEL,
+                token_reservation=250,
+                now=now,
+                config=config,
+            )
+            assert not isinstance(accepted, InferenceDecline)
+            assert grant.cost_ceiling_would_decline == 1
+            # The endpoint raises its decline or error inside the transaction.
+            raise RuntimeError("a later gate refused the request")
+    async with session.begin():
+        grant = await session.get(InferenceGrant, grant_id, populate_existing=True)
+        assert grant is not None
+        assert grant.cost_ceiling_would_decline == 0
+    assert _would_decline("chat") == chat_before
+
+
+@pytest.mark.asyncio
 async def test_null_ceiling_has_no_effect(session: AsyncSession) -> None:
     config = _ceiling_config(None, "enforce")
     async with session.begin():

@@ -204,6 +204,25 @@ func TestCostCeilingShadowAdmitsAndCounts(t *testing.T) {
 	}
 }
 
+// A shadow would-decline is counted only for an admission that commits. When
+// a later gate (here per-ticket concurrency) declines the same request, the
+// rollback discards the grant counter, and the metric must not move either.
+func TestCostCeilingShadowCountsNothingWhenALaterGateDeclines(t *testing.T) {
+	f := newCeilingFixture(t)
+	f.stampCostCeiling(t, 10, "shadow")
+	testutil.SeedSQL(t, f.pool,
+		`UPDATE inference_grants SET ledger_cost_microusd = 50, active_requests = 100000 WHERE grant_id = $1`, f.grantID)
+	before := counterValue(t, metrics.CostCeilingWouldDecline.WithLabelValues(kindChat))
+
+	expectEnvelope(t, f.chatCall(t), 503, relayhttp.CodeDeclineAtCapacity, "inference lane is at capacity")
+	if g := f.readLedger(t); g.wouldDecline != 0 {
+		t.Fatalf("the rolled-back admission must not count: %+v", g)
+	}
+	if got := counterValue(t, metrics.CostCeilingWouldDecline.WithLabelValues(kindChat)) - before; got != 0 {
+		t.Fatalf("would-decline metric must match the committed count, delta %v", got)
+	}
+}
+
 func TestCostCeilingEnforceCrossingCallFinishesThenBothLanes4110(t *testing.T) {
 	f := newCeilingFixture(t)
 	f.stampCostCeiling(t, 30, "enforce")

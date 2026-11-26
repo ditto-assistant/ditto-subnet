@@ -117,6 +117,21 @@ type beginResult struct {
 	// ticketPurpose is the locked ticket's purpose ("" when the row was
 	// missing). It selects only the scored provider-routing canary.
 	ticketPurpose string
+	// costCeilingWouldDecline: a shadow cost ceiling would have refused this
+	// admission. The grant counter rides the admission transaction; the
+	// Prometheus counter is published by recordAdmissionCommitted only after
+	// that transaction commits, so a later gate's decline or a failed commit
+	// cannot leave the two counts apart.
+	costCeilingWouldDecline bool
+	kind                    string
+}
+
+// recordAdmissionCommitted publishes the metrics that must agree with the
+// committed admission transaction. Call it right after tx.Commit succeeds.
+func (r *beginResult) recordAdmissionCommitted() {
+	if r != nil && r.costCeilingWouldDecline {
+		metrics.CostCeilingWouldDecline.WithLabelValues(r.kind).Inc()
+	}
 }
 
 // ticketPurposeBenchmarkCanary mirrors TicketPurpose.BENCHMARK_CANARY.
@@ -366,6 +381,7 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	// is the settle transaction, as for the token wall), so both lanes are
 	// refused after. Shadow admits and counts what enforce would have
 	// refused. Off mode or a null ceiling never enters this branch.
+	wouldDecline := false
 	if costCeilingReached(&grant) {
 		if grant.CostCeilingMode == costCeilingModeEnforce {
 			if err := q.MarkInferenceGrantExhausted(ctx, postgres.MarkInferenceGrantExhaustedParams{
@@ -383,7 +399,7 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 			return nil, nil, err
 		}
 		grant.CostCeilingWouldDecline++
-		metrics.CostCeilingWouldDecline.WithLabelValues(p.kind).Inc()
+		wouldDecline = true
 	}
 	// Step 14: exact per-ticket concurrency (protected by the grant row
 	// lock).
@@ -535,5 +551,8 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	if ticket != nil {
 		purpose = ticket.Purpose
 	}
-	return &beginResult{grant: grant, request: request, ticketPurpose: purpose}, nil, nil
+	return &beginResult{
+		grant: grant, request: request, ticketPurpose: purpose,
+		costCeilingWouldDecline: wouldDecline, kind: p.kind,
+	}, nil, nil
 }

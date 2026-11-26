@@ -12,8 +12,9 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, event, func, or_, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.inference_routing import (
@@ -697,6 +698,35 @@ def _first_exhausted_scope(
     return None
 
 
+_WOULD_DECLINE_INFO_KEY = "ditto.cost_ceiling_would_decline"
+
+
+def _count_would_decline_on_commit(session: AsyncSession, request_kind: str) -> None:
+    """Publish one shadow would-decline when this admission commits.
+
+    The grant counter rides the admission transaction. A later gate's decline
+    raises inside the caller's ``session.begin()`` and rolls it back, so the
+    Prometheus counter waits for the root commit too, or the two counts drift.
+    """
+    session.info.setdefault(_WOULD_DECLINE_INFO_KEY, []).append(request_kind)
+
+
+@event.listens_for(Session, "after_commit")
+def _publish_would_declines(session: Session) -> None:
+    # Fires for a SAVEPOINT release too (the nonce insert); only the root
+    # commit makes the admission durable.
+    if session.in_nested_transaction():
+        return
+    for lane in session.info.pop(_WOULD_DECLINE_INFO_KEY, ()):
+        INFERENCE_COST_CEILING_WOULD_DECLINE.labels(lane=lane).inc()
+
+
+@event.listens_for(Session, "after_soft_rollback")
+def _discard_would_declines(session: Session, previous_transaction: object) -> None:
+    if getattr(previous_transaction, "parent", None) is None:
+        session.info.pop(_WOULD_DECLINE_INFO_KEY, None)
+
+
 async def begin_inference_request(
     session: AsyncSession,
     *,
@@ -932,7 +962,7 @@ async def begin_inference_request(
             grant.status = "exhausted"
             return InferenceDecline.COST_CEILING_EXHAUSTED
         grant.cost_ceiling_would_decline = int(grant.cost_ceiling_would_decline) + 1
-        INFERENCE_COST_CEILING_WOULD_DECLINE.labels(lane=request_kind).inc()
+        _count_would_decline_on_commit(session, request_kind)
     active_requests = (
         grant.active_requests
         if request_kind == "chat"

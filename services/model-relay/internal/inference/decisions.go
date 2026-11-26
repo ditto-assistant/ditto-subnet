@@ -303,6 +303,7 @@ func (d *Deps) handleDecisions(w http.ResponseWriter, r *http.Request) {
 		relayhttp.WriteInternalError(w, r)
 		return
 	}
+	result.recordAdmissionCommitted()
 	admissionOpen = false
 
 	outcome := &settleOutcome{

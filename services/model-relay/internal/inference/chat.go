@@ -316,6 +316,7 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		relayhttp.WriteInternalError(w, r)
 		return
 	}
+	result.recordAdmissionCommitted()
 	admissionOpen = false
 
 	reservedGrant := result.grant
