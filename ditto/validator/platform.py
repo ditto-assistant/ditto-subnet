@@ -218,6 +218,11 @@ _INFERENCE_BUDGET_EVIDENCE_HEADERS = {
     "max_output_tokens": "X-Ditto-Max-Output-Tokens",
 }
 _INFERENCE_BUDGET_EVIDENCE_FIELDS = tuple(_INFERENCE_BUDGET_EVIDENCE_HEADERS)
+_COST_CEILING_HEADER = "X-Ditto-Cost-Ceiling-Microusd"
+_COST_CEILING_MODE_HEADER = "X-Ditto-Cost-Ceiling-Mode"
+_COST_CEILING_MODES = frozenset({"off", "shadow", "enforce"})
+# The broker decodes the ceiling as a uint64; anything larger cannot arm it.
+_COST_CEILING_MAX = (1 << 64) - 1
 _CODING_AUTHORING_LEASE_MAX_BYTES = 2 << 20
 _CODING_AUTHORING_FREEZE_MAX_BYTES = 64 << 10
 _CODING_GRADING_LEASE_MAX_BYTES = 2 << 20
@@ -331,6 +336,55 @@ def _inference_budget_evidence(response: httpx.Response) -> dict[str, int]:
             "inference exchange returned invalid budget evidence"
         )
     return evidence
+
+
+def _cost_ceiling_evidence(response: httpx.Response) -> dict[str, object]:
+    """Read the cost ceiling from exchange headers when the body omitted it.
+
+    Both headers or neither. Unlike the request/token budgets, a missing or
+    malformed ceiling is not a broken exchange: without it the broker simply
+    never confirms a 4110 as the agent's, which is the safe default.
+    """
+    raw_ceiling = response.headers.get(_COST_CEILING_HEADER)
+    mode = response.headers.get(_COST_CEILING_MODE_HEADER)
+    if raw_ceiling is None or mode not in _COST_CEILING_MODES:
+        return {}
+    try:
+        ceiling = int(raw_ceiling)
+    except ValueError:
+        return {}
+    if not _usable_cost_ceiling(ceiling):
+        return {}
+    return {"cost_ceiling_microusd": ceiling, "cost_ceiling_mode": mode}
+
+
+def _usable_cost_ceiling(value: object) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 1 <= value <= _COST_CEILING_MAX
+    )
+
+
+def _without_unusable_cost_ceiling(raw: object) -> object:
+    """Drop a malformed body ceiling field before the exchange is validated.
+
+    A bad ceiling or mode must not fail the whole exchange: the pair is then
+    healed from the headers or dropped, as for a body that omitted it.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    cleaned = dict(raw)
+    ceiling = cleaned.get("cost_ceiling_microusd")
+    if ceiling is not None and not _usable_cost_ceiling(ceiling):
+        del cleaned["cost_ceiling_microusd"]
+    mode = cleaned.get("cost_ceiling_mode")
+    # A JSON array or object is unhashable, so check the type first.
+    if mode is not None and (
+        not isinstance(mode, str) or mode not in _COST_CEILING_MODES
+    ):
+        del cleaned["cost_ceiling_mode"]
+    return cleaned
 
 
 # Platform names the gate behind each lease-lane 204 in this header. Set in
@@ -1938,9 +1992,25 @@ class PlatformClient:
                 f"inference exchange failed: {error}"
             ) from error
         if response.status_code == 200:
-            exchange = InferenceExchangeResponse.model_validate(response.json())
+            exchange = InferenceExchangeResponse.model_validate(
+                _without_unusable_cost_ceiling(response.json())
+            )
             # JSON is authoritative. Prefer it when complete so a Cloudflare
             # hop that drops X-Ditto-* headers cannot disarm the broker.
+            if (
+                exchange.cost_ceiling_mode is None
+                or exchange.cost_ceiling_microusd is None
+            ):
+                # The ceiling travels as a pair. A body with half of it is
+                # healed from the paired headers, or dropped whole, so the
+                # broker never receives a ceiling it can neither arm nor check.
+                exchange = exchange.model_copy(
+                    update={
+                        "cost_ceiling_microusd": None,
+                        "cost_ceiling_mode": None,
+                        **_cost_ceiling_evidence(response),
+                    }
+                )
             json_evidence = _json_budget_evidence(exchange)
             if json_evidence is not None:
                 return exchange

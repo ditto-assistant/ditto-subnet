@@ -458,7 +458,7 @@ func TestBudgetDeclineIsAttributedToTheAgentEndToEnd(t *testing.T) {
 
 				broker := newInferenceBroker(1)
 				terminalFailures := 0
-				broker.terminalAgentFailure = func(string) { terminalFailures++ }
+				broker.terminalAgentFailure = func(string, allowanceWall) { terminalFailures++ }
 				broker.sleep = func(context.Context, time.Duration) error { return nil }
 				proxyURL := configureBrokerUpstream(broker, upstream)
 				prepared := prepareBrokerSession(t, broker)
@@ -552,7 +552,7 @@ func TestImpossibleBudgetDeclineKeepsTheMinerAttempt(t *testing.T) {
 
 			broker := newInferenceBroker(1)
 			terminalFailures := 0
-			broker.terminalAgentFailure = func(string) { terminalFailures++ }
+			broker.terminalAgentFailure = func(string, allowanceWall) { terminalFailures++ }
 			proxyURL := configureBrokerUpstream(broker, upstream)
 			prepared := prepareBrokerSession(t, broker)
 			activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel, brokerActivation{
@@ -720,7 +720,7 @@ func TestFalseTokenDeclineAfterHealthySpendKeepsTheMinerAttempt(t *testing.T) {
 
 	broker := newInferenceBroker(1)
 	terminalFailures := 0
-	broker.terminalAgentFailure = func(string) { terminalFailures++ }
+	broker.terminalAgentFailure = func(string, allowanceWall) { terminalFailures++ }
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel, brokerActivation{
@@ -786,7 +786,7 @@ func TestMissingBudgetEvidenceKeepsTheMinerAttempt(t *testing.T) {
 
 	broker := newInferenceBroker(1)
 	terminalFailures := 0
-	broker.terminalAgentFailure = func(string) { terminalFailures++ }
+	broker.terminalAgentFailure = func(string, allowanceWall) { terminalFailures++ }
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
@@ -869,7 +869,7 @@ func TestOutstandingSignedDispatchKeepsConcurrentExhaustionAgentAttributed(t *te
 
 			broker := newInferenceBroker(1, 2)
 			terminalFailures := 0
-			broker.terminalAgentFailure = func(string) { terminalFailures++ }
+			broker.terminalAgentFailure = func(string, allowanceWall) { terminalFailures++ }
 			proxyURL := configureBrokerUpstream(broker, upstream)
 			prepared := prepareBrokerSession(t, broker)
 			activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel, brokerActivation{
@@ -936,7 +936,7 @@ func TestResponseLostDispatchRemainsInBudgetEvidence(t *testing.T) {
 	broker := newInferenceBroker(1)
 	broker.sleep = func(context.Context, time.Duration) error { return nil }
 	terminalFailures := 0
-	broker.terminalAgentFailure = func(string) { terminalFailures++ }
+	broker.terminalAgentFailure = func(string, allowanceWall) { terminalFailures++ }
 	placeholder := httptest.NewTLSServer(http.NotFoundHandler())
 	defer placeholder.Close()
 	proxyURL := configureBrokerUpstream(broker, placeholder)
@@ -985,7 +985,7 @@ func TestResponseLostDispatchRemainsInBudgetEvidence(t *testing.T) {
 func TestTerminalAgentFailureNotificationIsOncePerRun(t *testing.T) {
 	broker := newInferenceBroker(1)
 	notifications := 0
-	broker.terminalAgentFailure = func(runID string) {
+	broker.terminalAgentFailure = func(runID string, _ allowanceWall) {
 		if runID != "run-1" {
 			t.Fatalf("notified run %q, want run-1", runID)
 		}
@@ -1247,7 +1247,7 @@ func TestEmbeddingDeclineAfterChatTokenWallIsTheAgentsAllowance(t *testing.T) {
 
 	broker := newInferenceBroker(1)
 	terminalFailures := 0
-	broker.terminalAgentFailure = func(string) { terminalFailures++ }
+	broker.terminalAgentFailure = func(string, allowanceWall) { terminalFailures++ }
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel, brokerActivation{
