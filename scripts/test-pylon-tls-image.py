@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import shutil
 import ssl
 import subprocess
 import tempfile
@@ -16,6 +17,23 @@ from anyio.streams.tls import TLSStream
 
 
 class TLSImageTests(unittest.IsolatedAsyncioTestCase):
+    def test_no_openssh_client_in_runtime(self):
+        # CVE-2026-60002 is in the SSH client; keep Git for HTTPS use.
+        for tool in ("ssh", "scp", "sftp"):
+            with self.subTest(tool=tool):
+                self.assertIsNone(shutil.which(tool))
+        package = subprocess.run(
+            ["dpkg-query", "-W", "-f=${Status}", "openssh-client"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotIn("install ok installed", package.stdout)
+        self.assertIn(
+            "git version", subprocess.check_output(["git", "--version"], text=True)
+        )
+        self.assertEqual(subprocess.check_output(["dpkg", "--audit"], text=True), "")
+
     def test_uv_tools(self):
         for tool in ("uv", "uvx"):
             with self.subTest(tool=tool):
