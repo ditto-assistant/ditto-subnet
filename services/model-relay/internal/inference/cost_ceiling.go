@@ -116,6 +116,13 @@ func ledgerCostMicrousd(g *postgres.InferenceGrant, kind string, promptTokens, c
 // grant-stamped catalog price (replacing the hard-coded 0.004), banker's
 // rounding, provider cost never trusted. With the default stamp the result is
 // bit-for-bit what the relay booked before #3271.
+// A non-finite or negative stamp books zero and an out-of-range product
+// clamps, exactly as the ledger does for the same stamp, so the provider-bill
+// column can never go negative or wrap.
 func embeddingCatalogCostMicrousd(g *postgres.InferenceGrant, promptTokens int64) int64 {
-	return int64(math.RoundToEven(float64(promptTokens) * g.EmbeddingPriceMicrousdPerToken))
+	price, ok := finitePrice(g.EmbeddingPriceMicrousdPerToken, true)
+	if !ok {
+		return 0
+	}
+	return clampLedger(float64(max64(0, promptTokens)) * price)
 }

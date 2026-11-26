@@ -58,6 +58,24 @@ func TestLedgerCostClampsMissingAndHugeUsage(t *testing.T) {
 	}
 }
 
+func TestEmbeddingCatalogCostNeverGoesNegativeOrWraps(t *testing.T) {
+	g := pricedGrant()
+	for _, price := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), -0.004} {
+		g.EmbeddingPriceMicrousdPerToken = price
+		if got := embeddingCatalogCostMicrousd(g, 1000); got != 0 {
+			t.Fatalf("price %v must book zero, got %d", price, got)
+		}
+	}
+	g.EmbeddingPriceMicrousdPerToken = 1e12
+	if got := embeddingCatalogCostMicrousd(g, math.MaxInt64); got != maxLedgerCostMicrousd {
+		t.Fatalf("an out-of-range product must clamp, got %d", got)
+	}
+	g.EmbeddingPriceMicrousdPerToken = 0.004
+	if got := embeddingCatalogCostMicrousd(g, -5); got != 0 {
+		t.Fatalf("negative tokens must book zero, got %d", got)
+	}
+}
+
 func TestEmbeddingDefaultStampIsTheLegacyCatalogPrice(t *testing.T) {
 	g := pricedGrant()
 	for tokens := int64(0); tokens < 5000; tokens++ {
