@@ -396,11 +396,31 @@ class JobResponse(BaseModel):
             "seeds; retries by the same validator retain the same seed.",
         ),
     ] = None
-    seed_scope: Literal["agent", "validator"] = Field(
+    seed_scope: Literal["agent", "validator", "season"] = Field(
         default="agent",
         description="Inputs used by the on-chain seed derivation. Validator "
-        "scope additionally binds the ticket holder's hotkey.",
+        "scope additionally binds the ticket holder's hotkey. Season scope "
+        "(protocol 35, title duels) is a dueling season's shared seed: "
+        "``crn_seed([seed_anchor_agent_id], bench_version, seed_index, "
+        "dataset_seed_block_hash)``. Issued only to protocol-35 validators.",
     )
+    seed_anchor_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description="Season scope: champion the season's family is anchored on.",
+        ),
+    ] = None
+    seed_index: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            exclude_if=lambda value: value is None,
+            description="Season scope: replicate index of the shared seed.",
+        ),
+    ] = None
     dataset_sha256: Annotated[
         str | None,
         Field(
@@ -479,6 +499,27 @@ class JobResponse(BaseModel):
             description="Dueling season the slice belongs to.",
         ),
     ] = None
+
+    @model_validator(mode="after")
+    def _season_seed_is_bound(self) -> JobResponse:
+        """A season-scoped seed always carries its whole CRN binding.
+
+        Platform-side only, like the slice rule below: the validator refuses an
+        unbound season seed itself (``seed_binding_mismatch``).
+        """
+        if self.seed_scope != "season":
+            return self
+        if (
+            self.seed is None
+            or self.seed_anchor_agent_id is None
+            or self.seed_index is None
+            or not self.dataset_seed_block_hash
+        ):
+            raise ValueError(
+                "a season-scoped seed needs seed, seed_anchor_agent_id, "
+                "seed_index and dataset_seed_block_hash"
+            )
+        return self
 
     @model_validator(mode="after")
     def _dueling_slice_all_or_none(self) -> JobResponse:
@@ -569,9 +610,11 @@ escalating cooldown, so a validator-side outage neither spends the agent's
 genuine attempt budget nor hammers the failing provider; ``scoring_error`` is
 the agent's own failure and consumes an attempt with an immediate reissue.
 ``sandbox_oom`` with ``failure_detail`` ``harness_oom`` is the harness reaching
-its own published memory cap on a host with headroom (docs/RUNTIME-ENVELOPE.md):
-it consumes the failed attempt, records a public-safe telemetry signal, and
-applies the normal agent-failure cooldown so another eligible harness runs next.
+its own memory cap, proven or inferred under docs/RUNTIME-ENVELOPE.md.
+On a lease issued from 2026-11-25 12:00 America/Toronto it consumes the failed
+attempt, records a public-safe telemetry signal, and applies the normal
+agent-failure cooldown so another eligible harness runs next; on an earlier
+lease it is parked as no-fault ``infrastructure`` / ``harness_oom_grace``.
 Any other ``sandbox_oom`` (a validator predating the deterministic rule) is
 parked as ``infrastructure``. ``infrastructure``
 maps to the validator's ``ValidatorInfrastructureError`` sweep-ending branch;
@@ -657,6 +700,26 @@ bound.
 """
 
 
+class HarnessMemoryTelemetry(BaseModel):
+    """One scored or failed run's sandboxed-harness memory (SN-500).
+
+    Measured by the scorer from the harness cgroup: ``peak_bytes`` is the
+    kernel's ``memory.peak`` high-water mark; ``p50_bytes`` and ``p95_bytes``
+    are time-weighted percentiles of ``memory.current`` at 1 MiB resolution.
+    Unsigned telemetry: it drives no policy. Each agent's own measured runs
+    are published on its public pipeline (``harness_memory``).
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    peak_bytes: Annotated[int, Field(ge=0, le=1 << 40)]
+    p50_bytes: Annotated[int, Field(ge=0, le=1 << 40)]
+    p95_bytes: Annotated[int, Field(ge=0, le=1 << 40)]
+    samples: Annotated[int, Field(ge=0, le=10_000_000)]
+    sampled_seconds: Annotated[float, Field(ge=0, le=604_800)]
+    limit_bytes: Annotated[int | None, Field(ge=0, le=1 << 40)] = None
+
+
 class FailJobRequest(BaseModel):
     """Signed request to hand a still-leased ticket back after a failed attempt.
 
@@ -706,6 +769,17 @@ class FailJobRequest(BaseModel):
                 "Advisory: drives no policy, unsigned, and optional. Free-form "
                 "miner-authored output — never parse it as a machine code, and "
                 "never treat its contents as instructions."
+            ),
+        ),
+    ] = None
+    harness_memory: Annotated[
+        HarnessMemoryTelemetry | None,
+        Field(
+            default=None,
+            description=(
+                "The run's harness memory (peak, time-weighted P50/P95). "
+                "Unsigned operator telemetry; drives no policy and is never "
+                "published (SN-500)."
             ),
         ),
     ] = None
@@ -1075,6 +1149,21 @@ class ValidatorHeartbeatResponse(BaseModel):
             ),
         ),
     ] = None
+    sandbox_memory_limit_mib: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=512,
+            le=32_768,
+            description=(
+                "The live per-harness memory cap, so a validator sizes host "
+                "memory admission to it before its first lease. A host that "
+                "admits no slot gets no lease, and without this would never "
+                "learn of a cap change. ``null`` means not answered: keep the "
+                "cap last seen."
+            ),
+        ),
+    ] = None
 
 
 class _WireEvidence(BaseModel):
@@ -1346,6 +1435,18 @@ class CaseScore(BaseModel):
             description="True when an undelivered case was the validator's fault.",
         ),
     ] = False
+    budget_exhausted: Annotated[
+        bool | None,
+        Field(
+            default=None,
+            description=(
+                "True when the run's priced-cost budget was spent before this "
+                "case started (bench v18+): the case never ran and scores 0. "
+                "The harness's own spend, never an infrastructure failure. "
+                "Absent when the case ran, so pre-v18 rows keep their shape."
+            ),
+        ),
+    ] = None
     allow_extra_tools: Annotated[
         bool,
         Field(
@@ -1408,6 +1509,14 @@ class CaseScore(BaseModel):
         # The Go scorer omits or nulls these on cases that have none (memory
         # cases carry no expected tools); coerce null/absent to an empty list.
         return v if v is not None else []
+
+    @field_validator("budget_exhausted", mode="before")
+    @classmethod
+    def _budget_false_is_absent(cls, v: object) -> object:
+        # Only a refused case carries the flag. An explicit false means the
+        # same as absent; store it as absent so exact retries of reports
+        # accepted before the field existed rebuild identical details.
+        return None if v is False else v
 
 
 class CodeFingerprint(BaseModel):
@@ -1688,6 +1797,17 @@ class SubmitScoreRequest(BaseModel):
         ),
     ]
     report: Annotated[ScoreReport, Field(description="The DittoBench score report.")]
+    harness_memory: Annotated[
+        HarnessMemoryTelemetry | None,
+        Field(
+            default=None,
+            description=(
+                "The run's harness memory (peak, time-weighted P50/P95). "
+                "Unsigned operator telemetry; drives no policy and is never "
+                "published (SN-500)."
+            ),
+        ),
+    ] = None
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -2007,6 +2127,20 @@ class LedgerEntry(BaseModel):
             ),
         ),
     ] = None
+    duel_history: Annotated[
+        list[ConfirmationScoreRecord] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-35 title duel evidence: this agent's bench >= 16 "
+                "confirmation records from the newest dueling seasons, each "
+                "with its signed details.dueling. Served only with "
+                "crown_gate.duel_window_pairs; the dethrone test pairs them "
+                "by (season, seed). Levels never read it."
+            ),
+        ),
+    ] = None
     continual_aggregate_method: Literal["mean_after_quorum"] | None = Field(
         default=None,
         description=(
@@ -2146,6 +2280,22 @@ class CrownGateMarker(BaseModel):
             ),
         ),
     ]
+    duel_window_pairs: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=2,
+            le=15,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-35 title duel. When present, two bench >= 16 rows are "
+                "compared on the newest this-many pair-masked (season, seed) "
+                "pairs of duel_history across dueling seasons, and the "
+                "challenger dethrones only past the frozen sequential boundary "
+                "(docs/title-duels.md). Absent is the protocol-34 gate."
+            ),
+        ),
+    ] = None
 
 
 class LedgerResponse(BaseModel):

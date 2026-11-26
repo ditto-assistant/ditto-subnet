@@ -1,0 +1,27 @@
+---
+# Any host: the bearer was placed out of band as a root-only file. Use this
+# when the host has no federated identity, and remove the file when the host is
+# retired.
+- name: Inspect the Platform bearer source file
+  ansible.builtin.stat:
+    path: "{{ cpm_scorer_token_source_file }}"
+  register: cpm_scorer_token_source_stat
+
+- name: Require a root-only bearer source file
+  ansible.builtin.assert:
+    that:
+      - cpm_scorer_token_source_stat.stat.exists
+      - cpm_scorer_token_source_stat.stat.isreg
+      - cpm_scorer_token_source_stat.stat.pw_name == 'root'
+      - cpm_scorer_token_source_stat.stat.mode in ['0400', '0600']
+    fail_msg: "{{ cpm_scorer_token_source_file }} must exist as a regular root-owned file with mode 0400 or 0600"
+    quiet: true
+
+- name: Read the Platform bearer from the host file
+  ansible.builtin.command:
+    argv: [cat, "{{ cpm_scorer_token_source_file }}"]
+  register: cpm_scorer_token_read
+  changed_when: false
+  # Read-only: run it in --check too, so the validation in main.yml has stdout.
+  check_mode: false
+  no_log: true

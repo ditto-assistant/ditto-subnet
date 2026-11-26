@@ -138,6 +138,19 @@ activation gate, not a hybrid-authority gate: a stale route observation must
 not re-open the settled previous-version view. An operator may still
 explicitly supersede an unactivated rollout that does not yet own authority.
 
+A priority member whose own failure closed out its desired-version quorum is
+skipped the same way. Every remaining slot it still needs must be exhausted on
+one agent-attributable code: a relay 413 for a request that overflows the
+model context (`inference_request_rejected:request_too_large`), a spent
+allowance, or another code in `AGENT_ATTRIBUTABLE_FAILURE_DETAILS`. Re-leasing
+the same image repeats that failure. The member keeps its active-version status, so
+no queue withdrawal can be written for it. The barrier therefore reads the
+same fail-closed evidence as the terminal close-out: a live lease, an
+infrastructure or missing detail, or mixed causes keep it blocking until an
+operator retry settles the slot. The member is resolved, never scored: it
+stays off the desired ranked set until its owner resubmits. Rollout retry
+diagnostics report it with `blocks_activation: false`.
+
 ## Observation and recovery
 
 `GET /api/v1/public/bench/rollout` reports desired and active versions, rollout
@@ -148,7 +161,8 @@ and idempotent across API restarts.
 It also reports promotion progress, so "scoring is on the desired version but
 emissions are not" never has to be inferred. `priority_cohort_ready_count` of
 `priority_cohort_size` is the first gate's progress, counted exactly as the
-barrier counts it (a permanently ineligible member is satisfied);
+barrier counts it (a permanently ineligible member, or one whose own failure
+exhausted its quorum, is satisfied);
 `ranked_quorum_agents` of `min_ranked_quorum_agents` is the second.
 `promotion_pending` is true while the desired version is collecting and has not
 yet taken authority, and `promotion_requirement` states both gates in one

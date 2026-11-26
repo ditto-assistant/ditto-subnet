@@ -1,4 +1,5 @@
 import { fetchTreasuryFundingHistory, previewTreasuryFunding, recordTreasuryFunding } from './treasury-funding.service'
+import { listReadmissionsInputSchema } from '../lib/readmission.schemas'
 import {
   contributorHotkeyInputSchema, githubAccountInputSchema, claPolicyReadInputSchema,
   claPolicyWriteInputSchema, claPublishInputSchema,
@@ -6,6 +7,8 @@ import {
 } from '../lib/contributor.schemas'
 import { fetchAgentSourceReleaseEvidence } from './source-release-evidence.service'
 import { fetchArtifactFetchAudit } from './artifact-fetch-audit.service'
+import { fetchUploadPaymentProof } from './upload-payment-proof.service'
+import { uploadPaymentProofInputSchema } from '../lib/upload-payment-proof.schemas'
 import { fetchInfraVoids, fetchProviderOutages, voidInfraScores } from './infra-voids.service'
 import {
   getProviderOutagesInputSchema, listInfraVoidsInputSchema, voidInfraScoresInputSchema,
@@ -17,7 +20,6 @@ import {
 } from './admin.service'
 import { treasuryActivationPreflightInputSchema } from '../lib/treasury-ledger.schemas'
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
-import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
 import {
   officialControlsInputSchema, officialControlLookupSchema,
 } from '../lib/v13-official-control.schemas'
@@ -54,8 +56,18 @@ import {
   setBountyPayoutPolicy,
 } from './bounty.service'
 import {
+  fetchEdgeLaneLedger,
+  fetchEdgeLaneOverview,
+  fetchEdgeLaneSettings,
+  listEdgeLaneNodes,
+} from './edge-lane.service'
+import { edgeLaneLedgerInputSchema } from '../lib/edge-lane.schemas'
+import {
   fetchDuelingSeason,
   listDuelingSlices,
+  listGeneratorSourceReleases,
+  republishDuelingSeasonCommitment,
+  retryDuelingSlicePreparation,
   rotateDuelingSeason,
 } from './dueling.service'
 import {
@@ -64,12 +76,15 @@ import {
   fetchGeneratorPromotionCandidates,
   fetchGeneratorRun,
   fetchGeneratorSettings,
+  fetchGeneratorSourceExcerpt,
+  fetchGeneratorSourceFiles,
   fetchGeneratorSubmission,
   listGeneratorSubmissions,
   rejectGenerator,
   reinstateGenerator,
   rescoreGenerator,
   rotateGeneratorProbe,
+  searchGeneratorSource,
   setGeneratorSettings,
   closeGeneratorRound,
   fetchGeneratorRound,
@@ -78,16 +93,26 @@ import {
   fetchGeneratorScorer,
   fetchGeneratorRoundPreview,
   listGeneratorRounds,
+  listGeneratorPrescreens,
   registerDefaultGenerator,
   createDefaultGeneratorUpload,
   releaseGeneratorRoundLease,
   republishGeneratorRoundCommitment,
   tickGeneratorRounds,
   voidGeneratorRound,
+  fetchGeneratorFrontierAudit,
+  fetchGeneratorRoundFrontier,
+  listGeneratorFrontierAudits,
+  rerunGeneratorRoundFrontier,
+  ruleGeneratorFrontierAudit,
+  settleGeneratorRoundFrontier,
 } from './generator-competition.service'
 import {
   getDuelingSeasonInputSchema,
   listDuelingSlicesInputSchema,
+  listGeneratorSourceReleasesInputSchema,
+  republishDuelingCommitmentInputSchema,
+  retryDuelingSliceInputSchema,
   rotateDuelingSeasonInputSchema,
 } from '../lib/dueling.schemas'
 import {
@@ -95,12 +120,19 @@ import {
   tickGeneratorRoundsInputSchema,
   generatorRoundIndexInputSchema,
   listGeneratorRoundsInputSchema,
+  listGeneratorPrescreensInputSchema,
   registerDefaultGeneratorInputSchema,
   releaseRoundLeaseInputSchema,
   republishRoundCommitmentInputSchema,
   voidGeneratorRoundInputSchema,
+  generatorFrontierAuditInputSchema,
+  listGeneratorFrontierAuditsInputSchema,
+  rerunGeneratorFrontierInputSchema,
+  ruleGeneratorFrontierAuditInputSchema,
+  settleGeneratorFrontierInputSchema,
   generatorPromotionInputSchema,
   generatorRunIdInputSchema,
+  generatorSourceSearchInputSchema,
   generatorSubmissionIdInputSchema,
   listGeneratorSubmissionsInputSchema,
   rejectGeneratorInputSchema,
@@ -109,6 +141,27 @@ import {
   rotateGeneratorProbeInputSchema,
   setGeneratorSettingsInputSchema,
 } from '../lib/generator-competition.schemas'
+import {
+  fetchModelContextBoard,
+  fetchModelContextRun,
+  fetchModelContextScorer,
+  fetchModelContextSettings,
+  fetchModelContextSubmission,
+  listModelContextSubmissions,
+  rejectModelContextSubmission,
+  rescoreModelContextSubmission,
+  rotateModelContextSeason,
+  setModelContextSettings,
+} from './model-context.service'
+import {
+  listModelContextSubmissionsInputSchema,
+  modelContextRunIdInputSchema,
+  modelContextSubmissionIdInputSchema,
+  rejectModelContextInputSchema,
+  rescoreModelContextInputSchema,
+  rotateModelContextSeasonInputSchema,
+  setModelContextSettingsInputSchema,
+} from '../lib/model-context.schemas'
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
 import { observerGrant } from './treasury-observer-access.server'
@@ -116,6 +169,7 @@ import { createTreasuryObserverServer } from './treasury-observer-mcp.server'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
 import { treasuryReceiptInputSchema } from '../lib/treasury-receipts.schemas'
 import { fetchTreasuryLedger, fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight, fetchTreasuryManualTransfers, previewTreasuryManualTransfer, queueTreasuryManualTransfer } from './admin.service'
+import { executeAirdrop, fetchAirdropRun, fetchAirdropRuns, previewAirdrop } from './admin.service'
 import { fetchTreasuryActivationPreflight, fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, fetchTreasuryObserverSettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 import { fetchRuntimeInterfaceReport, fetchTreasuryRuntime, recordTreasuryRuntime } from './admin.service'
 import { runtimeInterfaceReportInputSchema } from '../lib/runtime-interface.schemas'
@@ -149,6 +203,7 @@ import {
   compactValidatorAssignments,
   compactValidatorFleet,
 } from '../lib/mcp-payloads'
+import { overdueQueueClocks } from '../lib/review-queue-slo'
 import {
   compactListField,
   compactListFields,
@@ -234,8 +289,6 @@ import {
   outlierEscalationDryRunInputSchema,
   rotateScreenerPolicyManifestInputSchema,
   setQueuePolicySettingsInputSchema,
-  scheduleScreenerPolicyActivationInputSchema,
-  advanceScoredPolicyRescreenInputSchema,
   restoreScoredScreeningSnapshotInputSchema,
   setValidatorSlotSettingsInputSchema,
   setValidatorIssuancePauseInputSchema,
@@ -245,6 +298,7 @@ import {
   retryFailedScreeningNowInputSchema,
   expireRunningScreeningInputSchema,
   rejectScreeningSubmissionInputSchema,
+  amendQuarantineRejectReasonInputSchema,
   releaseVerifiedV13CourtClearInputSchema,
   summarizeScreeningFailuresInputSchema,
   confirmationBundleStateSchema,
@@ -322,6 +376,7 @@ import {
   retryFailedScreeningNow,
   expireRunningScreening,
   rejectScreeningSubmission,
+  amendQuarantineRejectReason,
   fetchValidationRetry,
   fetchStuckSubmissions,
   fetchLeaseRevocations,
@@ -330,6 +385,7 @@ import {
   fetchBenchmarkContractRefresh,
   fetchStrandedPreviousEra,
   fetchStrandedAdmissions,
+  fetchReadmissions,
   admitStrandedSubmission,
   fetchOwnerCooldowns,
   setOwnerCooldown,
@@ -381,13 +437,11 @@ import {
   fetchScreenerPolicyActivation,
   fetchV13ReviewClock,
   fetchScoredPolicyRescreen,
-  scheduleScreenerPolicyActivation,
-  scheduleV13ReviewClock,
-  advanceScoredPolicyRescreen,
   restoreScoredScreeningSnapshot,
   createScreenerBootstrapGrant,
   fetchScreenerCapacity,
   fetchDatabaseBackupStatus,
+  fetchRegistrationFreshness,
   fetchScreeningInfraRetries,
   updateScreenerProviderSettings,
   updateScreenerNodeChannelSettings,
@@ -424,6 +478,8 @@ import {
   fetchValidatorFleetObservability,
   fetchValidatorCapacity,
   fetchValidatorRequestOutcomes,
+  fetchHarnessMemoryList,
+  fetchAgentHarnessMemory,
   fetchValidatorWeightDiagnostics,
   fetchLedgerEpochSnapshots,
   fetchValidatorAssignments,
@@ -524,6 +580,10 @@ const MCP_PAGINATION_INPUT = {
   limit: z.number().int().min(1).max(200).default(50),
   offset: z.number().int().min(0).default(0),
 }
+
+// Platform's Ditto Edge node read takes a limit only (at most 1000), so the
+// tool reads that window and pages it locally.
+const EDGE_LANE_NODES_CAP = 1000
 
 // The platform caps a source listing at 512 rows (MAX_LISTING_FILES), so a
 // default of that size returns every path the platform was willing to hand
@@ -705,6 +765,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read screener capacity, routing and recent jobs before retry.',
   get_database_backup_status:
     'Read encrypted PG backup freshness, manifest, object metadata and GCE snapshot. No contents or secrets.',
+  get_registration_freshness:
+    'Read Pylon metagraph snapshot block vs finalized head, lag, and uids corrected from chain storage.',
   get_screening_infra_retries:
     'Read infra retry policy, parked agents, per-state counts and signature breakers. Derived at read time.',
   set_screener_provider_settings:
@@ -722,7 +784,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   create_screener_bootstrap_grant:
     'Mint one short-lived, single-use, controller-fenced node enrollment grant. Returns the only token copy.',
   get_screener_review_settings:
-    'Read L1/L2/L3 review settings and worker adoption; bypass is in queue policy.',
+    'Read L1/L2/L3 review settings and worker adoption.',
   get_conversation_assessments:
     'Read conversation evidence and spend.',
   set_conversation_settings:
@@ -803,7 +865,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_inference_runtime_metrics:
     'Read inference load, relay health and optional grant costs.',
   get_source_review_queue_slo:
-    'Read ordinary source-review and ATH/copy-review queue age, throughput, and ghosts.',
+    'Read source-review and ATH/copy-review queue age, overdue vs per-class SLO, throughput, ghosts.',
   get_claim_provenance_cases:
     'Read exact-artifact V13 provenance evidence.',
   get_outlier_escalation:
@@ -831,26 +893,49 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_generator_competition_settings: 'Read generator competition policy, mode and optional history.',
   set_generator_competition_settings: 'Write complete generator policy with CAS and APPLY GENERATOR COMPETITION {MODE}.',
   list_generator_submissions: 'Page generator submissions with latest run; filter hotkey/status.',
-  get_generator_submission: 'Read one generator submission, lease, runs and reinstate blockers (never source).',
+  get_generator_submission: 'Read one generator submission, lease, runs and reinstate blockers (source via list_generator_source_files).',
   get_generator_run: 'Read one qualification run: evaluation and outcome; seeds once finished.',
+  list_generator_source_files: 'Generator archive manifest; has_more/truncated means incomplete. Artifact scope.',
+  search_generator_source: 'Search generator source: regex/literal, pathGlob, context, has_more paging. Artifact scope.',
+  read_generator_source_file: 'Read generator source range (max 400 lines); locate via search_generator_source. Artifact scope.',
   get_generator_probe: 'Read probe epochs and probed counts; the probe seed is never served.',
   rotate_generator_probe_seed: 'Retire the probe seed; every active generator re-qualifies.',
   list_generator_promotion_candidates: 'Discriminating round cases, highest credit first.',
   get_generator_board: 'Read the shadow generator ledger (weight_eligible=false).',
+  get_model_context_settings: 'Read model_context (CPM) policy, mode and optional history.',
+  set_model_context_settings: 'Write complete CPM policy with CAS and APPLY MODEL CONTEXT COMPETITION {MODE}.',
+  list_model_context_submissions: 'Page CPM submissions with latest run; filter hotkey/status.',
+  get_model_context_submission: 'Read one CPM submission: manifest, screening, runs, operator audit.',
+  get_model_context_run: 'Read one CPM run: score, components, per-seed, fault, season floor.',
+  rescore_model_context_submission: 'Queue another run of an active CPM submission; RESCORE MODEL CONTEXT SUBMISSION.',
+  reject_model_context_submission: 'Reject a CPM submission by ruling; REJECT MODEL CONTEXT SUBMISSION.',
+  get_model_context_board: 'Read the CPM board and its open season: seeds, floors, eligibility.',
+  get_model_context_scorer: 'Read CPM scorer heartbeats, run backlog and season loop.',
+  rotate_model_context_season: 'Open the next CPM season now; ROTATE MODEL CONTEXT SEASON. Write.',
   list_generator_rounds: 'Page chain-epoch generator rounds with schedule and counts by status.',
+  list_generator_prescreens: 'Page pre-screen batches (never paid; order the challenger queue).',
   get_generator_round: 'Read one round: columns, panel and drops, generation, leases, results, pending agents, matrix.',
   preview_generator_round: 'What a round opened now would freeze, and every blocker.',
-  get_generator_round_loop: 'Read the round driver\'s last tick, actions, errors and chain position.',
+  get_generator_round_loop: 'Read the round driver\'s last tick, actions, errors, chain position and skips.',
   get_generator_scorer: 'Read generator scorers\' version, case bounds, grading versions and last poll.',
-  get_dueling_season: 'Read dueling seasons: target, current, next, by id; columns, batteries, column means.',
+  get_dueling_season: 'Read dueling seasons: target, current, next, by id; columns, batteries, column means, rotation re-tests.',
   list_dueling_slices: 'List dueling slice preparations: status, attempts, latency, digests.',
+  list_generator_source_releases: 'List pinned dueling generators\' source releases: due time, status.',
   rotate_dueling_season: 'Rotate the open dueling season with ROTATE DUELING SEASON; audited. Write.',
+  republish_dueling_season_commitment: 'Re-elect validators to publish a committed season\'s dds1 commitment. Write.',
+  retry_dueling_slice_preparation: 'Re-queue one failed dueling slice; RETRY DUELING SLICE {id}. Write.',
   tick_generator_rounds: 'Run one idempotent round-driver tick now.',
   get_generator_round_dataset: 'Download a closed round\'s exact dataset to reproduce it. Artifact scope.',
   void_generator_round: 'Void a round with VOID GENERATOR ROUND {n}; expires its live leases.',
   close_generator_round: 'Close a running round now with CLOSE GENERATOR ROUND {n}; scores what it has.',
   republish_generator_round_commitment: 'Re-elect validators to publish a committed round\'s commitment.',
   release_generator_round_lease: 'Release one validator\'s stuck round lease so the agent re-leases.',
+  list_generator_frontier_audits: 'Frontier audit queue: sampled oracle-attested cases awaiting a ruling.',
+  get_generator_round_frontier: 'A round\'s frontier lane: candidates, oracle results, attestations, audits, applied credit.',
+  get_generator_frontier_audit: 'One column\'s frontier audit cases with evidence and memory search. Artifact scope.',
+  rule_generator_frontier_audit: 'Rule a frontier audit VALID or INVALID; RULE FRONTIER AUDIT {round} {column} ... Write.',
+  settle_generator_round_frontier: 'Settle a round\'s frontier now with SETTLE GENERATOR FRONTIER {n}. Write.',
+  rerun_generator_round_frontier: 'Re-run a held/zero-credit frontier oracle with RERUN GENERATOR FRONTIER {n}. Write.',
   register_default_generator: 'Register the public default generator (uploadKey or sourceBase64) that fills empty counted columns.',
   create_default_generator_upload: 'Presigned five-minute PUT for one default-generator archive under this operator\'s prefix.',
   rescore_generator_submission: 'Re-qualify an active generator now on fresh seeds.',
@@ -897,18 +982,16 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Exact V13 artifact review window; null/not_configured means none. Attempt leases are not finalizer dates.',
   reject_screening_submission:
     'Reject a screening row. Confirmation: REJECT SCREENING SUBMISSION. Requires backroom:write.',
+  amend_screening_reject_reason:
+    'Amend reject reason; decision unchanged. Confirm AMEND PUBLIC REJECT REASON. backroom:write.',
   release_verified_v13_court_clear:
     'Release a held V13 court clear after Platform re-verifies its signed receipt. Confirmation: RELEASE VERIFIED V13 COURT CLEAR. Requires backroom:write.',
   get_queue_policy_settings:
     'Read queue policy, rollout locks, defaults and optional history (default 0). Settings do not resize open rollout snapshots.',
   get_screener_policy_activation:
-    'Scheduled screening-policy activation and history; latest=null if never scheduled.',
+    'Screening-policy activation and history; latest=null if never scheduled. Scheduling retired 2026-11-07.',
   get_v13_review_clock:
-    'Scheduled V13 first-claim clock; absent means no authoritative deadline. No finalizer activation.',
-  schedule_v13_review_clock:
-    'Schedule a future V13 first-claim clock for new submissions only. Requires exact document/manifest digests, 65-minute notice, revision guard, and confirmation. Does not finalize holds.',
-  schedule_screener_policy_activation:
-    'Schedule future screening policy with CAS and exact confirmation. canaryOnly preserves ordinary policy. See tool help.',
+    'V13 first-claim clock; absent means no authoritative deadline. Scheduling retired 2026-11-07.',
   restore_scored_screening_snapshot:
     'Restore one displaced scored cohort using exact activation, policy, benchmark and count guards. See tool help.',
   get_continual_retest_settings:
@@ -916,17 +999,19 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_agent_scores:
     'Read accepted scores/seeds/aggregates; current benchmark default.',
   void_infra_scores:
-    'Void retest samples whose grant shows outage-class failures; guarded, dryRun default. See tool help.',
+    'Void retest samples or canonical scores whose grant shows outage-class failures; guarded, dryRun default. See tool help.',
   list_infra_voids:
     'List infra voids (operator and outage sweep) with evidence and re-run result.',
   get_provider_outages:
     'Read provider-outage circuits and post-outage sweep runs (voids, windows, flagged canonicals).',
+  resolve_ath_review:
+    'Clear or reject one ATH hold with a public reason; a v16+ clear queues a free season re-test (season_retest). Write.',
   get_continual_retest_diagnostic:
     'Exact agent scoring, owner-family cutoff/tie band, cohort reason, claim eligibility and per-sample grant failures. Read-only.',
   get_validator_slot_settings:
     'Read slot/disk policy, per-validator overrides, round reservation, per-validator fleet sizing and history (default 0). A validator advertising above cap is not an underutilized host.',
   get_validator_fleet:
-    'Read validator heartbeats, stack identity, and version histogram.',
+    'Read validator heartbeats, stack identity, scorer round/dueling-slice versions, and version histograms.',
   get_scoring_lease_settings:
     'Read the scoring ticket TTL for new leases, bounds, and history.',
   set_scoring_lease_settings:
@@ -934,11 +1019,17 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   list_validator_assignments:
     'Active validator leases.',
   get_validator_capacity:
-    'Read serviceable/claimed/round-reserved slots, queue age, progress and relay load.',
+    'Read per-slot state and unusable reason, serviceable/claimed slots, queue age, relay load.',
   get_validator_request_outcomes:
-    'Per-validator job-poll and weight-ledger outcomes: 204 gates, 428/426/409.',
+    'Per-validator/slot job-poll outcomes (204 gates, 428/426/409) and allocator fence holder.',
+  list_harness_memory:
+    'Operator-only harness memory per agent: peak, P50/P95 medians, OOM runs.',
+  get_agent_harness_memory:
+    'One agent\'s harness memory rollup and per-run peak/P50/P95.',
   get_miner_owner_footprint:
     'Read payment links; common-control signal, not ownership. Verify chain.',
+  get_upload_payment_proof:
+    'Read what one upload-fee proof funded.',
   get_inference_concurrency_settings:
     'Read hosted budgets/concurrency, relay policy and optional history (default 0).',
   get_decision_lane:
@@ -971,6 +1062,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Set burn/payout curve; an allocation owns burn once set. MOVES TAO. See tool help.',
   get_burn_settings:
     'Read burn, miner remainder, revision and fleet fold. Optional history, default 0.',
+  get_edge_lane_settings: 'Ditto Edge shadow lane policy (off|shadow), revision; history opt-in.',
+  get_edge_lane_overview: 'Ditto Edge shadow lane: mode, nodes, objects, recent windows; pays nothing.',
+  list_edge_lane_nodes: 'Ditto Edge nodes: status, held bytes, last poll, latest window.',
+  get_edge_lane_ledger: 'Ditto Edge shadow ledger by window/node; scores closed windows first.',
   get_track_share_settings:
     'Read per-track emission split, what validators fold now, v33 gate, generator mode; history opt-in.',
   set_track_share_settings:
@@ -995,6 +1090,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   preview_treasury_funding_reconciliation: 'Preview GM funding.',
   record_treasury_funding_reconciliation: 'Record GM funding.',
   get_treasury_manual_transfers: 'Read manual custody readiness, requests and public receipts; no funds.',
+  preview_airdrop: 'Dry-run an airdrop: totals, cap, balance, digest, phrase. No writes; see help.',
+  execute_airdrop: 'Run a previewed airdrop; dry_run defaults true. Key-idempotent; rehearsal-only. See help.',
+  get_airdrop_run: 'One airdrop run and its recipient results.',
+  list_airdrop_runs: 'Airdrop runs, caps and executors.',
   preview_treasury_manual_transfer: 'Preview one Gamma collector transfer: envelope, digest and the exact confirmation to echo. not_queued; nothing moves.',
   queue_treasury_manual_transfer: "Queues a real on-chain SN118 alpha transfer from the Gamma collector to the named bucket's holding coldkey. Call preview first; exact confirmation. Custody re-verifies everything; one unresolved claim blocks another.",
   get_treasury_receipt_preflight: 'Read exact receipt readiness/archive checkpoint; no writes.',
@@ -1004,7 +1103,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_agent_emission_eligibility:
     'Read exact earning/withheld reason, clear time and fleet visibility.',
   get_submission_cooldown:
-    'Read coldkey cooldown, default fee, per-competition fee overrides and each lane\'s effective fee; optional history, default 0.',
+    'Read coldkey cooldown, default fee, per-competition fee overrides, each lane\'s effective fee and readmission activation; optional history, default 0.',
   set_submission_cooldown:
     'Set cooldown, default fee and optional per-competition fees with CAS and exact phrase; see help.',
   get_owner_submission_cooldowns: 'Per-owner cooldown overrides; one key adds history.',
@@ -1031,7 +1130,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   admit_stranded_submission:
     'Admit ONE stranded prior-bench agent to the active era. Guards + confirmation; see tool help.',
   get_stranded_admissions:
-    'Audited stranded admissions: admitted state and active-era lease progress. Read-only.',
+    'Audited stranded admissions: origin, category, admitted state and lease progress. Read-only.',
+  list_readmissions:
+    'SN-485 readmissions: paid, credited and classified uploads; totals and cost basis. Read-only.',
   start_benchmark_rollout:
     'Start a forward-only rollout. Confirmation: START BENCHMARK V{n}.',
   list_benchmark_canaries: 'Page isolated benchmark canaries. No score or rollout authority.',
@@ -1047,7 +1148,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_score_history:
     'Accepted scores for one agent; exact decimal seeds, newest versions first; unscored versions omitted.',
   get_screening_review_queue:
-    'Oldest-first unresolved ATH holds, with identity and hold kind. Defaults generation=all; filter reviewKind. Read agent_status: a pending row outside ath_pending_review is stranded and resolve returns 409. Distinct from screener quarantines.',
+    'Unresolved ATH holds: forks of a public release first, then oldest first. Identity, hold kind, reference_public_release. Filter reviewKind. agent_status outside ath_pending_review is stranded (resolve 409s). Not screener quarantines.',
   // The two quarantine reads below get catalog summaries in the same change
   // that fixes the queue. list_screening_quarantines is the pre-score hold
   // queue (anti-cheat and inconclusive holds), separate from the ATH queue
@@ -1091,6 +1192,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     { name: 'SN118 Backroom', version: '1.0.0' },
     {
       capabilities: { tools: {} },
+      maxToolInputElements: 10_000,
       instructions:
         'Backroom reads and controls SN118 production on ditto-platform. Source requires backroom:artifact:read; mutations require backroom:write. List pages are losslessly compacted: fields shared by every returned row move to `<list>_shared`; reconstruct each row as `{ ...shared, ...row }`. Pagination omits only rows outside the requested page. Settings history is newest-first and opt-in with historyLimit. Call get_backroom_tool_help for detailed operational semantics before an unfamiliar or destructive action.',
     },
@@ -1173,7 +1275,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening review queue',
       description:
-        'Page the SN118 operator review queue: every agent held in ath_pending_review with an unresolved ATH review, oldest hold first. Each row carries the held agent_id/agent_name/agent_version, miner_hotkey and payment-time miner_coldkey, submitted_at, opened_at, agent_status, and a `hold` object with review_kind (copy | benchmark_overfit | deferred_source_review | anomalous_score), the operator reason, and for a copy hold the matched agent\'s identity (duplicate_of plus its name, version, hotkey, coldkey and submission time). `hold.reason` is why the submission is under review NOW: after a withdrawn resolution and a guarded reopen, `hold.reason_source` reads `reconsideration`, `hold.reason` is the reopen reason, and the `superseded_*` fields carry the withdrawn decision as HISTORY, never a finding that still stands. Filter with reviewKind; page with limit/offset. The queue is unresolved holds across every scoring generation and is not narrowable by either: a review status filter would let a closed hold read as open, and the platform\'s generation filter selects on whether the held agent has a score at a benchmark version, so its `active` default hides an upload-time copy hold (no scores at all) and any hold that survived a rollout (none at the new active version) while both still wait for an operator. `agent_status` is the field to read before acting: a pending review whose agent is NOT ath_pending_review is a hold stranded by some other path, and resolve_ath_review answers 409 for it. This is the queue enumeration; get_ath_review gives one review its full audit trail, and get_copy_review_source_diff the source evidence. This is NOT the quarantine queue — list_screening_quarantines status=active is the separate pre-score hold queue (anti-cheat quarantines and inconclusive screenings held for operator review), resolved with resolve_screening_quarantine.',
+        'Page the SN118 operator review queue: every agent held in ath_pending_review with an unresolved ATH review. Holds whose matched agent was publicly released at or before the held upload (`hold.reference_public_release.public_before_upload`) come first, since a fork of a public release is usually the fastest ruling; each tier is oldest hold first. reference_public_release is evidence for priority only: the copy gate already tested whether the release explains the match, so a fork can still carry unreleased content. Each row carries the held agent_id/agent_name/agent_version, miner_hotkey and payment-time miner_coldkey, submitted_at, opened_at, agent_status, and a `hold` object with review_kind (copy | benchmark_overfit | deferred_source_review | anomalous_score), the operator reason, and for a copy hold the matched agent\'s identity (duplicate_of plus its name, version, hotkey, coldkey and submission time). `hold.reason` is why the submission is under review NOW: after a withdrawn resolution and a guarded reopen, `hold.reason_source` reads `reconsideration`, `hold.reason` is the reopen reason, and the `superseded_*` fields carry the withdrawn decision as HISTORY, never a finding that still stands. Filter with reviewKind; page with limit/offset. The queue is unresolved holds across every scoring generation and is not narrowable by either: a review status filter would let a closed hold read as open, and the platform\'s generation filter selects on whether the held agent has a score at a benchmark version, so its `active` default hides an upload-time copy hold (no scores at all) and any hold that survived a rollout (none at the new active version) while both still wait for an operator. `agent_status` is the field to read before acting: a pending review whose agent is NOT ath_pending_review is a hold stranded by some other path, and resolve_ath_review answers 409 for it. This is the queue enumeration; get_ath_review gives one review its full audit trail, and get_copy_review_source_diff the source evidence. This is NOT the quarantine queue — list_screening_quarantines status=active is the separate pre-score hold queue (anti-cheat quarantines and inconclusive screenings held for operator review), resolved with resolve_screening_quarantine.',
       inputSchema: { ...athReviewQueueInputSchema.shape, ...MCP_PAGINATION_INPUT },
       annotations: toolAnnotations('read'),
     },
@@ -1373,7 +1475,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Resolve ATH review',
       description:
-        'Clear or reject one ATH hold with an auditable public reason. Clearing restores the status held before a manual benchmark-overfit review; rejecting bans the submission and closes its active screening quarantine (reconciled_quarantine_ids). Requires backroom:write.',
+        'Clear or reject one ATH hold with an auditable public reason. Clearing restores the status held before a manual benchmark-overfit review; rejecting bans the submission and closes its active screening quarantine (reconciled_quarantine_ids). A clear that leaves a bench v16+ agent scored with less than a full quorum in the open dueling season also queues one free platform re-test per accepted score on that season (season_retest: queued, skipped reason, or error; catch_up_source ath_clear), so a hold longer than the two-season window cannot strand it as expired_dueling_season; execute_ath_rulings_batch and the copy-hold court clear through the same path. Requires backroom:write.',
       inputSchema: resolveCopyReviewInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -1396,7 +1498,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Preview ATH rulings batch',
       description:
-        'Dry-run a batch of up to 50 ATH rulings without changing anything. Pass either uploadKey (from create_ath_rulings_upload) or the same document\'s `rulings` inline (Platform wire shape, snake_case). Every item is re-read from live state: agent_status, artifact SHA-256 and score count against the ruling\'s expected_sha256 / expected_score_count guards (stale_guard=true and disposition stale_guard when they moved), plus the review row, so the disposition says what execute will do: ready (with `steps`, e.g. a reject on a scored agent is ["open","reject"], on a held agent ["reject"]; a clear on a held agent is ["clear"], and a clear on an unheld scored or live agent with no ATH review is ["attest"]: it records the terminal clear without holding the row, so the agent never leaves the board and would_change_crown is always false; a reject is also accepted on an agent still evaluating below quorum, as ["open","reject"], and ends its live validator tickets so the remaining runs are not paid for, while a bare open still needs scored or live; a WITHDRAWN REJECT is reversible: a clear on a banned agent whose ATH review resolved reject is ["open","clear"] -- it reopens that same review with the ruling\'s reason (a `reopen` action keeping the reject on the record), then clears it back to the status recorded before the reject (scored, live, or evaluating if it was rejected below quorum), and would_change_crown reports whether the restored score retakes the crown; an open on such an agent is ["open"] and holds it for further review; a ban by any other path, with no rejected review, stays a conflict, and the hotkey upload gate (list_hotkey_bans) is never touched), already_applied (idempotent replay), conflict (conflict_reason is the 409 the underlying route would answer), not_found, or invalid (a reject without evidence_references). The crown arithmetic is the board the operator sees: the validator-equivalent KOTH fold (eligible ledger with stderr, quorum, confirmation and efficiency inputs) under the same fleet-gated tie-weighting and ceiling-band-clamp flags the public leaderboard applies, returned as `board` (champion, raw leader, fingerprint). `would_change_crown` marks rulings that hold or reject the champion / raw leader, or clear a held agent whose canonical score would re-enter as champion or raw leader -- judged CUMULATIVELY against the board after the earlier items in the batch, so rejecting the champion in item 0 flags the runner-up a later item removes (a batch that empties the top five flags every row). The preview_token is HMAC-signed, bound to the signed-in operator, the rulings digest, the upload key, and the crown outcome, and expires after 10 minutes. Inline previews must resend the identical `rulings` to execute. Requires backroom:read.',
+        'Dry-run a batch of up to 50 ATH rulings without changing anything. Pass either uploadKey (from create_ath_rulings_upload) or the same document\'s `rulings` inline (Platform wire shape, snake_case). Every item is re-read from live state: agent_status, artifact SHA-256 and score count against the ruling\'s expected_sha256 / expected_score_count guards (stale_guard=true and disposition stale_guard when they moved), plus the review row, so the disposition says what execute will do: ready (with `steps`, e.g. a reject on a scored agent is ["open","reject"], on a held agent ["reject"]; a clear on a held agent is ["clear"], and a clear on an unheld scored or live agent with no ATH review is ["attest"]: it records the terminal clear without holding the row, so the agent never leaves the board and would_change_crown is always false; a reject is also accepted on an agent still evaluating below quorum, as ["open","reject"], and ends its live validator tickets so the remaining runs are not paid for, while a bare open still needs scored or live; a WITHDRAWN REJECT is reversible: a clear on a banned agent whose ATH review resolved reject is ["open","clear"] -- it reopens that same review with the ruling\'s reason (a `reopen` action keeping the reject on the record), then clears it back to the status recorded before the reject (scored, live, or evaluating if it was rejected below quorum), and would_change_crown reports whether the restored score retakes the crown; an open on such an agent is ["open"] and holds it for further review; a ban by any other path, with no rejected review, stays a conflict, and the hotkey upload gate (list_hotkey_bans) is never touched; a STRANDED pending review behind an agent already rejected or banned closes with a reject as ["close_terminal"]: no evidence_references needed, the review resolves reject, the agent, its scores and the board are untouched, and the close is never a reject a later open can withdraw), already_applied (idempotent replay), conflict (conflict_reason is the 409 the underlying route would answer), not_found, or invalid (a reject without evidence_references). The crown arithmetic is the board the operator sees: the validator-equivalent KOTH fold (eligible ledger with stderr, quorum, confirmation and efficiency inputs) under the same fleet-gated tie-weighting and ceiling-band-clamp flags the public leaderboard applies, returned as `board` (champion, raw leader, fingerprint). `would_change_crown` marks rulings that hold or reject the champion / raw leader, or clear a held agent whose canonical score would re-enter as champion or raw leader -- judged CUMULATIVELY against the board after the earlier items in the batch, so rejecting the champion in item 0 flags the runner-up a later item removes (a batch that empties the top five flags every row). The preview_token is HMAC-signed, bound to the signed-in operator, the rulings digest, the upload key, and the crown outcome, and expires after 10 minutes. Inline previews must resend the identical `rulings` to execute. Requires backroom:read.',
       inputSchema: previewAthRulingsBatchInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -1771,14 +1873,14 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_generator_competition_settings', {
     title: 'Get generator competition settings',
-    description: 'Read the DittoBench generator competition policy: mode (off refuses uploads, leases nothing and opens no rounds; shadow runs the lane with every ledger entry weight_eligible=false; enforce marks qualified miner generators eligible, which pays only with a served generator track share); the score (panel_size top agent owners, min_panel, min_solver_owners, solve_threshold, champion_bonus); qualification (seeds_per_run secret seeds of exactly cases_per_seed cases, copy_overlap_threshold on the probe, upload cooldown, lease TTL, max_attempts, retry backoff); rounds (epochs_per_round chain epochs per round, counted_columns, challenger_columns, reference_agent_ids added to every panel as independent solvers, privacy_window_rounds subnet epochs after a round opens before it is revealed, onchain_commitment, validator_rounds_enabled which lets validators run panel agents, min_round_validators capable validators before rounds switch to a newer bench version); dueling (dueling_enabled, off by default, opens bench v16+ dueling seasons that pin up to five eligible generators into every v16+ agent run, only while a v16+ contract is active or rolling out and the source release policy discloses; rounds_per_season generator rounds per season, default 1; dueling_shadow_bench_version, null by default, a shipped bench version 16+ that gets non-authoritative shadow seasons while no dueling version is active or rolling out, so issue_benchmark_canary at it can lease a slice before start_benchmark_rollout); window_days for the ledger; and upload_fee_required (true makes every generator upload carry a finalized TAO payment of the generator competition fee, get_submission_cooldown effective_competition_fees generator, which inherits the default fee until set_submission_cooldown competitionFees prices it, to the submission address, and a payment funds exactly one upload across both lanes; false, the shipped default and the reading of a Platform that predates the field, charges nothing; a competitionFees generator fee_required override decides instead when set). Returns the effective revision (0 means the shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
+    description: 'Read the DittoBench generator competition policy: mode (off refuses uploads, leases nothing and opens no rounds; shadow runs the lane with every ledger entry weight_eligible=false; enforce marks qualified miner generators eligible, which pays only with a served generator track share); the score (panel_size top agent owners, min_panel, min_solver_owners, solve_threshold, champion_bonus); qualification (seeds_per_run secret seeds of exactly cases_per_seed cases, copy_overlap_threshold on the probe, upload cooldown, lease TTL, max_attempts, retry backoff); rounds (epochs_per_round chain epochs per round, counted_columns, challenger_columns, reference_agent_ids added to every panel as independent solvers, privacy_window_rounds subnet epochs after a round opens before it is revealed, onchain_commitment, validator_rounds_enabled which lets validators run panel agents, min_round_validators capable validators before rounds switch to a newer bench version); dueling (dueling_enabled, off by default, opens bench v16+ dueling seasons that pin up to five eligible generators into every v16+ agent run, only while a v16+ contract is active or rolling out and the source release policy discloses; rounds_per_season generator rounds per season, default 1; dueling_shadow_bench_version, null by default, a shipped bench version 16+ that gets non-authoritative shadow seasons while no dueling version is active or rolling out, so issue_benchmark_canary at it can lease a slice before start_benchmark_rollout); skip_unchanged_rounds (on by default, and on for a revision that predates it): a round that would only repeat the last scored round is skipped at opening (reason skipped_unchanged) with no generation or panel inference, and the ledger keeps paying that scored round, dated from the latest skip; season catch-up (season_catchup_enabled, on by default, the kill switch; season_catchup_max_agents, default 5; season_catchup_budget_usd, default 10; season_catchup_run_cost_usd, default 0.5): at each season boundary every paid or public top-five agent with no score in the season that just closed gets one rotation re-score on the new set (a rollout shadow season reads the desired-version ranked quorum agents instead; a canary-only shadow season has none); the first season_catchup_max_agents always queue, and the overflow (board agents past the cap, then scored agents off the board whose window scores expire at this boundary or already expired, best last median first, one off-board catch-up per agent and bench version, passed over when below the lowest median on the board, when the owner family has a better agent, or when unranked) queues while runs x the metered per-run cost of the last 24 hours (the run-cost setting when nothing was metered) fits the budget; all recorded on the season as detail.catchup (agents, capped, overflow, over_budget, off_board_skipped with reasons, run_cost_usd), with its metered spend in get_dueling_season rotation_spend. These re-tests are platform work and never charged to the miner; frontier (frontier_weight, frontier_oracle_agent_id, frontier_audit_cases, frontier_audit_grace_hours, frontier_oracle_timeout_hours, frontier_oracle_model: oracle-attested, audited credit for valid cases no agent solves; frontier_oracle_model null runs the oracle and escalation agent on the bench contract\'s harness model, z-ai/glm-5.3-flash runs them on that model and leases the oracle only to validators whose scorer advertises it; see list_generator_frontier_audits); frontier escalation (frontier_escalation_agent_id, null by default = off because it spends inference; frontier_escalation_solve_threshold, default 1.0 = a full answer; frontier_escalation_max_cases per round, default 8; frontier_escalation_max_cases_per_column, default 4; frontier_escalation_max_failed_fraction, default 0.25: after the oracle reports, a stronger reference agent re-checks a secret-seed sample of the cases the oracle failed, skipping any column whose oracle failures exceed that share of its cases, and each case it passes is attested and audited like an oracle pass; see get_generator_round_frontier escalation); pre-screens (prescreen_enabled, off by default because it spends inference; prescreen_cases 8..80, default 16; prescreen_panel_size 1..16, default 3; prescreen_columns 1..8, default 4: batches of never-scored generators from the head of the challenger queue on a small panel while no round needs it, never paid; see list_generator_prescreens); window_days for the ledger; and upload_fee_required (true makes every generator upload carry a finalized TAO payment of the generator competition fee, get_submission_cooldown effective_competition_fees generator, which inherits the default fee until set_submission_cooldown competitionFees prices it, to the submission address, and a payment funds exactly one upload across both lanes; false, the shipped default and the reading of a Platform that predates the field, charges nothing; a competitionFees generator fee_required override decides instead when set). Returns the effective revision (0 means the shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
     inputSchema: MCP_SETTINGS_HISTORY_INPUT, annotations: toolAnnotations('read'),
   }, async ({ historyLimit, historyOffset }) =>
     result(compacted(pageRevisionHistory(await fetchGeneratorSettings(), historyLimit, historyOffset), REVISION_LISTS)))
 
   registerTool('set_generator_competition_settings', {
     title: 'Set generator competition settings',
-    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. min_round_validators (1..32, default 3, mirroring the agent rollout\'s quorum of 3 distinct validators) is how many validators must be able to run a round at a newer bench version before rounds switch to it; below it rounds stay on the previous round\'s version. Platform refuses min_solver_owners > min_panel, min_panel above the round panel (panel_size plus reference agents), duplicate reference agents, more than 8 columns, and dueling_enabled=true with rounds_per_season x epochs_per_round < 2 (a dueling season spans at least 2 epochs; dueling_enabled ships false and rounds_per_season defaults to 1). cases_per_seed is 8..80 and must also fit the live generator scorer\'s advertised bounds (get_generator_scorer); Platform refuses one it cannot run unless overrideScorerCapability=true (use only ahead of a scorer redeploy: rounds void with an infra reason and qualifications wait meanwhile). About 70 per column over 5 counted columns gives a round the ~350 cases of a bench v13 run. Raising it rejects, on its next round seed, every miner generator that cannot fill the new size (the public starter kit fills 80; older forks often stop at 32), and a round leases only to validators whose scorer advertises that column size; larger rounds also need more time left before their close to be leased (20 minutes, or 5 minutes plus 4 seconds per round case when longer). To start rounds: mode=shadow, a registered and qualified default generator (register_default_generator), then validator_rounds_enabled=true; check preview_generator_round first. To charge generator uploads, set upload_fee_required=true: the amount is the generator competition fee (the default submission fee until set_submission_cooldown competitionFees gives generator its own fee_amount_rao), miners on an older CLI get a 402 telling them to upgrade, and uploads already accepted are unaffected. Returns the revision this write created. mode=enforce (confirmation APPLY GENERATOR COMPETITION ENFORCE) runs the lane exactly like shadow but marks qualified miner generators weight_eligible on the ledger; validators pay them only from a generator share served by set_track_share_settings, and hand an unpaid generator share back to memory, so enforce alone moves no emission. Requires backroom:write.',
+    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. min_round_validators (1..32, default 3, mirroring the agent rollout\'s quorum of 3 distinct validators) is how many validators must be able to run a round at a newer bench version before rounds switch to it; below it rounds stay on the previous round\'s version. skip_unchanged_rounds (boolean, default true when omitted) skips a round whose generator sources, panel agents, bench version, column size and score params match the last scored round: no generation or panel inference, and the ledger keeps paying the scored round; false reruns every round. season_catchup_enabled (boolean, default true when omitted) re-scores once, at each season boundary, every paid or public top-five agent with no score in the season that just closed; false is the kill switch. season_catchup_max_agents (0..10, default 5) caps the board agents that always queue per season; season_catchup_budget_usd (0..200, default 10) bounds the estimated cost of the overflow beyond that cap (board agents past it, then off-board agents whose window scores expire), and season_catchup_run_cost_usd (>0..20, default 0.5) is the per-run estimate used when no rotation re-test was metered in the last 24 hours. Frontier fields (defaults when omitted): frontier_weight (0..1, default 1) is the share of full credit a frontier case earns; frontier_oracle_agent_id (default null = frontier off) is the scored reference agent that runs as the frontier oracle on a scored round\'s unsolved cases; frontier_audit_cases (0..16, default 3) per column are audited (see list_generator_frontier_audits; 0 applies attestations without an audit); frontier_audit_grace_hours (default 24) before unruled audits apply anyway; frontier_oracle_timeout_hours (default 12) before a round with no oracle run settles without credit; frontier_oracle_model (default null = the bench contract\'s harness model; z-ai/glm-5.3-flash is the only other value) is the model the oracle and escalation agent answer on, frozen into each round\'s frontier lane when it scores. Set, an oracle job leases only to validators whose scorer advertises the model, and Platform\'s inference allowed_models must include it, or oracle rounds wait and settle without credit at the timeout. Frontier escalation fields (defaults when omitted, so a write that omits them turns escalation off): frontier_escalation_agent_id (default null = off; inference spend, enable only with explicit approval; must differ from frontier_oracle_agent_id and from every reference agent), frontier_escalation_solve_threshold (>0..1, default 1), frontier_escalation_max_cases (1..64, default 8 per round), frontier_escalation_max_cases_per_column (1..16, default 4) and frontier_escalation_max_failed_fraction (>0..1, default 0.25). With frontier off the unchanged-round signature is unchanged, and with escalation off it is unchanged too. Pre-screen fields (defaults when omitted): prescreen_enabled (default false; inference spend, enable only with explicit approval), prescreen_cases (8..80, default 16), prescreen_panel_size (1..16, default 3) and prescreen_columns (1..8, default 4); see list_generator_prescreens. Platform refuses min_solver_owners > min_panel, min_panel above the round panel (panel_size plus reference agents), duplicate reference agents, more than 8 columns (counted_columns 1..6 plus challenger_columns 0..7; five counted columns leave room for three challengers; challenger_columns is a minimum: above 0, every template family with a never-scored generator waiting gets one challenger column up to 8 columns, and 0 turns challenger columns off), and dueling_enabled=true with rounds_per_season x epochs_per_round < 2 (a dueling season spans at least 2 epochs; dueling_enabled ships false and rounds_per_season defaults to 1). cases_per_seed is 8..80 and must also fit the live generator scorer\'s advertised bounds (get_generator_scorer); Platform refuses one it cannot run unless overrideScorerCapability=true (use only ahead of a scorer redeploy: rounds void with an infra reason and qualifications wait meanwhile). About 70 per column over 5 counted columns gives a round the ~350 cases of a bench v13 run. Raising it rejects, on its next round seed, every miner generator that cannot fill the new size (the public starter kit fills 80; older forks often stop at 32), and a round leases only to validators whose scorer advertises that column size; larger rounds also need more time left before their close to be leased (20 minutes, or 5 minutes plus 4 seconds per round case when longer). To start rounds: mode=shadow, a registered and qualified default generator (register_default_generator), then validator_rounds_enabled=true; check preview_generator_round first. To charge generator uploads, set upload_fee_required=true: the amount is the generator competition fee (the default submission fee until set_submission_cooldown competitionFees gives generator its own fee_amount_rao), miners on an older CLI get a 402 telling them to upgrade, and uploads already accepted are unaffected. Returns the revision this write created. mode=enforce (confirmation APPLY GENERATOR COMPETITION ENFORCE) runs the lane exactly like shadow but marks qualified miner generators weight_eligible on the ledger; validators pay them only from a generator share served by set_track_share_settings, and hand an unpaid generator share back to memory, so enforce alone moves no emission. Requires backroom:write.',
     inputSchema: setGeneratorSettingsInputSchema, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => setGeneratorSettings(input, props.session.email)))
 
@@ -1790,7 +1892,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_generator_submission', {
     title: 'Get generator submission',
-    description: 'One generator submission: its summary, owner key, consecutive lease attempts, the in-flight run and its lease expiry, and every run newest first (abandoned runs are expired leases whose seeds were retired). For a rejected submission, operator_ruling says whether reject_generator_submission rejected it and reinstate_blockers lists every guard reinstate_generator_submission would refuse on (empty: it would proceed). Use get_generator_run for a run\'s evaluation and verdicts. Source is never returned. Requires backroom:read.',
+    description: 'One generator submission: its summary, owner key, consecutive lease attempts, the in-flight run and its lease expiry, and every run newest first (abandoned runs are expired leases whose seeds were retired). For a rejected submission, operator_ruling says whether reject_generator_submission rejected it and reinstate_blockers lists every guard reinstate_generator_submission would refuse on (empty: it would proceed). Use get_generator_run for a run\'s evaluation and verdicts. Source is never returned here; read it with list_generator_source_files, search_generator_source and read_generator_source_file (artifact scope). Requires backroom:read.',
     inputSchema: generatorSubmissionIdInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchGeneratorSubmission(input)))
 
@@ -1799,6 +1901,56 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     description: 'One qualification run: status (qualified, invalid, copy, abandoned) and outcome, settings revision, scorer version, the stored evaluation (sandbox, build result and binary SHA-256, per-seed pack SHA-256, validation summary with up to 50 issues, generation errors, durations, determinism, and the probe result without its seed), and the outcome summary (case and probe counts, or copy_of/overlap for a behavioral copy). seeds is null while the run is leased and the exact seeds once it finished, so an operator can regenerate the packs with `challenge rehearse`. Round results live on get_generator_round. Requires backroom:read.',
     inputSchema: generatorRunIdInputSchema.extend({ runId: sourceAgentId() }), annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchGeneratorRun(input)))
+
+  // Generator source is miner-submitted code, so these gate on the same
+  // dedicated artifact scope as the screening source readers, and Platform
+  // audits every read under the operator's actor.
+  registerTool('list_generator_source_files', {
+    title: 'List generator source files',
+    description: 'Read the readable file manifest of one generator submission\'s stored source archive (the exact upload the miner signed; source_sha256 is its digest), in deterministic path order. Use it to audit a generator before or after it runs in a round: a hand-built case set usually ships as a data file (for example data/world1.json), and the manifest shows where. The default limit is the platform\'s own listing cap, so the default call returns the WHOLE manifest. `has_more` is the only field that reports MCP paging; `truncated` means the platform omitted paths before MCP paging, so no later offset can recover them. Unreadable binary or oversized `opaque_blobs` stay whole on every page. Works for any status, the public default included. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
+    inputSchema: {
+      submissionId: sourceAgentId(),
+      ...MCP_SOURCE_MANIFEST_PAGINATION_INPUT,
+    },
+    annotations: toolAnnotations('read'),
+  }, async ({ limit, offset, ...input }) =>
+    artifact(async () =>
+      compacted(
+        paginateLocalCollection(
+          await fetchGeneratorSourceFiles(input, props.session.email),
+          'files',
+          limit,
+          offset,
+        ),
+        { files: { pin: ['path'] }, opaque_blobs: { pin: ['path'] } },
+      ),
+    ))
+
+  registerTool('read_generator_source_file', {
+    title: 'Read generator source file',
+    description: 'Read a bounded line range (max 400 lines) from one file of a generator submission\'s source archive, for example to check a hand-built case file for well-formedness, answer leakage or contradictions before a round runs it. When you do not have a line number yet, call search_generator_source (a case id, a question phrase, a function name) instead of bisecting with 400-line windows. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
+    inputSchema: {
+      submissionId: sourceAgentId(),
+      path: z.string().min(1).max(240),
+      startLine: z.number().int().min(1).default(1),
+      endLine: z.number().int().min(1).default(400),
+    },
+    annotations: toolAnnotations('read'),
+  }, async (input) =>
+    artifact(() => fetchGeneratorSourceExcerpt(input, props.session.email)))
+
+  registerTool('search_generator_source', {
+    title: 'Search generator source',
+    description: 'Search one generator submission\'s readable source for a regex (mode=regex, the default) or an exact string (mode=literal), returning {path, line, text} for every match with optional context lines. Use it to find where the generator builds its cases, which data file holds a case id, or whether an answer string appears where it should not. Scope with pathGlob (`data/*.json`; a glob with no `/` also matches the basename), widen with context (0-5 lines each side). Matches are ordered by path then line, so paging is stable: `match_count` is the total the scan found, `has_more` reports the page boundary, and `truncated` means the scan hit its match cap and the totals are lower bounds. Binary and oversized members are never searched; `opaque_skipped` counts them. Requires the dedicated backroom:artifact:read scope because it returns miner source lines.',
+    inputSchema: { ...generatorSourceSearchInputSchema.shape, submissionId: sourceAgentId(), ...MCP_PAGINATION_INPUT },
+    annotations: toolAnnotations('read'),
+  }, async ({ limit, offset, ...input }) =>
+    artifact(async () =>
+      compacted(
+        await searchGeneratorSource(input, props.session.email, limit, offset),
+        { matches: { pin: ['path', 'line'] } },
+      ),
+    ))
 
   registerTool('get_generator_probe', {
     title: 'Get generator probe epochs',
@@ -1842,21 +1994,92 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     inputSchema: reinstateGeneratorInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', false),
   }, async (input) => write(() => reinstateGenerator(input, props.session.email)))
 
+  // model_context (CPM) competition, contract #3572 section 8. Weights and
+  // season seeds are public by contract, so every read is plain read scope;
+  // writes are write scope, confirmation-gated, and audited by Platform under
+  // the operator's email.
+  registerTool('get_model_context_settings', {
+    title: 'Get model_context settings',
+    description: 'Read the model_context (CPM) competition policy: mode (off refuses uploads, opens no season, leases nothing and serves an empty ledger; shadow runs the lane with a ledger validators fold to nothing; enforce runs it identically, and the track pays nothing until a validator release pays model_context and an owner sets its share), base_allowlist (each allowlisted Qwen3.5 base: base_id, Hugging Face repo and pinned revision, parameter count, architectures, LoRA target modules), max_lora_rank, max_total_bytes, upload_cooldown_seconds, upload_fee_required (always false in v1: the fee path is not built), season_days, floor_margin (a submission is eligible at floor(base) + floor_margin), budget_tokens and tool_k (the scorer task), rank_shares, bench_version (the DittoBench version a newly opened season pins), lease_ttl_seconds and max_attempts (scorer leases). Returns the effective revision (0 = shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
+    inputSchema: MCP_SETTINGS_HISTORY_INPUT, annotations: toolAnnotations('read'),
+  }, async ({ historyLimit, historyOffset }) =>
+    result(compacted(pageRevisionHistory(await fetchModelContextSettings(), historyLimit, historyOffset), REVISION_LISTS)))
+
+  registerTool('set_model_context_settings', {
+    title: 'Set model_context settings',
+    description: 'Append one whole-object revision of the model_context (CPM) competition policy. Send every field (read get_model_context_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY MODEL CONTEXT COMPETITION <MODE>" naming the mode this revision applies. upload_fee_required must stay false (v1 has no fee path; Platform refuses true). rank_shares must not increase with rank and must sum to at most 1; base ids must be unique. Moving off -> shadow opens uploads, and the next season-loop tick opens season 1 on the finalized head; moving to off closes uploads, stops leasing and empties the ledger, but keeps every submission and season. mode=enforce moves no emission until a validator release pays model_context and an owner sets its track share. Returns the revision this write created. Requires backroom:write.',
+    inputSchema: setModelContextSettingsInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => setModelContextSettings(input, props.session.email)))
+
+  registerTool('list_model_context_submissions', {
+    title: 'List model_context submissions',
+    description: 'Newest-first model_context submissions across every hotkey: hotkey, Hugging Face repo and pinned revision, manifest and weights SHA-256, base, kind (lora or full), commitment block (its priority), status (screening: Platform is downloading and statically screening the pinned revision; queued: the hotkey\'s active submission waiting for its season run; scored; rejected with reject_reason naming a screening refusal, duplicate_weights, a scorer model_load/invalid_model verdict or an operator ruling; superseded by a newer submission of the hotkey), model_url, and the latest run. Filter by hotkey or status; counts_by_status counts every submission regardless of the filter. Requires backroom:read.',
+    inputSchema: listModelContextSubmissionsInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await listModelContextSubmissions(input)))
+
+  registerTool('get_model_context_submission', {
+    title: 'Get model_context submission',
+    description: 'One model_context submission: its summary, the exact manifest the miner committed, total bytes, the screening detail (what the static screen found: tensor and parameter counts, LoRA rank and target modules or full-model architectures, file count and bytes), screening attempts and lease, every run newest first (status, score, components, per-seed results, scorer, GPU SKU, attempts, fault; the run lease id is never served), and the operator audit (every rescore and rejection with actor, reason and detail). Requires backroom:read.',
+    inputSchema: modelContextSubmissionIdInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchModelContextSubmission(input)))
+
+  registerTool('get_model_context_run', {
+    title: 'Get model_context run',
+    description: 'One model_context run, a submission run or a reference run (an unmodified base whose score is that base\'s season floor): kind, base, season, status (queued, leased, scored, failed, abandoned), score, components (memory_recall, distractor_rate, tool_recall, case counts, packed tokens), per-seed results with their public uint64 seeds, scorer id and version, GPU SKU, lease attempts and expiry, fault (infra faults re-queue until max_attempts; nondeterministic fails the run; model_load and invalid_model also reject the submission), the submission it scored, its season (open block, hash, seeds, floors) and the base floor. Requires backroom:read.',
+    inputSchema: modelContextRunIdInputSchema.extend({ runId: sourceAgentId() }), annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchModelContextRun(input)))
+
+  registerTool('rescore_model_context_submission', {
+    title: 'Rescore model_context submission',
+    description: 'Queue one more run of an active (queued or scored) model_context submission in the open season, for a run that failed or was abandoned for a reason that was not the model\'s (a nondeterministic verdict traced to the scorer host, exhausted infra leases). The submission keeps its status; a score it already has this season stays on the board until the new run lands, and then the latest scored run stands. Refused while mode is off, when no season is open, or while a run of it is already queued or leased. expectedStatus must match the current status, the confirmation is RESCORE MODEL CONTEXT SUBMISSION, and the reason is audited. Requires backroom:write.',
+    inputSchema: rescoreModelContextInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => rescoreModelContextSubmission(input, props.session.email)))
+
+  registerTool('reject_model_context_submission', {
+    title: 'Reject model_context submission',
+    description: 'Reject one model_context submission by operator ruling, for example a copy screening missed (same weights under a perturbation), a manifest that misstates its training data, or abuse. It leaves the board and the validator ledger at once, its queued or leased runs are abandoned (a scorer\'s late result is refused), and a submission still screening is never queued. The hotkey\'s earlier superseded submission is not restored; the miner can submit again after the cooldown. expectedStatus must match the current status, the confirmation is REJECT MODEL CONTEXT SUBMISSION, and the reason is audited in full (reject_reason keeps its first 1000 characters). Not reversible from Backroom. Requires backroom:write.',
+    inputSchema: rejectModelContextInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => rejectModelContextSubmission(input, props.session.email)))
+
+  registerTool('get_model_context_board', {
+    title: 'Get model_context board',
+    description: 'The public model_context board for the open season, ranked by score then commitment block (earlier first): rank, hotkey, submission, score, components, eligible (score at least the base floor plus floor_margin), floor, commitment block, base, kind, repo, pinned revision and model_url; with mode, floor_margin and base_floors. Also returns the open season itself: open block and hash, the three public seeds derived from it, bench version, cpm_score_version, GPU SKU (fixed by its first result), opened, closes and closed times. Empty while mode is off or no season is open. Requires backroom:read.',
+    inputSchema: {}, annotations: toolAnnotations('read'),
+  }, async () => result(await fetchModelContextBoard()))
+
+  registerTool('get_model_context_scorer', {
+    title: 'Get model_context scorer',
+    description: 'What each CPM scorer last reported on a poll (scorer id, version, GPU SKU, which poll, first and last seen), the queued and leased run backlog, submissions still screening, the open season, and whether this Platform process runs the season and screening loop with its last tick error (loop_running=false means another Platform role runs it). Requires backroom:read.',
+    inputSchema: {}, annotations: toolAnnotations('read'),
+  }, async () => result(await fetchModelContextScorer()))
+
+  registerTool('rotate_model_context_season', {
+    title: 'Rotate model_context season',
+    description: 'Close the open model_context season now and open the next on the current finalized head, for example after a base was replaced in base_allowlist or a season\'s seeds must be retired. The new season derives three seeds from its open block hash, pins the current bench_version, and queues a reference run per allowlisted base (the floors) plus a run for every active submission; the closed season\'s open runs are abandoned and its board is no longer served. Refused while mode is off; a chain read failure changes nothing (503). Confirmation: ROTATE MODEL CONTEXT SEASON; the reason is audited. Requires backroom:write.',
+    inputSchema: rotateModelContextSeasonInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => rotateModelContextSeason(input, props.session.email)))
+
   registerTool('list_generator_rounds', {
     title: 'List generator rounds',
-    description: 'Newest-first generator rounds and the chain schedule. A round is keyed on the chain epoch counter: it opens at a subnet epoch and spans epochs_per_round epochs, and indexes keep increasing across a cadence change. Each round reports status (committed: secret drawn and commitment published one round ahead; generating: columns and panel frozen, seed derived from the committed secret and the block the round opened at, waiting for the scorer to build the dataset; running: validators are running panel agents on it; scoring; scored; void with void_reason, which starts insufficient_panel or insufficient_answered_results when too few seated panel agents reported or answered at least one case), commitment and its on-chain publication state (published by elected validators; commitment_confirmations counts them), open epoch and block, column count, panel size, panel_dropped (agents dropped mid-round as ineligible), results received, answered_results (results from seated agents that answered at least one case; a run that faulted every case counts as not reported), and once privacy_window_rounds subnet epochs have passed since it opened (and it is scored or void) the revealed secret and seed. schedule shows the observed SubnetEpochIndex, current round, and the epoch the next round opens at. Requires backroom:read.',
+    description: 'Newest-first generator rounds and the chain schedule. A round is keyed on the chain epoch counter: it opens at a subnet epoch and spans epochs_per_round epochs, and indexes keep increasing across a cadence change. Each round reports status (committed: secret drawn and commitment published one round ahead; generating: columns and panel frozen, seed derived from the committed secret and the block the round opened at, waiting for the scorer to build the dataset; running: validators are running panel agents on it; scoring; scored; skipped (skip_reason skipped_unchanged: its frozen columns, i.e. generator submissions and source digests, its panel agents and champion, bench version, column size and score params all matched the last scored round, so it ran no generation and no panel inference; carried_from_round names that scored round, whose column scores the ledger keeps paying, dated from the latest skip); void with void_reason, which starts insufficient_panel or insufficient_answered_results when too few seated panel agents reported or answered at least one case), commitment and its on-chain publication state (published by elected validators; commitment_confirmations counts them), open epoch and block, column count, panel size, panel_dropped (agents dropped mid-round as ineligible), results received, answered_results (results from seated agents that answered at least one case; a run that faulted every case counts as not reported), and once privacy_window_rounds subnet epochs have passed since it opened (and it is scored, skipped or void) the revealed secret and seed. schedule shows the observed SubnetEpochIndex, current round, and the epoch the next round opens at. Requires backroom:read.',
     inputSchema: listGeneratorRoundsInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await listGeneratorRounds(input)))
 
+  registerTool('list_generator_prescreens', {
+    title: 'List generator pre-screens',
+    description: 'Newest-first generator pre-screen batches with counts by status. A pre-screen runs up to prescreen_columns never-scored generators from the head of the challenger queue (one per owner, each never pre-screened), prescreen_cases cases each on a fresh secret seed, on the top prescreen_panel_size runnable ledger owners, opening only while no round and no other batch is in flight and the next round opens more than an hour later, so a batch always closes before the next round opens. Its index is at or above 2**40, apart from round indexes. It is never paid and never on the ledger: its column scores only order the challenger queue. Each batch reports status (generating, running, scoring, scored, or void with void_reason: not scored within an hour of opening, or too few eligible panel agents left; a void batch returns its generators to the queue unscreened), the frozen columns and panel (an agent banned or held mid-batch keeps its slot with dropped_reason and its results are not scored), settings revision, cases per column, bench version, dataset digest and scorer lease attempts. The lane ships off (prescreen_enabled in get_generator_competition_settings) because it spends inference. Requires backroom:read.',
+    inputSchema: listGeneratorPrescreensInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await listGeneratorPrescreens(input)))
+
   registerTool('get_generator_round', {
     title: 'Get generator round',
-    description: 'Everything about one round for running or debugging it: the frozen columns (submission, hotkey, owner key, source SHA-256, counted or challenger, public default), the panel (agents, owner keys, champion, reference agents, and dropped_reason/dropped_at for an agent dropped mid-round because it was banned, held or otherwise stopped being runnable; the seat is never refilled and its result is not scored), skipped_panel_agents (ranked owners passed over at freeze because their agent could not run, with the reason; the next eligible owner took the seat), the settings revision and cases per column, per-column generation results (ok, error, build and generate durations, scorer version), case counts per column and dataset size, the scorer lease and its attempts, commitment publication and error, which validators published the commitment on chain (commitment_publications: each elected validator\'s claim, status claimed/confirmed/failed/expired, block number and detail; commitment_elected: who is asked right now; commitment_publishers_target), every validator lease attempt (validator, slot, deadline, status, detail), every accepted result (validator, run id, answered, faulted, mean score, excluded_reason when it does not count: its agent was dropped or it faulted every case), the panel agents still pending, and once scored the per-column scores and pairwise-neutral agent standings. The seed and secret are withheld until the round is revealed; get_generator_round_dataset (backroom:artifact:read) returns the seed with the dataset. Requires backroom:read.',
+    description: 'Everything about one round for running or debugging it: the frozen columns (submission, hotkey, owner key, source SHA-256, counted or challenger, public default), the panel (agents, owner keys, champion, reference agents, and dropped_reason/dropped_at for an agent dropped mid-round because it was banned, held or otherwise stopped being runnable; the seat is never refilled and its result is not scored), skipped_panel_agents (ranked owners passed over at freeze because their agent could not run, with the reason; the next eligible owner took the seat), the settings revision and cases per column, per-column generation results (ok, error, build and generate durations, scorer version), case counts per column and dataset size, the scorer lease and its attempts, commitment publication and error, which validators published the commitment on chain (commitment_publications: each elected validator\'s claim, status claimed/confirmed/failed/expired, block number and detail; commitment_elected: who is asked right now; commitment_publishers_target), every validator lease attempt (validator, slot, deadline, status, detail), every accepted result (validator, run id, answered, faulted, mean score, excluded_reason when it does not count: its agent was dropped or it faulted every case), the panel agents still pending, and once scored the per-column scores and pairwise-neutral agent standings. A skipped round shows summary.status skipped with skip_reason skipped_unchanged and carried_from_round (the scored round it repeats; generation.skipped_unchanged also holds the matched signature and skipped_at): no dataset, attempts or results. The seed and secret are withheld until the round is revealed; get_generator_round_dataset (backroom:artifact:read) returns the seed with the dataset. Requires backroom:read.',
     inputSchema: generatorRoundIndexInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchGeneratorRound(input)))
 
   registerTool('preview_generator_round', {
     title: 'Preview generator round',
-    description: 'What a round opened right now would freeze: counted columns (best qualified generators by latest round score, then never-scored ones, then the public default generator filling the rest) and challenger columns, and the panel (top runnable ledger owners plus reference agents; skipped_panel_agents lists ranked owners passed over as ineligible). Lists every blocker: mode off, invalid settings, no counted columns (no qualified generator and no registered or qualified default), a panel below min_panel, skipped reference agents, validator_rounds_enabled=false, and no validator able to run any round contract. bench_contract names the bench version a round opened now would freeze (the active version\'s round contract when a validator can run it, else the newest one below it, with the reason), the round contracts (pack grading policies, 13 and 14), and capable_validators per contract: check it before and after a benchmark activation. Rounds switch to a version newer than previous_version (the newest opened round\'s) only with min_round_validators capable validators, and only at a version in scorer_grading_versions (the live generator scorer\'s advertised list; v13 only when it advertises none); reason names any shortfall. Use it before switching the lane on. Requires backroom:read.',
+    description: 'What a round opened right now would freeze: counted columns (best qualified generators by latest round score, then never-scored ones, then the public default generator filling the rest) and challenger columns (one per template family waiting in challenger_queue, at least challenger_columns, at most 8 columns a round, spare ones going on down the queue and then re-measuring scored generators), and the panel (top runnable ledger owners plus reference agents; skipped_panel_agents lists ranked owners passed over as ineligible). Lists every blocker: mode off, invalid settings, no counted columns (no qualified generator and no registered or qualified default), a panel below min_panel, skipped reference agents, validator_rounds_enabled=false, and no validator able to run any round contract. bench_contract names the bench version a round opened now would freeze (the active version\'s round contract when a validator can run it, else the newest one below it, with the reason), the round contracts (pack grading policies, 13 and 14), and capable_validators per contract: check it before and after a benchmark activation. Rounds switch to a version newer than previous_version (the newest opened round\'s) only with min_round_validators capable validators, and only at a version in scorer_grading_versions (the live generator scorer\'s advertised list; v13 only when it advertises none); reason names any shortfall. challenger_queue lists every never-scored qualified miner generator in pick order. Template families are interleaved: a family is one owner key, joined with builds of one template under other owners (same Go module and file count, archive size within 1%), and family_position counts the family\'s scored or in-flight members plus its members ahead, so a batch of near-identical builds from one coldkey takes a challenger column only while no other family is waiting. Within a family position a pre-screen result comes first (prescreen_score: a positive score, best first, then generators not pre-screened yet, then a zero; see list_generator_prescreens), then the highest novelty: the share of a generator\'s probe cases (its case fingerprints on the epoch\'s shared probe seed) that no measured generator and no generator ahead of it emitted, so a partial or mosaic copy of measured cases, or a twin of a build already ahead, waits behind new cases; novelty is computed on emitted cases, so padding source cannot raise it. Each entry\'s status says what a round opened now would do with it: challenger or counted (with column_id), in_flight while an earlier round is still measuring it (in_flight_round), owner_has_column, or waiting. The public default generator is never in the queue. Use it before switching the lane on. Requires backroom:read.',
     inputSchema: {}, annotations: toolAnnotations('read'),
   }, async () => result(await fetchGeneratorRoundPreview()))
 
@@ -1868,7 +2091,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_generator_round_loop', {
     title: 'Get generator round loop',
-    description: 'The round driver\'s last tick on the Platform process that runs it: tick and success times, the last error (chain read failures leave rounds untouched), the actions the last tick took (commit, open, close, void, reveal), the tick count, and the observed chain schedule. available=false means this process does not run the driver. Requires backroom:read.',
+    description: 'The round driver\'s last tick on the Platform process that runs it: tick and success times, the last error (chain read failures leave rounds untouched), the actions the last tick took (commit, open, skip, close, void, reveal), the tick count, and the observed chain schedule. skip_unchanged_rounds is the governing setting (on by default): a round whose columns, panel, bench version, column size and score params match the last scored round is skipped at opening with reason skipped_unchanged and spends no inference. skipped_rounds counts every skipped round and last_skipped_round names the newest (round_index, reason, carried_from_round, skipped_at). available=false means this process does not run the driver (the skip fields still read the database). Requires backroom:read.',
     inputSchema: {}, annotations: toolAnnotations('read'),
   }, async () => result(await fetchGeneratorRoundLoop()))
 
@@ -1886,21 +2109,39 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_dueling_season', {
     title: 'Get dueling season',
-    description: 'Dueling bench (bench v16+) seasons: the frozen generator set every v16+ agent run is scored on. Without seasonId: target (bench_version seasons run at, shadow=true while it is only the desired version of an open rollout, blocked naming why no season can open: generator competition off, dueling_enabled false, no v16+ contract active or rolling out, or source release disclosure never), current (the open season), next (the committed season waiting for its opening round) and recent (closed, revealed, void). With seasonId: that season. Each season shows its commitment (published before its anchor block existed), anchor block and hash (the opening round\'s open block), columns (c0..c4: submission, hotkey, owner_key, tree and source SHA-256, grading_bench_version, public_default; the public default has an empty owner_key and is never masked), fallback, close and reveal schedule (closes_at_round, reveal_at_epoch), rotation (who, why, immediate), detail (close reason, skipped candidates with why, substituted generators that sit out the next season), batteries (each candidate\'s 32-seed season battery: rank by ledger score with evidence, status, declared grading policy, error), column_means (each column\'s mean case score across in-season scores, default_gap to the public default columns, below_floor under 0.15: consider rotate_dueling_season) and slice counts by status; scores_without_dueling and confirmation_scores_without_dueling count bench v16+ rows with no season or aggregates (they never rank or pay; nonzero is a bug). secret_hex and season_seed stay null until the season is revealed. Requires backroom:read.',
+    description: 'Dueling bench (bench v16+) seasons: the frozen generator set every v16+ agent run is scored on. Without seasonId: target (bench_version seasons run at, shadow=true while it is only the desired version of an open rollout, blocked naming why no season can open: generator competition off, dueling_enabled false, no v16+ contract active or rolling out, or source release disclosure never), current (the open season), next (the committed season waiting for its opening round) and recent (closed, revealed, void). With seasonId: that season. Each season shows its commitment (published before its anchor block existed), anchor block and hash (the opening round\'s open block), columns (c0..c4: submission, hotkey, owner_key, tree and source SHA-256, grading_bench_version, public_default; the public default has an empty owner_key and is never masked), fallback, close and reveal schedule (closes_at_round, reveal_at_epoch), rotation (who, why, immediate), detail (close reason, skipped candidates with why, substituted generators that sit out the next season, idle_extensions: count, first/last extended_at and recent boundaries where an idle season was extended instead of rotated because its pins, rotation cohort and eligible agents had not changed; no rotation re-test runs and no score expires while it is extended, and agents uploaded after first_extended_at owe no duel seeds in it), batteries (each candidate\'s 32-seed season battery: rank by ledger score with evidence, status, declared grading policy, error), column_means (each column\'s mean case score across in-season scores, default_gap to the public default columns, below_floor under 0.15: consider rotate_dueling_season) slice counts by status, and rotation (the season-open mini-rollout: standing current, provisional for one season, or expired from the authoritative ledger; the cohort re-scored on the new set, champion rank 0 first, from the continual cohort or the rollout members; rotation re-tests queued, pending, running and closed; cohort scores and full quorums already in the season); detail.catchup (the season-boundary catch-up: closed_season_id, the board read before the window advanced, agents queued, in_opening_cohort, capped, queued counts, or skipped/error); rotation_spend (metered inference cost of rotation re-test leases from the grant ledger, never an estimate: last_24h_opening and last_24h_catchup are dollars/day, and per season opening and catchup runs, priced_runs and cost_usd, newest first); scores_without_dueling and confirmation_scores_without_dueling count bench v16+ rows with no season or aggregates (they never rank or pay; nonzero is a bug). secret_hex and season_seed stay null until the season is revealed. On-chain commitment: commitment_publication (pending while committed with onchain_commitment on, then published, failed when no validator confirmed it before the season opened, or disabled), commitment_block and commitment_extrinsic_hash (the earliest validator-confirmed dds1:{season_index}:{commitment} publication), commitment_error, and with seasonId every validator claim (commitment_publications) plus who is elected now (commitment_publishers_elected); see republish_dueling_season_commitment. Requires backroom:read.',
     inputSchema: getDuelingSeasonInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchDuelingSeason(input)))
 
   registerTool('list_dueling_slices', {
     title: 'List dueling slices',
-    description: 'Dueling slice preparations, newest first: one per (season, run_seed), reserved when a bench v16+ lease finds no ready slice (the lease answers 503 with Retry-After meanwhile) and built by the trusted generator scorer. Each row has status (pending, leased, ready, failed), attempts, error, scorer version, slice_sha256 and size (never the bytes; bytes_pruned once retention dropped them), per-column results (substituted when a pinned generator failed on that seed and the public default filled it), and latency from reservation to ready or failed; latency_p50/p95 summarize the page and counts covers the whole filter. Filter by seasonId and status. Requires backroom:read.',
+    description: 'Dueling slice preparations, newest first: one per (season, run_seed), reserved when a bench v16+ lease finds no ready slice (the lease answers 503 with Retry-After meanwhile) and built by the trusted generator scorer. Each row has status (pending, leased, ready, failed), attempts, error, scorer version, slice_sha256 and size (never the bytes; bytes_pruned once retention dropped them), per-column results (substituted when a pinned generator failed on that seed and the public default filled it), and latency from reservation to ready or failed; latency_p50/p95 summarize the page and counts covers the whole filter. For a failed preparation it also shows retries, the last retry actor, time and reason, retryable and retry_refusal (see retry_dueling_slice_preparation). Filter by seasonId, status, or one preparationId. Requires backroom:read.',
     inputSchema: listDuelingSlicesInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await listDuelingSlices(input)))
+
+  registerTool('list_generator_source_releases', {
+    title: 'List generator source releases',
+    description: 'Pinned dueling generators\' source releases (bench v16+), one per submission: tree/source SHA-256, first and last pinning season, release_at = max(last pinning season reveal, first pinning season close + embargo_hours), released_at, embargo, disclosure, scorer revision. status: waiting_close, waiting_reveal, embargoed, due (releases next tick), withheld (due but policy does not publish), released (public archive). counts covers every row. Requires backroom:read.',
+    inputSchema: listGeneratorSourceReleasesInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await listGeneratorSourceReleases(input)))
+
+  registerTool('retry_dueling_slice_preparation', {
+    title: 'Retry dueling slice preparation',
+    description: 'Re-queue exactly one failed dueling slice preparation so the next bench v16+ lease of its seed reserves it again: status goes back to pending, attempts are kept (the lease attempt cap restarts), the error is cleared, and the retry is audited (actor, reason, previous error). Read it first with list_dueling_slices (preparationId): send expectedStatus failed and expectedError exactly as shown. Refused unless the preparation is failed, its season is open (a closed, revealed or void season is never retried), and the failure was not the scorer refusing the request itself (infra: unsupported_request, such as a digest mismatch on the pinned source: rotate_dueling_season instead), unless force=true with the reason recorded. Confirmation: RETRY DUELING SLICE {preparationId}. Requires backroom:write.',
+    inputSchema: retryDuelingSliceInputSchema, annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => retryDuelingSlicePreparation(input, props.session.email)))
 
   registerTool('rotate_dueling_season', {
     title: 'Rotate dueling season',
     description: 'Rotate the open dueling season early, for example when a column\'s in-season mean falls below the 0.15 floor, its default-relative gap is an outlier, or a pinned generator was banned or ruled a copy. Columns are never swapped in place: the season closes at the next round boundary (or on the next round-driver tick with immediate=true; no season serves slices until the next one opens at the following round boundary, so v16+ leases wait) and the next season opens on a fresh battery. seasonId defaults to the open season of the dueling target version. Refused when no season is open or it was already rotated (a pending boundary rotation may still be escalated to immediate). Confirmation: ROTATE DUELING SEASON. The reason is audited. Requires backroom:write.',
     inputSchema: rotateDuelingSeasonInputSchema, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => rotateDuelingSeason(input, props.session.email)))
+
+  registerTool('republish_dueling_season_commitment', {
+    title: 'Republish dueling season commitment',
+    description: 'Reopen on-chain publication of a committed dueling season\'s seed commitment (payload dds1:{season_index}:{commitment}; shadow seasons publish too). Platform never publishes it itself: it elects up to three fresh validators advertising season_commitments, in a stable per-season order, to call Commitments set_commitment from their own Pylon identity. This sets publication back to pending and forgets every failed or unconfirmed validator claim so the election starts over; confirmed validators still count. Refused once the season reached its validator target or left committed (a commitment published after its anchor proves nothing). Confirmation: REPUBLISH DUELING SEASON COMMITMENT. The reason is audited. Requires backroom:write.',
+    inputSchema: republishDuelingCommitmentInputSchema, annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => republishDuelingSeasonCommitment(input, props.session.email)))
 
   registerTool('void_generator_round', {
     title: 'Void generator round',
@@ -1925,6 +2166,42 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     description: 'Release one validator\'s live round lease for one panel agent so another validator can take it, for a validator that went quiet mid-run. The ticket returns to rest without charging the agent anything, the attempt is recorded failed with your reason, and an audit entry is written. Confirmation: RELEASE GENERATOR ROUND LEASE. Requires backroom:write.',
     inputSchema: releaseRoundLeaseInputSchema.extend({ agentId: sourceAgentId(), validatorHotkey: z.string() }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => releaseGeneratorRoundLease(input, props.session.email)))
+
+  registerTool('list_generator_frontier_audits', {
+    title: 'List generator frontier audits',
+    description: 'The frontier audit queue, oldest round first. Frontier cases: a round case no two independent panel owners solved is unsolved (zero credit plus the squared unsolved penalty), but failing every agent does not prove a case broken. When frontier scoring is on (frontier_weight > 0 and frontier_oracle_agent_id set in get_generator_competition_settings), a scored round\'s unsolved miner-column cases go to the frontier oracle: the configured subnet-run reference agent answers each from only a bounded context (its cited evidence, the pairs stating its declared distractors, and its closest BM25 competitors, with nothing marking which is which). Cases the oracle passes are attested, and each column\'s audit sample (frontier_audit_cases, drawn from the secret round seed so the miner cannot predict it) waits here for a ruling. Each entry: round, column, submission, hotkey, status, sample case ids, attested case count, audit_deadline (after which the attestations apply anyway). includeRuled also lists ruled audits of rounds not yet settled. Requires backroom:read.',
+    inputSchema: listGeneratorFrontierAuditsInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await listGeneratorFrontierAudits(input)))
+
+  registerTool('get_generator_round_frontier', {
+    title: 'Get generator round frontier',
+    description: 'One scored round\'s frontier lane: state (oracle_pending: waiting for a validator whose scorer runs generator-frontier-oracle-v1 to run the oracle agent; audit_pending: oracle reported, audits open; settled), the oracle agent, oracle_model (the model its oracle and escalation runs answer on, null = the bench contract\'s harness model), frontier_weight and audit_cases frozen from the round\'s settings revision, candidates (unsolved miner-column round case ids), oracle_attempts and oracle_deadline (the round settles with no attestations after frontier_oracle_timeout_hours or 4 failed leases), the oracle run (validator, run id, passed/failed/faulted counts and the signed per-case scores), escalation (null unless the round\'s policy set frontier_escalation_agent_id: the escalation agent and solve_threshold, oracle_failed, the selected oracle-failed case ids it re-checks, skipped_columns with the reason, attempts, deadline, outcome pending/reported/nothing selected/escalation timed out/escalation attempts exhausted, and once reported its run, passed case ids and signed per-case scores; while it runs the state stays oracle_pending and oracle_deadline is null; its passes join attested and the audits), attested case ids per column, each column\'s audit (sample, status, ruling, reason, actor), and once settled the applied case ids, settle_reason, the current column scores and the pre-frontier base_column_scores. Until it settles the round pays its unattested score. 404 when the round had no frontier candidates or frontier scoring was off. Requires backroom:read.',
+    inputSchema: generatorRoundIndexInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGeneratorRoundFrontier(input)))
+
+  registerTool('get_generator_frontier_audit', {
+    title: 'Get generator frontier audit',
+    description: 'Read one column\'s frontier audit sample to rule it: per sampled case the question, gold answer (expected_answer, answer_items, accept_any), the declared competitors (distractor_answers, forbidden_answer, dump_guard), user and run_after_wave, the cited evidence pairs, visible_pairs (the count of the user\'s memory pairs at that point, not their contents), memory_matches (the visible pairs containing q, or the first 200 without q; memory_truncated is true when the list was cut, so it is then a partial view of the memory) to look for a contradicting fact the oracle\'s bounded context could have missed, and the panel\'s and oracle\'s scores. A case is valid when it is a fair memory question whose gold answer is the only right answer given the whole visible memory; invalid when the gold is wrong or superseded, the question is ambiguous, or it only beats agents through tricks such as instructions planted in memory. Requires backroom:artifact:read because the cases are private benchmark content.',
+    inputSchema: generatorFrontierAuditInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => artifact(() => fetchGeneratorFrontierAudit(input)))
+
+  registerTool('rule_generator_frontier_audit', {
+    title: 'Rule generator frontier audit',
+    description: 'Rule one column\'s frontier audit after reading it with get_generator_frontier_audit. valid=true keeps every oracle attestation on the column (invalidCaseIds empty); valid=false names the sampled cases that are not fair memory questions and voids ALL of the column\'s frontier credit for the round (its unsolved cases keep the squared penalty), recorded against the submission as an operator action: repeated invalid audits are grounds for reject_generator_submission. The round settles once every audit is ruled. A ruled audit is final. Confirmation: RULE FRONTIER AUDIT {roundIndex} {columnId} VALID or INVALID. Requires backroom:write.',
+    inputSchema: ruleGeneratorFrontierAuditInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => ruleGeneratorFrontierAudit(input, props.session.email)))
+
+  registerTool('settle_generator_round_frontier', {
+    title: 'Settle generator round frontier',
+    description: 'Settle a round\'s frontier lane now instead of waiting for its audits\' grace or the oracle\'s timeout: attestations of columns whose audit did not fail are applied (none while the oracle has not reported), and the lane closes. Use it when the oracle agent is misconfigured or an audit cannot be ruled. Audited. Confirmation: SETTLE GENERATOR FRONTIER {roundIndex}. Requires backroom:write.',
+    inputSchema: settleGeneratorFrontierInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => settleGeneratorRoundFrontier(input, props.session.email)))
+
+  registerTool('rerun_generator_round_frontier', {
+    title: 'Rerun generator round frontier',
+    description: 'Re-run the frontier oracle on a held or zero-credit settled round under the current oracle settings (such as after rolling out a new frontier_oracle_model), routing its new attestations through the full oracle -> audit -> settle lifecycle. Refuses healthy open rounds, live oracle leases, and rounds that already settled with nonzero frontier credit. Audited. Confirmation: RERUN GENERATOR FRONTIER {roundIndex}. Requires backroom:write.',
+    inputSchema: rerunGeneratorFrontierInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => rerunGeneratorRoundFrontier(input, props.session.email)))
 
   registerTool('create_default_generator_upload', {
     title: 'Create default generator upload',
@@ -2119,7 +2396,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Search screening submissions',
       description:
-        'Resolve what an operator knows (a name, a miner, an artifact, a status, a failure class) to exact SN118 submissions in one call. Filters are optional and AND-combined server-side on Platform: agentName exact; agentNamePrefix a literal prefix (% and _ match themselves), e.g. moonlight for every version and family; minerHotkey exact; minerColdkey the payment-time owner; artifactSha256 exact (any case); agentStatus and screeningReasonCode any-of lists; submittedAfter inclusive and submittedBefore exclusive, ISO-8601 with an offset. At least one filter is required; unfiltered paging is list_screening_submissions. Rows are newest first by submitted_at then agent_id and count is the filtered total, so offset pages the match set. generation defaults to all because the submission you are looking for may predate the active benchmark; pass active to scope to the current admission boundary. detail=identity (default) returns agent_id, agent_name, agent_version, agent_status, submitted_at, artifact_sha256; summary adds miner keys, reasons, and the latest attempt; full adds attempt history. Hand an agent_id to get_screening_submission for one row. Requires backroom:read; exposes no source or artifact URL.',
+        'Resolve what an operator knows (a name, a miner, an artifact, a status, a failure class) to exact SN118 submissions in one call. Filters are optional and AND-combined server-side on Platform: agentName exact; agentNamePrefix a literal prefix (% and _ match themselves), e.g. moonlight for every version and family; minerHotkey exact; minerColdkey the payment-time owner; artifactSha256 exact (any case); agentStatus and screeningReasonCode any-of lists; submittedAfter inclusive and submittedBefore exclusive, ISO-8601 with an offset. At least one filter is required; unfiltered paging is list_screening_submissions. Rows are newest first by submitted_at then agent_id and count is the filtered total, so offset pages the match set. generation defaults to all because the submission you are looking for may predate the active benchmark; pass active to scope to the current admission boundary. detail=identity (default) returns agent_id, agent_name, agent_version, agent_status, public_status, submitted_at, artifact_sha256. agent_status is stored; public_status is what the miner sees, and a row the queue will never finish (retired, scoring_failed, not_queued, era_changed) can still store evaluating. summary adds miner keys, reasons, and the latest attempt; full adds attempt history. Hand an agent_id to get_screening_submission for one row. Requires backroom:read; exposes no source or artifact URL.',
       inputSchema: {
         ...screeningSubmissionFiltersSchema.shape,
         generation: z.enum(['active', 'all']).default('all'),
@@ -2171,7 +2448,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Execute screening quarantine batch',
       description:
-        'Execute exactly the per-item decisions from a current preview token. Requires confirmed=true and backroom:write. Each decision is separately authorized and audited to the signed-in operator; successful, already-applied, and failed rows are returned independently for safe retry. It refuses exactly what the preview refuses, including expectedAttemptId and expectedScoreCount sent on a row that is not a parked screening failure.',
+        'Execute exactly the per-item decisions from a current preview token. Requires confirmed=true and backroom:write. Each decision is separately authorized and audited to the signed-in operator; successful, already-applied, and failed rows are returned independently for safe retry. If the batch request\'s answer is lost (a timeout, a dropped connection, or a 502/504/524 gateway answer), the result is a read-back instead, with reconciled_after set: rows Platform recorded are already_applied, a quarantine Platform no longer finds is failed, and every other row is unconfirmed (Platform may still be applying it). Preview again before executing an unconfirmed row. It refuses exactly what the preview refuses, including expectedAttemptId and expectedScoreCount sent on a row that is not a parked screening failure.',
       inputSchema: screeningQuarantineBatchExecuteInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -2296,7 +2573,8 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         'Paginated fleet triage view of SN118 submissions whose validator tickets may be stuck: which submissions need an operator right now. generation=active (default) shows the active benchmark era plus newer in-progress rollout work, while hiding closed historical eras; generation=all is the explicit cross-benchmark audit. Returns count (the full selected-generation total), returned (rows in this response), limit, offset, has_more, per-state counts before any state filter, and one compact page with accepted-score count, retry state, recommended_action, provider_outage and provider_outage_blocks_retry, cooldown/budget flags, blocking reason, exhausted-validator count, per-state ticket counts, and the opaque concurrency snapshot a retry needs. Complete ticket history is deliberately excluded; use get_validation_retry for one agent. Optionally filter by one or more retry states (running, retry_available, cooling_down, exhausted, queued); omit to page through every submission. ' +
         'Rows stay in platform triage priority order (retry state, earliest retry time, then agent ID), not newest-first. Each row is scoped by the platform to its resolved ticket/score work era, and the default removes only closed historical generations. ' +
         'Read silent_expiry_count first: it counts tickets that ran their whole lease and reported nothing about that attempt. A submission whose silent_expiry_count climbs while score_count stays at zero is hanging, not merely slow — and because a reported failure and a silent expiry both land as an expired ticket with a rewritten deadline, that count is the only thing in this feed that tells them apart. Use get_validation_retry(agentId) for complete per-validator ticket history, including silently_expired, failure_reason, failure_detail, failed_at, slot_id, and infra_retry_grants. ' +
-        'silent_expiry_count reads null against a platform deployment that predates ditto-platform #515, which means "this deployment cannot tell you", not "zero". Requires backroom:read and exposes no miner source.',
+        'silent_expiry_count reads null against a platform deployment that predates ditto-platform #515, which means "this deployment cannot tell you", not "zero". ' +
+        'era_change is set when the active bench\'s era boundary refuses the row (SN-485): the same reason and next step (resubmit) the miner\'s era_changed status shows, and blocking_reason then quotes that label instead of a quorum or retry message that cannot apply. serves_active_bench=false means nothing the row\'s retry state describes can run: its era is older than the active bench (blocking_reason starts "bench vN is no longer served"), or the active bench does not admit it; retry_state keeps the classifier\'s own label. Requires backroom:read and exposes no miner source.',
       inputSchema: listStuckSubmissionsInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -2376,7 +2654,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Inspect agent scoring readiness',
       description:
-        'Explain why one SN118 submission is or is not leaseable for scoring: missing versioned dataset, unbuilt or unverified screened image, stale screening policy, or a status that is not evaluating. Returns the active bench version, current vs required screening policy version, screened-image completeness with any missing fields, the leaseable flag, and a list of blocking reasons. Requires backroom:read and exposes no miner source. Backed by ditto-platform #275; returns 404 until that endpoint is deployed.',
+        'Explain why one SN118 submission is or is not leaseable for scoring: missing versioned dataset, unbuilt or unverified screened image, stale screening policy, or a status that is not evaluating. Returns the active bench version, current vs required screening policy version, screened-image completeness with any missing fields, the leaseable flag, and a list of blocking reasons. When the era boundary refuses the submission, era_change carries the miner-facing era_changed reason and next step, and the blocking reason quotes the same label. status is the stored lifecycle value; public_status is what the miner sees, so a row closed as retired, scoring_failed, not_queued or era_changed that still stores evaluating reads its close-out there. Requires backroom:read and exposes no miner source. Backed by ditto-platform #275; returns 404 until that endpoint is deployed.',
       inputSchema: agentScoringReadinessInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -2388,7 +2666,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get authoritative agent scores',
       description:
-        "Production scores for one SN118 agent at ONE benchmark version, by agent UUID or miner hotkey (a hotkey resolves to that miner's current leaderboard submission). Composites from different bench versions measure different benchmarks and are never pooled. `benchVersion` selects the version; omitted, it defaults to the board's active bench version. The response names it: `selected_bench_version` with `selected_bench_version_source` (`active` or `requested`). `score_count`, `median_composite`, `selected_quorum_reached` and `scores` cover the selected version only; `total_score_count` counts every version, and `other_bench_versions` keeps every other version's accepted rows whole in its own group (`bench_version`, `score_count`, `quorum_reached`, `median_composite`, `median_composite_authority`, `scores`). `median_composite_authority` says what a median is: `platform_ledger` when Platform itself published that median for exactly that version, `per_benchmark_statistic` when it is the median of that version's rows computed here (follows Platform's finalization rule but is not a ledger value), and null with a null median below quorum in that version. The authoritative ranked composite with gate and token-efficiency multipliers is `leaderboard.composite`, and only when `leaderboard.bench_version` equals the selected version. Each accepted row carries composite, per-axis tool/memory means, exact seed, run id, bench version, signature, transcript hash, and v13+ `gate_evidence` (gate posture, gate summaries, flagged_case_count/share, gate_counts; aggregates only). Rows are compacted losslessly per group: invariant fields move to a sibling `scores_shared` (top level for `scores`, inside each `other_bench_versions` entry for its own `scores`); reconstruct each row as `{ ...scores_shared, ...row }` and never read a field missing from a row as null. Also returns the pinned dataset (seed + sha256 + seed block), the active and desired bench versions, and the agent's leaderboard context: rank, quorum vs provisional state, emission eligibility, and the composite breakdown. A submission below quorum answers with `finalized: false` instead of an error, with the accepted scores that DO exist. Those pre-quorum rows carry `validator_hotkey: null` (also run_id, tool_mean, memory_mean, median_ms, n) because the platform withholds validator identity until quorum — null means not published yet, never that no validator scored it; use list_stuck_submissions or agent_scoring_readiness for per-validator ticket state. Dataset pin fields are null before quorum. Only a genuinely unknown agent UUID errors. Reads the same public score ledger that drives validator weights, never influences it, and exposes no miner source. Seeds are exact decimal strings, not numbers, because a 63-bit seed does not fit a JavaScript number and a rounded seed reproduces a different dataset. For version-over-version deltas use get_score_history. This read does not compare same-owner generations or show continual retest-cohort membership; to explain why a scored agent is not the owner's representative or is absent from shared-seed retests, call get_continual_retest_diagnostic with its exact UUID. Requires backroom:read.",
+        "Production scores for one SN118 agent at ONE benchmark version, by agent UUID or miner hotkey (a hotkey resolves to that miner's current leaderboard submission). Composites from different bench versions measure different benchmarks and are never pooled. `benchVersion` selects the version; omitted, it defaults to the board's active bench version. The response names it: `selected_bench_version` with `selected_bench_version_source` (`active` or `requested`). `score_count`, `median_composite`, `selected_quorum_reached` and `scores` cover the selected version only; `total_score_count` counts every version, and `other_bench_versions` keeps every other version's accepted rows whole in its own group (`bench_version`, `score_count`, `quorum_reached`, `median_composite`, `median_composite_authority`, `scores`). `median_composite_authority` says what a median is: `platform_ledger` when Platform itself published that median for exactly that version, `per_benchmark_statistic` when it is the median of that version's rows computed here (follows Platform's finalization rule but is not a ledger value), and null with a null median below quorum in that version. The authoritative ranked composite with gate and token-efficiency multipliers is `leaderboard.composite`, and only when `leaderboard.bench_version` equals the selected version. Each accepted row carries composite, per-axis tool/memory means, exact seed, run id, bench version, signature, transcript hash, and v13+ `gate_evidence` (gate posture, gate summaries, flagged_case_count/share, gate_counts; aggregates only), and v16+ `dueling_breakdown` (the dueling formula, datagen_raw/datagen_gate, column_weight, the v19+ datagen_qualifier, the applied priced-cost factor and window, and per slice column n/sum/mean, grading_bench_version, substituted, public_default and self_masked; no owner keys or generator submission ids; omitted below v16). Rows are compacted losslessly per group: invariant fields move to a sibling `scores_shared` (top level for `scores`, inside each `other_bench_versions` entry for its own `scores`); reconstruct each row as `{ ...scores_shared, ...row }` and never read a field missing from a row as null. Also returns the pinned dataset (seed + sha256 + seed block), the active and desired bench versions, and the agent's leaderboard context: rank, quorum vs provisional state, emission eligibility, and the composite breakdown. A submission below quorum answers with `finalized: false` instead of an error, with the accepted scores that DO exist. Those pre-quorum rows carry `validator_hotkey: null` (also run_id, tool_mean, memory_mean, median_ms, n) because the platform withholds validator identity until quorum — null means not published yet, never that no validator scored it; use list_stuck_submissions or agent_scoring_readiness for per-validator ticket state. Dataset pin fields are null before quorum. Only a genuinely unknown agent UUID errors. Reads the same public score ledger that drives validator weights, never influences it, and exposes no miner source. Seeds are exact decimal strings, not numbers, because a 63-bit seed does not fit a JavaScript number and a rounded seed reproduces a different dataset. For version-over-version deltas use get_score_history. This read does not compare same-owner generations or show continual retest-cohort membership; to explain why a scored agent is not the owner's representative or is absent from shared-seed retests, call get_continual_retest_diagnostic with its exact UUID. Requires backroom:read.",
       inputSchema: agentScoresInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -2400,7 +2678,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Explain exact agent continual retest admission',
       description:
-        'Read one exact submission UUID: canonical and official composites with sample counts and completed-wave depth, the same-owner representative and the comparison that selected it, raw/folded seed IDs, membership in the raw wave, folded emission set and resolved cohort with the cutoff/tie-band comparison and exclusion reason, seed anchor, retest tickets with the latest result, and claimability (scheduled round, catch-up, spare capacity, idle gate). A negative cohort_cutoff.gap on an agent that is still out of the cohort means the exclusion is structural owner suppression, not a score it failed. Outstanding work is a count; no confirmation dataset, prompt, or answer key is returned. `retest_samples` lists the newest accepted confirmation samples (at most 30, newest first) with validator, exact seed, composite, run_id, accepted_at and the inference grant that served each one: chat_requests, failed_requests and failure_codes (failed chat calls by relay terminal_error_code, e.g. upstream_http_402 for gateway credit exhaustion). A low sample with many failed calls measured the inference path, not the agent; check it before ruling a drop agent behaviour. `claim.void_rerun_seed_count` counts infra-voided seeds still owed one replacement run; the lane issues them right behind the champion regardless of cohort or owner suppression (`route_priority: void_rerun`), and withholds them while the provider circuit is open or recovering (`claim.provider_outage_active`). While the provider gate admits nothing (`claim.provider_gate_closed`) the lane issues no retest on any route and `decision` is `provider_outage`. This snapshot does not grant work. Seed IDs are exact decimal strings. Requires backroom:read.',
+        'Read one exact submission UUID: canonical and official composites with sample counts and completed-wave depth, the retest seed budget (confirmation_seed_floor 8; confirmation_seed_cap, the continual-retest work cap of 10 shared seeds that also bounds the folded window; confirmation_seed_target, the variance-sized target between them the lane is planning toward now from the raw emission set), the same-owner representative and the comparison that selected it, raw/folded seed IDs, membership in the raw wave, folded emission set and resolved cohort with the cutoff/tie-band comparison and exclusion reason, seed anchor, retest tickets with the latest result, and claimability (scheduled round, catch-up, spare capacity, idle gate). A negative cohort_cutoff.gap on an agent that is still out of the cohort means the exclusion is structural owner suppression, not a score it failed. admission_reason `expired_dueling_season` means the quorum of a scored bench v16+ agent aged out of the two-season window by design (score_dueling_season_ids vs window_dueling_season_ids, in_window_score_count, last_valid_composite, in_current_pin); it is not a ledger bug, and only new in-window scores count again; `season_retest` says whether a free platform re-test on the open season is queued (reason rotation, board, board_overflow, off_board or ath_clear) and, if not, why (retested, over_budget, board_cap, below_board_floor, owner_has_better_agent, superseded_rerun, already_retested, unranked, catchup_disabled, not_considered), the same label the public board and agent summary show. A pinned agent keeps its labelled board row and emissions until the next pin. Outstanding work is a count; no confirmation dataset, prompt, or answer key is returned. `retest_samples` lists the newest accepted confirmation samples (at most 30, newest first) with validator, exact seed, composite, run_id, accepted_at and the inference grant that served each one: chat_requests, failed_requests and failure_codes (failed chat calls by relay terminal_error_code, e.g. upstream_http_402 for gateway credit exhaustion). A low sample with many failed calls measured the inference path, not the agent; check it before ruling a drop agent behaviour. `claim.void_rerun_seed_count` counts infra-voided seeds still owed one replacement run; the lane issues them right behind the champion regardless of cohort or owner suppression (`route_priority: void_rerun`), and withholds them while the provider circuit is open or recovering (`claim.provider_outage_active`). While the provider gate admits nothing (`claim.provider_gate_closed`) the lane issues no retest on any route and `decision` is `provider_outage`. This snapshot does not grant work. Seed IDs are exact decimal strings. Requires backroom:read.',
       inputSchema: { agentId: sourceAgentId() },
       annotations: toolAnnotations('read'),
     },
@@ -2437,11 +2715,23 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_upload_payment_proof',
+    {
+      title: 'Get upload payment proof',
+      description:
+        'Answer "what happened to this upload fee?" for one finalized payment proof, keyed as the miner CLI prints it: blockHash and extrinsicIndex (the block number is not needed). state is funded_agent (agent is the upload it paid for; an exact retry of that upload returns it, and any other upload citing the proof is refused 3207), reusable_credit (a byte-identical upload left it unspent and agent is that earlier upload, or a readmission refused after payment banked it and readmission says why, outcome credited, with a 30-day window; the same hotkey can spend it on a different artifact until recovery_expires_at, then 3208), funded_generator (it paid for generator_submission_id), funded_readmission (it paid the SN-485 readmission in readmission: agent_id, bench_version, outcome, funding and credit_audit when an earlier credit paid; any upload citing it is refused 3207), or unrecorded (no upload consumed it and no credit holds it; Platform accepts it for a hotkey its signer owns until 24 hours after its block time, then 3208). recorded_at is when Platform verified the proof. Platform records only: this never re-reads the chain, so confirm an unrecorded proof\'s block hash, signer, destination, amount and ExtrinsicSuccess on chain before telling a miner it is spendable. miner_coldkey is the payment-time signer, not proof of current ownership. Requires backroom:read and changes nothing.',
+      inputSchema: uploadPaymentProofInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchUploadPaymentProof(input)),
+  )
+
+  registerTool(
     'get_score_history',
     {
       title: 'Get agent score history across bench versions',
       description:
-        "One SN118 agent's accepted validator scores grouped per benchmark version, by agent UUID or miner hotkey, so version-over-version deltas come from the authoritative ledger instead of dashboard scraping. Each version group returns the accepted-score count, median/min/max composite, median tool and memory means, scoring window, validator hotkeys, seeds, and the median-composite delta against the previous version. A submission only carries rows for versions it was actually scored or re-scored on. v13+ groups add `gate_posture` and `median_flagged_case_share` (null below v13). Seeds are exact decimal strings, not numbers, because a 63-bit seed does not fit a JavaScript number and a rounded seed reproduces a different dataset. Requires backroom:read and exposes no miner source.",
+        "One SN118 agent's accepted validator scores grouped per benchmark version, by agent UUID or miner hotkey, so version-over-version deltas come from the authoritative ledger instead of dashboard scraping. Each version group returns the accepted-score count, median/min/max composite, median tool and memory means, scoring window, validator hotkeys, seeds, and the median-composite delta against the previous version. A submission only carries rows for versions it was actually scored or re-scored on. v13+ groups add `gate_posture` and `median_flagged_case_share` (null below v13); v16+ groups add `median_priced_cost_usd` (whole-run inference at the contract's locked rates, per 350-case run) and `median_priced_cost_factor_bps` (the priced cost factor the composite carried; per-run detail is `gate_evidence.priced_cost` on get_agent_scores). Seeds are exact decimal strings, not numbers, because a 63-bit seed does not fit a JavaScript number and a rounded seed reproduces a different dataset. Requires backroom:read and exposes no miner source.",
       inputSchema: agentScoresLookupInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -2493,7 +2783,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get public source-release policy',
       description:
-        "Read the subnet-wide policy governing whether miners' submitted source is ever published, and how soon: disclosure ('public' — source enters the normal release path — or 'never' — no source is published at all), embargo_hours (the window measured from completed winner-emission confirmation, 6 to 8760, retained but inert while disclosure is 'never'), the current append-only revision, and the history with the actor and reason behind every change. Uniform for every submission: there is no per-miner or per-submission setting, so this one value describes the whole subnet. Release is king-only regardless — only the exact submission that held the crown and earned winner emissions in a completed tempo is ever eligible — so a 'public' policy does not mean every submission is published. The release_gate field, when present, reports the served gate version, automatic_confirmation_enabled, archive_provider (configured host, auth mode, and credential presence only; never a URL or key, and not a provider health or authentication result), the durable collector cursor and runtime hash, last payout attribution or blocking reason, pending receipt and unresolved payout counts, pending and confirmed king counts, and up to 25 exact-agent payout receipt summaries (confirmed first, then newest crowns); rows_has_more signals truncation. The receipt_diagnostics list contains up to 64 latest signed validator relay observations with received_at and stale; receipt_diagnostics_has_more signals truncation. Schema-v2 last_validation contains only bounded field/type/rule codes and the error count of the last invalid claim in the latest recovery page; a new page clears it, and absence on v1 means unknown. These are self-reported diagnostic stages, never payout evidence; missing observations mean unknown, not healthy. Missing archive_provider means the configured provider is unknown. Missing release_gate means this response cannot prove the new gate is deployed. Positive revealed weights alone are not earnings proof. reveal_plan_shadow, when present, is the running check of the reveal-anchored range planner against the event planner: missed > 0 means it skipped a block the full reader acted on and must not be promoted; calls/blocks is its chain cost per block. catch_up, when present, summarizes how deep catch-up ranges were replayed by the named planner: sparse ranges (blocks_read read in full, blocks_skipped committed as quiet), full_scan fallbacks counted by the planner's reason in full_scan_reasons (a cost in throughput, never in correctness), and error ranges that could not be planned (last_error). Requires backroom:read and changes nothing.",
+        "Read the subnet-wide policy governing whether miners' submitted source is ever published, and how soon: disclosure ('public' — source enters the normal release path — or 'never' — no source is published at all), embargo_hours (the window measured from completed winner-emission confirmation, 6 to 8760, retained but inert while disclosure is 'never'), the current append-only revision, and the history with the actor and reason behind every change. Uniform for every submission: there is no per-miner or per-submission setting, so this one value describes the whole subnet. Release is king-only regardless — only the exact submission that held the crown and earned winner emissions in a completed tempo is ever eligible — so a 'public' policy does not mean every submission is published. The release_gate field, when present, reports the served gate version, automatic_confirmation_enabled, archive_provider (configured host, auth mode, and credential presence only; never a URL or key, and not a provider health or authentication result), the durable collector cursor and runtime hash, collector_cursor_advanced_at (when the cursor last committed a block; a blocked sweep leaves it unchanged), collector_stalled (true once the cursor has not moved for collector_stall_after_seconds, with or without a blocked reason; an age signal only, so it does not tell a stuck collector from a paused chain and is not proof that evidence was lost; null means unknown, never current), last payout attribution or blocking reason, pending receipt and unresolved payout counts, pending and confirmed king counts, and up to 25 exact-agent payout receipt summaries (confirmed first, then newest crowns); rows_has_more signals truncation. The receipt_diagnostics list contains up to 64 latest signed validator relay observations with received_at and stale; receipt_diagnostics_has_more signals truncation. Schema-v2 last_validation contains only bounded field/type/rule codes and the error count of the last invalid claim in the latest recovery page; a new page clears it, and absence on v1 means unknown. These are self-reported diagnostic stages, never payout evidence; missing observations mean unknown, not healthy. Missing archive_provider means the configured provider is unknown. Missing release_gate means this response cannot prove the new gate is deployed. Positive revealed weights alone are not earnings proof. reveal_plan_shadow, when present, is the running check of the reveal-anchored range planner against the event planner: missed > 0 means it skipped a block the full reader acted on and must not be promoted; calls/blocks is its chain cost per block. catch_up, when present, summarizes how deep catch-up ranges were replayed by the named planner: sparse ranges (blocks_read read in full, blocks_skipped committed as quiet), full_scan fallbacks counted by the planner's reason in full_scan_reasons (a cost in throughput, never in correctness), and error ranges that could not be planned (last_error). Requires backroom:read and changes nothing.",
       inputSchema: MCP_SETTINGS_HISTORY_INPUT,
       annotations: toolAnnotations('read'),
     },
@@ -2584,7 +2874,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get miner submission settings',
       description:
-        'Read the platform-owned miner submission settings: the cooldown enforced between accepted agent uploads from the same owner coldkey, the default TAO fee (fee_amount_rao: what memory agent uploads pay and what every other competition inherits), the per-competition fee overrides as written (competition_fees: {generator: {fee_amount_rao, fee_required}}, null fields inherit), and effective_competition_fees: each upload lane\'s resolved amount and whether it is required, with amount_source (default or override) and required_source (always for memory; competition_settings when the generator upload_fee_required switch decides; override when competition_fees decides). effective_competition_fees=null means the Platform predates per-competition fees. Revision history is newest-first and opt-in with historyLimit (default 0). Compatible clients reserve these terms before payment. Requires backroom:read and changes nothing.',
+        'Read the platform-owned miner submission settings: the cooldown enforced between accepted agent uploads from the same owner coldkey, the default TAO fee (fee_amount_rao: what memory agent uploads pay and what every other competition inherits), the per-competition fee overrides as written (competition_fees: {generator: {fee_amount_rao, fee_required}}, null fields inherit), and effective_competition_fees: each upload lane\'s resolved amount and whether it is required, with amount_source (default or override) and required_source (always for memory; competition_settings when the generator upload_fee_required switch decides; override when competition_fees decides). effective_competition_fees=null means the Platform predates per-competition fees. SN-485 readmission, read-only: each revision readmission_announced_at (null by default) and readmission, the computed activation state: active only when readmission_announced_at is set, active_bench_version is at least min_bench_version (19) and effective_at (announcement plus notice_period_seconds, seven days) has passed; inactive_reasons lists every unmet condition (announcement_unset, bench_version_below_minimum, notice_period); fee_amount_rao is always the upload default fee (fee_source upload_default), never a separate price. While inactive nothing is charged as a readmission and self-serve readmission is unavailable. Backroom cannot set readmission_announced_at; it is an operator write through the Platform admin API, and clearing it is the kill switch. readmission=null means the Platform predates SN-485. Revision history is newest-first and opt-in with historyLimit (default 0). Compatible clients reserve these terms before payment. Requires backroom:read and changes nothing.',
       inputSchema: MCP_SETTINGS_HISTORY_INPUT,
       annotations: toolAnnotations('read'),
     },
@@ -2618,7 +2908,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get competition submission terms',
       description:
-        'Read what a miner submits to each competition with an upload lane (memory agent uploads, generator uploads), from GET /api/v1/public/submission-terms, the same terms the miner CLI shows before upload. Each entry gives the deliverable (artifact kind, format, contract version such as dittobench-generator/v1, required files, every upload-time limit with its source: code for a release constant, environment for a deploy variable, setting for an audited operator setting), the upload cooldown and its scope (owner coldkey or hotkey), and the competition\'s own fee (amount_rao, whether required, whether the amount is the default fee or this competition\'s override, the receiving address, and the submission settings revision it resolves from). Change a fee with set_submission_cooldown competitionFees; change the generator cooldown, pack size or fee switch with set_generator_competition_settings. competitions=null means the Platform predates these terms. This is the miner submission contract only; build bounties are separate. Requires backroom:read and changes nothing.',
+        'Read what a miner submits to each competition with an upload lane (memory agent uploads, generator uploads), from GET /api/v1/public/submission-terms, the same terms the miner CLI shows before upload. Each entry gives the deliverable (artifact kind, format, contract version such as dittobench-generator/v1, required files, every upload-time limit with its source: code for a release constant, environment for a deploy variable, setting for an audited operator setting), the upload cooldown and its scope (owner coldkey or hotkey), and the competition\'s own fee (amount_rao, whether required, whether the amount is the default fee or this competition\'s override, the receiving address, and the submission settings revision it resolves from). The memory entry also carries readmission: the SN-485 activation state (as in get_submission_cooldown readmission), the readmission rules miners read, and cost_basis, the measured per-agent evaluation cost on the active bench (median across quorum agents of mean scored-run cost times runs_per_evaluation, from the inference ledger; null costs mean too few agents); other competitions report readmission=null. Change a fee with set_submission_cooldown competitionFees; change the generator cooldown, pack size or fee switch with set_generator_competition_settings. competitions=null means the Platform predates these terms. This is the miner submission contract only; build bounties are separate. Requires backroom:read and changes nothing.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchCompetitionSubmissionTerms()),
@@ -2629,7 +2919,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get continual retest settings',
       description:
-        'tie_weighting_mode is a separate consensus switch: disabled preserves fixed 65/14/10/7/4 shares, while fleet_ready pools evidence-tied occupied shares and uses an uncapped equal joint crown when the dethrone threshold is outside the score range, only after every live weight setter advertises protocol 20. statistical_band_mode is disabled by default; fleet_ready serves the protocol-29 capped statistical band only after every recently-live weight setter supports it. crown_gate_mode is disabled by default; fleet_ready serves the protocol-34 crown gate only after every recently-live weight setter supports it: a challenger dethrones only on the paired comparison over at least min_dethrone_confirmations (2-15, default 3) shared seeds, and only within the top champion_standing_rank (1-5, default 3) official places; effective.crown_gate_active/crown_gate_fleet_ready report whether it folds now. ' +
+        'tie_weighting_mode is a separate consensus switch: disabled preserves fixed 65/14/10/7/4 shares, while fleet_ready pools evidence-tied occupied shares and uses an uncapped equal joint crown when the dethrone threshold is outside the score range, only after every live weight setter advertises protocol 20. statistical_band_mode is disabled by default; fleet_ready serves the protocol-29 capped statistical band only after every recently-live weight setter supports it. crown_gate_mode is disabled by default; fleet_ready serves the protocol-34 crown gate only after every recently-live weight setter supports it: a challenger dethrones only on the paired comparison over at least min_dethrone_confirmations (2-10, default 3; at most the 10-seed retest work cap) shared seeds, and only within the top champion_standing_rank (1-5, default 3) official places; effective.crown_gate_active/crown_gate_fleet_ready report whether it folds now. ' +
         'Read the platform-owned continual retest policy, its append-only revision history, whether the validator fleet satisfies the protocol readiness signal, whether completed cohort waves are folded into rankings, whether idle validators may claim bounded retest work after ordinary scoring returns no job, and whether the lane is currently standing down for an open benchmark rollout (with that rollout’s desired version). The policy also carries wave_membership (whose retests have to land before a seed counts toward the aggregate: strict, participants, or per_agent) and the cohort shape — retest_cohort_size (how many ranked agents the lane currently rescores), retest_eligibility_mode (fixed rank cut, or statistical, which also admits agents indistinguishable from the cutoff), retest_eligibility_z (the tie band in standard errors), and retest_cohort_max_size (the ceiling once that band is applied). The effective block reports the bounds those values must sit between — emission_set_size, max_retest_cohort_size, max_retest_eligibility_z — plus eligible_agent_count (the ranked agents the active benchmark can actually supply, which caps the cohort when it is smaller than the configured size) and resolved_cohort_size (how many the ranking actually admitted once ties at the cutoff were absorbed; it differs from retest_cohort_size only in statistical mode, and that difference is the whole point of the mode). Read field_support before trusting any of these: it reports per field whether the platform build behind Backroom carries it, and where it is false the value shown is this tool filling in that build’s behaviour rather than the platform reporting one, so a write asking for anything else will be refused. cohort_sizing_supported is the same signal for retest_cohort_size. Requires backroom:read and changes nothing.',
       inputSchema: MCP_SETTINGS_HISTORY_INPUT,
       annotations: toolAnnotations('read'),
@@ -2652,8 +2942,8 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Set continual retest settings',
       description:
-        'tie_weighting_mode=fleet_ready changes the fold only after every live weight setter advertises protocol 20: exact score ties pool occupied rank shares, while non-exact ties require paired shared-seed evidence inside the statistical band. disabled is the immediate fixed-share rollback, and there is no force override that could split consensus. statistical_band_mode=fleet_ready caps paired tie and unpaired dethrone bands only after every recently-live weight setter advertises protocol 29; disabled preserves the legacy fold. crown_gate_mode=fleet_ready (with min_dethrone_confirmations and champion_standing_rank) gates the crown on shared-seed evidence only after every recently-live weight setter advertises protocol 34; disabled is the ungated rollback. ' +
-        'Apply one append-only revision without a platform redeploy. aggregate_mode=fleet_ready preserves the compatibility gate, enabled explicitly overrides it, and disabled stops completed waves from changing rankings. idle_retests_enabled lets validators use spare capacity only after ordinary scoring returns no job; membership, coverage, authentication, one-score-per-validator, and seed-cap guards remain. rollout_standdown governs an open benchmark rollout: capable_validators (default) stops only validators that can score the incoming version, all pauses the whole lane, and off keeps retesting the previous generation and will slow the rollout down. Any stand-down applies to new leases only and lifts when the desired version takes authority or the rollout activates or is superseded. wave_membership decides whose retests have to land before a seed counts toward the aggregate, and it CHANGES WHAT VALIDATORS WEIGHT — official_composite is the continual mean over the seeds it admits, so changing it re-orders the tail and moves emission shares. participants (the shipped default) intersects over emission-set members holding at least one confirmation; strict intersects over every current member and is the pre-#489 historical fold, kept as the audited rollback path; per_agent drops the intersection entirely and is the noisiest, least comparable option. retest_cohort_size is how far down the ranking the lane reaches: 5 (the emission set, the historical behaviour) through 25. Above 5 the next ranked challengers are rescored on the same champion-anchored wave seeds, so one arrives in the top five already carrying confirmation depth; emissions, the weight fold, and wave completion stay keyed to the top five at every size, and the extra members only take a seed once every emission-set member is claimed or already scored. retest_eligibility_mode draws the bottom edge of that cohort: fixed cuts at exactly retest_cohort_size by rank, which cannot express a tie, while statistical keeps the same cutoff and also admits anyone below it whose composite is within retest_eligibility_z standard errors of the cutoff agent. retest_eligibility_z (0 through 3) is that band; it is ignored under fixed, and 0 is a real setting rather than a disabled one — it admits exact ties and nothing else. retest_cohort_max_size (5 through 25) is the hard ceiling once the band is applied and must be at least retest_cohort_size; it is a stop, not a target, and never binds when there are no ties near the cutoff. A revision stores the whole policy, so every one of these fields is required — omitting one while changing something else writes its default over the live value, which for wave_membership means silently reverting a rollback and for retest_cohort_size means collapsing a wider cohort back to 5. If get_continual_retest_settings reports a field false in field_support, that platform build has no such field: pass the value that build already behaves as (5 for retest_cohort_size, strict for wave_membership, fixed for retest_eligibility_mode, 1.64 for retest_eligibility_z, 25 for retest_cohort_max_size) to change the rest of the policy, and expect any other request to be refused rather than silently answered with a default. Supply the complete policy, expectedRevision, a reason, and exact confirmation "APPLY CONTINUAL RETEST SETTINGS". Requires backroom:write.',
+        'tie_weighting_mode=fleet_ready changes the fold only after every live weight setter advertises protocol 20: exact score ties pool occupied rank shares, while non-exact ties require paired shared-seed evidence inside the statistical band. disabled is the immediate fixed-share rollback, and there is no force override that could split consensus. statistical_band_mode=fleet_ready caps paired tie and unpaired dethrone bands only after every recently-live weight setter advertises protocol 29; disabled preserves the legacy fold. crown_gate_mode=fleet_ready (with min_dethrone_confirmations and champion_standing_rank) gates the crown on shared-seed evidence only after every recently-live weight setter advertises protocol 34; disabled is the ungated rollback. crown_duel_mode=fleet_ready rides a served crown gate and, only after every recently-live weight setter advertises protocol 35, decides bench v16 crowns by the sequential title duel over the newest 15 shared-seed pairs across seasons; disabled is the one-season rollback. retest_mode=season_duel (bench v16+ only; inert below) replaces the continual walk with one duel per dueling season: the top five each run season_duel_seeds (2-5, at least min_dethrone_confirmations) shared seeds of the family anchored on the season\'s opening champion; continual is the rollback. season_duel_rotation_seeds=true (only under season_duel) runs each rotation re-score on the season\'s duel seed for its quorum validator (protocol-35 validators only) and records it as that seed\'s confirmation, about halving a season\'s runs; false keeps canonical seeds. ' +
+        'Apply one append-only revision without a platform redeploy. aggregate_mode=fleet_ready preserves the compatibility gate, enabled explicitly overrides it, and disabled stops completed waves from changing rankings. idle_retests_enabled lets validators use spare capacity only after ordinary scoring returns no job; membership, coverage, authentication, one-score-per-validator, and seed-cap guards remain. rollout_standdown governs an open benchmark rollout: capable_validators (default) stops only validators that can score the incoming version, all pauses the whole lane, and off keeps retesting the previous generation and will slow the rollout down. Any stand-down applies to new leases only and lifts when the desired version takes authority or the rollout activates or is superseded. wave_membership decides whose retests have to land before a seed counts toward the aggregate, and it CHANGES WHAT VALIDATORS WEIGHT — official_composite is the continual mean over the seeds it admits, so changing it re-orders the tail and moves emission shares. participants (the shipped default) intersects over emission-set members holding at least one confirmation; strict intersects over every current member and is the pre-#489 historical fold, kept as the audited rollback path; per_agent drops the intersection entirely and is the noisiest, least comparable option. retest_cohort_size is how far down the ranking the lane reaches: 5 (the emission set, the historical behaviour) through 25. Above 5 the next ranked challengers are rescored on the same champion-anchored wave seeds, so one arrives in the top five already carrying confirmation depth; emissions, the weight fold, and wave completion stay keyed to the top five at every size, and the extra members only take a seed once every emission-set member is claimed or already scored. retest_eligibility_mode draws the bottom edge of that cohort: fixed cuts at exactly retest_cohort_size by rank, which cannot express a tie, while statistical keeps the same cutoff and also admits anyone below it whose composite is within retest_eligibility_z standard errors of the cutoff agent. retest_eligibility_z (0 through 3) is that band; it is ignored under fixed, and 0 is a real setting rather than a disabled one — it admits exact ties and nothing else. retest_cohort_max_size (5 through 25) is the hard ceiling once the band is applied and must be at least retest_cohort_size; it is a stop, not a target, and never binds when there are no ties near the cutoff. A revision stores the whole policy, so every one of these fields is required — omitting one while changing something else writes its default over the live value, which for wave_membership means silently reverting a rollback and for retest_cohort_size means collapsing a wider cohort back to 5. If get_continual_retest_settings reports a field false in field_support, that platform build has no such field: pass the value that build already behaves as (5 for retest_cohort_size, strict for wave_membership, fixed for retest_eligibility_mode, 1.64 for retest_eligibility_z, 25 for retest_cohort_max_size, continual for retest_mode, 3 for season_duel_seeds, disabled for crown_duel_mode, false for season_duel_rotation_seeds) to change the rest of the policy, and expect any other request to be refused rather than silently answered with a default. Supply the complete policy, expectedRevision, a reason, and exact confirmation "APPLY CONTINUAL RETEST SETTINGS". Requires backroom:write.',
       inputSchema: setContinualRetestSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -2672,11 +2962,22 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_registration_freshness',
+    {
+      title: 'Get registration freshness',
+      description:
+        'Read how far Platform\'s Pylon recent-neurons snapshot trails the chain: snapshot_block, a fresh finalized_block and snapshot_lag_blocks. Pylon ages that cache by write time, so a refresh over a lagging node still looks fresh and a re-registered uid keeps its previous hotkey (SN-463). chain_registrations is the newest map Platform read straight from chain storage (on an upload whose hotkey the snapshot lacks, or when the lag passes lag_reconcile_threshold_blocks); changes lists the uids whose hotkey upload admission, public activity and the emission ledger are served from it instead of the snapshot. One header read; starts no registration read. Requires backroom:read and changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchRegistrationFreshness()),
+  )
+
+  registerTool(
     'get_screener_capacity',
     {
       title: 'Get screener capacity',
       description:
-        'Read the live screener capacity snapshot, per-node identity, status, full-screen and channel concurrency controls and usage (including the report-only L2 canary cap canary_concurrency, its unexpired leases as usage.canary_active, and canaries still waiting as usage.canary_queued), provider-job inventory, recent controller events, and revisioned routing for build, runtime smoke, and source review. Provider routing is authoritative: Hetzner-first lanes handle base load, while the audited GCE overflow policy names the primary node, backlog multiple, minimum backlog, and maximum instances. GCE claims new unowned submissions on overflow or primary outage; it never retries a terminal Hetzner lane. snapshot.last_provider_success_at is the last successful GCE fleet read, not a health signal for any other provider; it can advance while provider routing is unavailable. legacy_bearer_accepted says whether Platform still accepts the fleet-wide shared screener bearer (SCREENER_LEGACY_BEARER_ENABLED); rotating per-node tokens are unaffected. Dashboard presentation and local defaults are not authoritative. Requires backroom:read and changes nothing.',
+        'Read the live screener capacity snapshot, per-node identity, status, full-screen and channel concurrency controls and usage (including the report-only L2 canary cap canary_concurrency, its unexpired leases as usage.canary_active, and canaries still waiting as usage.canary_queued), provider-job inventory, recent controller events, and revisioned routing for build, runtime smoke, and source review. Provider routing is authoritative: primary-first lanes (the Hetzner or on-demand AWS node) handle base load, while the audited GCE overflow policy names the primary node, backlog multiple, minimum backlog, and maximum instances. GCE claims new unowned submissions on overflow or primary outage; it never retries a terminal primary lane. snapshot.last_provider_success_at is the last successful GCE fleet read, not a health signal for any other provider; it can advance while provider routing is unavailable. legacy_bearer_accepted says whether Platform still accepts the fleet-wide shared screener bearer (SCREENER_LEGACY_BEARER_ENABLED); rotating per-node tokens are unaffected. Dashboard presentation and local defaults are not authoritative. Requires backroom:read and changes nothing.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerCapacity()),
@@ -2711,7 +3012,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Set screener provider routing',
       description:
-        'Apply one complete append-only provider-routing revision for build, runtime smoke, and source review. Read get_screener_capacity immediately before writing and supply its current provider revision as expectedRevision. The three ordered provider lists, primary node, and complete GCE overflow policy are one atomic decision; do not omit fields or infer them from dashboard state. Hetzner-first routing sends new unowned work to the fixed host, while bounded GCE overflow handles primary unavailability or backlog above max(minimum backlog, primary screening concurrency times the configured multiplier). A failed Hetzner lane is terminal and is never retried on GCE. Supply an audit reason and the exact confirmation rendered by the complete settings. Requires backroom:write.',
+        'Apply one complete append-only provider-routing revision for build, runtime smoke, and source review. Read get_screener_capacity immediately before writing and supply its current provider revision as expectedRevision. The three ordered provider lists, primary node, and complete GCE overflow policy are one atomic decision; do not omit fields or infer them from dashboard state. Primary-first routing (Hetzner or on-demand AWS) sends new unowned work to the enrolled primary node, while bounded GCE overflow handles primary unavailability or backlog above max(minimum backlog, primary screening concurrency times the configured multiplier). A failed primary lane is terminal and is never retried on GCE. Supply an audit reason and the exact confirmation rendered by the complete settings. Requires backroom:write.',
       inputSchema: setScreenerProviderSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -2787,7 +3088,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screener review settings',
       description:
-        'Read L1/L2/L3 source-review settings, last-applied worker instances, and recent shadow observations. L1 model and timeout live on this contract (default openai/gpt-5.6-luna). deferred_source_review.mode lives on get_queue_policy_settings; bypass means this reviewer never runs. Requires backroom:read.',
+        'Read L1/L2/L3 source-review settings, last-applied worker instances, and recent shadow observations. L1 model and timeout live on this contract (default openai/gpt-5.6-luna). Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerReviewControl()),
@@ -2797,7 +3098,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_conversation_assessments',
     {
       title: 'Get conversational continuity assessments',
-      description: 'Read top-five Astra conversation assessment state, cost reservations, proposed quality and process-local admission diagnostics (in-flight, attempts, overlapping polls skipped, last outcome and duration). Counters reset on Platform process restart and are not fleet totals. Pass assessment_id to inspect the private transcript and rubric evidence. Shadow results never change rewards or screening decisions. Requires backroom:read.',
+      description: 'Read top-five conversation assessment state (v2: Claude Opus 5.5 judge; v1 rows: GPT-6 Astra), cost reservations, judge and harness spend with an upper-bound flag, per-row failure evidence without the transcript (exchange_count, empty_answers, failed_turns, harness_failure_code/http_status, provider retries, judge requests and tokens), proposed quality and process-local admission diagnostics (in-flight, attempts, overlapping polls skipped, last outcome and duration). Counters reset on Platform process restart and are not fleet totals. Pass assessment_id to inspect the private transcript and rubric evidence. Shadow results never change rewards or screening decisions. Requires backroom:read.',
       inputSchema: conversationAssessmentInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -2842,7 +3143,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'schedule_l2_report_canary',
     {
       title: 'Schedule report-only L2 canary',
-      description: 'Queue one isolated exact-artifact report on an enrolled Hetzner node. source_only is the default; full_runtime additionally runs private challenges in a separate Docker namespace. Neither mode changes screening, scoring, or quarantine. Older null-SHA attempts require historicalRulingKind and historicalRulingId; the ruling SHA and current object are verified, not the old execution. Status and score count must still match. requestId is the idempotency key; terminal replays are append-only. candidate_clear is not certified benign. Without reviewSettingsRevision the claiming node posture applies. For experiments, apply_screener_review_settings to l2-report-canary or l2-report-canary-<name>, then pass that revision. Platform refuses *, bootstrap, node, worker and inherit pins. Never write a node or worker scope for an experiment because production resolves it. The view reports the pin and claim-bound settings_revision. Requires backroom:write and confirmation "QUEUE REPORT ONLY L2 CANARY".',
+      description: 'Queue one isolated exact-artifact report on an enrolled primary (Hetzner or AWS) node. source_only is the default; full_runtime additionally runs private challenges in a separate Docker namespace. Neither mode changes screening, scoring, or quarantine. Older null-SHA attempts require historicalRulingKind and historicalRulingId; the ruling SHA and current object are verified, not the old execution. Status and score count must still match. requestId is the idempotency key; terminal replays are append-only. candidate_clear is not certified benign. Without reviewSettingsRevision the claiming node posture applies. For experiments, apply_screener_review_settings to l2-report-canary or l2-report-canary-<name>, then pass that revision. Platform refuses *, bootstrap, node, worker and inherit pins. Never write a node or worker scope for an experiment because production resolves it. The view reports the pin and claim-bound settings_revision. Requires backroom:write and confirmation "QUEUE REPORT ONLY L2 CANARY".',
       inputSchema: scheduleL2ReportCanaryInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -3044,7 +3345,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Apply unreleased copy settings',
       description:
-        'Append one unreleased-copy settings revision: expectedRevision (from get_unreleased_copy_settings; 0 when none), mode (off | shadow | enforce), threshold (default 40), a reason of at least 8 characters, and confirmation APPLY UNRELEASED COPY {MODE}. Switching to enforce starts enforce_since now: agents uploaded earlier are listed, never held. Enforce opens copy holds for operator ruling and never rejects. The signed-in operator is the audit actor. Requires backroom:write.',
+        'Append one unreleased-copy settings revision: expectedRevision (from get_unreleased_copy_settings; 0 when none), mode (off | shadow | enforce), threshold (required; the shipped default is 40, so send the current value back when only the mode changes), a reason of at least 8 characters, and confirmation APPLY UNRELEASED COPY {MODE}. Switching to enforce starts enforce_since now: agents uploaded earlier are listed, never held. Enforce opens copy holds for operator ruling and never rejects. The signed-in operator is the audit actor. Requires backroom:write.',
       inputSchema: applyUnreleasedCopySettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -3083,7 +3384,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Apply screener review settings',
       description:
-        'Write one L1/L2/L3 source-review revision. Confirmation is APPLY SCREENER REVIEW {scope} {MODE}. Scope integrity-double-check is the top-five integrity double-check posture: no worker runs it by default, Platform pins it to each double-check deep pass, and it must be mode=enforce with l3_enabled and policy_manifest_profile=l1_l2 before queue policy integrity_double_check_mode=enforce is accepted. Use it for the stronger reviewer (for example l2_model openai/gpt-5.6-sol, l2_always_escalate=true, larger budgets). l2_always_escalate sends every L1 result through L2/L3 and can only add escalation to a worker, never remove its env default. Scopes l2-report-canary and l2-report-canary-<name> hold report-only L2 canary postures: no worker runs them, and schedule_l2_report_canary binds one to a canary through reviewSettingsRevision. Write canary experiments only there; a node or worker scope is that node\'s production posture. Requires backroom:write.',
+        'Write one L1/L2/L3 source-review revision. Confirmation is APPLY SCREENER REVIEW {scope} {MODE}. Scope integrity-double-check is historical: it held the top-five integrity double-check posture, and source review, the queue-policy switch that opened double-check holds and the platform deep pass that pinned the posture were all retired on 2026-11-07, so nothing consumes a revision written there. l2_always_escalate sends every L1 result through L2/L3 and can only add escalation to a worker, never remove its env default. Scopes l2-report-canary and l2-report-canary-<name> hold report-only L2 canary postures: no worker runs them, and schedule_l2_report_canary binds one to a canary through reviewSettingsRevision. Write canary experiments only there; a node or worker scope is that node\'s production posture. Requires backroom:write.',
       inputSchema: applyScreenerReviewSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -3118,7 +3419,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screener policy activation',
       description:
-        'Read effective screening policy, version bounds, latest scheduled activation, and revision history. Read before scheduling to get expectedRevision. Requires backroom:read.',
+        'Read effective screening policy, version bounds, latest scheduled activation, and revision history. Scheduling is retired (source review retired 2026-11-07); this is read-only audit. Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerPolicyActivation()),
@@ -3129,35 +3430,10 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get V13 review clock schedule',
       description:
-        'Read V13 first-claim clock revisions. No row means no configured deadline. Requires backroom:read.',
+        'Read V13 first-claim clock revisions. No row means no configured deadline. Scheduling is retired (source review retired 2026-11-07). Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchV13ReviewClock()),
-  )
-
-  registerTool(
-    'schedule_v13_review_clock',
-    {
-      title: 'Schedule V13 review clock',
-      description:
-        'Future V13 first-claim clock for new UUIDs only: exact document/manifest SHA, revision, 65-minute notice, confirmation SCHEDULE V13 REVIEW CLOCK. No backfill or finalizer. Requires backroom:write.',
-      inputSchema: scheduleV13ReviewClockInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => scheduleV13ReviewClock(input, props.session.email)),
-  )
-
-  registerTool(
-    'schedule_screener_policy_activation',
-    {
-      title: 'Schedule screener policy activation',
-      description:
-        'Schedule a future policy activation with expectedRevision, bounded targetPolicyVersion, timezone-aware activateAt, and reason. canaryOnly limits rollout to explicit scored releases and requires rescreenScored. Confirmation SCHEDULE SCREENER POLICY ACTIVATION. Requires backroom:write.',
-      inputSchema: scheduleScreenerPolicyActivationInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) =>
-      write(() => scheduleScreenerPolicyActivation(input, props.session.email)),
   )
 
   registerTool(
@@ -3165,23 +3441,10 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get scored policy rescreen checkpoint',
       description:
-        'Read the bounded score-preserving policy rollout: every active release and the next top-down candidate. Existing scores remain visible; a pause blocks the window from widening. Requires backroom:read.',
+        'Read the bounded score-preserving policy rollout: every active release and the next top-down candidate. Existing scores remain visible. Advancing is retired (source review retired 2026-11-07). Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScoredPolicyRescreen()),
-  )
-
-  registerTool(
-    'advance_scored_policy_rescreen',
-    {
-      title: 'Advance scored policy rescreen',
-      description:
-        'Fill 1–4 stale-score rescreen slots or retry one paused row; existing scores remain visible. canaryOnly requires reviewSettingsRevision. Confirmation ADVANCE SCORED POLICY RESCREEN. Requires backroom:write.',
-      inputSchema: advanceScoredPolicyRescreenInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) =>
-      write(() => advanceScoredPolicyRescreen(input, props.session.email)),
   )
 
   registerTool(
@@ -3202,7 +3465,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get validator queue policy settings',
       description:
-        'Read the platform-owned SN118 validator queue policy the scheduler resolves when it hands out work: rollout cohort sizing, the validator lane cycle that splits fresh-submission jobs from rollout-cohort jobs, the similarity_budget that bounds how much concurrent fleet capacity one submission family may hold, deferred_source_review that decides whether expensive review stays before scoring or runs only after a top-five/anomaly trigger, and previous-generation carryover (including require_desired_era_drained, the gate that decides how much of the fleet the previous generation may have). deferred_source_review.mode=off is the legacy full pre-score review, observe records hypothetical deferred triggers without holding submissions, enforce builds and prescores first, then deep-reviews top-five or threshold-qualified anomalies, and bypass runs NO source review at all — cheap build-only admission and no post-score qualification, so an admitted submission goes straight to validator scoring. off is the heaviest mode and bypass the lightest; they are not synonyms. The top-five trigger is an invariant in enforce mode and has no independent switch; the MAD and absolute-delta knobs tune only the additional anomaly trigger. deferred_source_review.integrity_double_check_mode separately runs one stronger deep review (pinned to the integrity-double-check screener review scope, read with get_screener_review_settings) for every top-five row, including rows that already passed the full pre-score screen; its holds appear in get_screening_review_queue as deferred_source_review with the integrity double-check reason. This block is the source-integrity branch only and never gates copy/plagiarism enforcement, which is opened by a separate path that does not read this policy. Already-open deferred holds keep draining in every mode: the screener re-claim that clears them is independent of this setting, so changing the mode changes only whether NEW holds open. Returns the policy in force, its revision number, whether that comes from a stored revision or the shipped default (revision 0, meaning no operator revision has ever been written), the append-only revision history with actor and reason, and the shipped default for comparison. Two lifetimes share one policy, so read the effective block before assuming a setting is live: rescore_cohort_size and priority_cohort_size are next-rollout policy, and when a benchmark rollout is open the effective block reports the cohort targets that rollout froze at its start (open_rollout_rescore_cohort_target, open_rollout_priority_cohort_target, open_rollout_overrides_setting) plus its desired version; rollout_locked_fields names the fields the platform will refuse to change until that rollout activates or is superseded. This is subnet scheduling policy in ditto-platform, not a Ditto app entitlement flag: those live in the private product Backroom and are not served by this server. Requires backroom:read and changes nothing.',
+        'Read the platform-owned SN118 validator queue policy the scheduler resolves when it hands out work: rollout cohort sizing, the validator lane cycle that splits fresh-submission jobs from rollout-cohort jobs, the similarity_budget that bounds how much concurrent fleet capacity one submission family may hold, and previous-generation carryover (including require_desired_era_drained, the gate that decides how much of the fleet the previous generation may have). The deferred_source_review block is retired with source review (2026-11-07): revisions stored before then still carry it, but the platform drops it and no longer returns it. Returns the policy in force, its revision number, whether that comes from a stored revision or the shipped default (revision 0, meaning no operator revision has ever been written), the append-only revision history with actor and reason, and the shipped default for comparison. Two lifetimes share one policy, so read the effective block before assuming a setting is live: rescore_cohort_size and priority_cohort_size are next-rollout policy, and when a benchmark rollout is open the effective block reports the cohort targets that rollout froze at its start (open_rollout_rescore_cohort_target, open_rollout_priority_cohort_target, open_rollout_overrides_setting) plus its desired version; rollout_locked_fields names the fields the platform will refuse to change until that rollout activates or is superseded. This is subnet scheduling policy in ditto-platform, not a Ditto app entitlement flag: those live in the private product Backroom and are not served by this server. Requires backroom:read and changes nothing.',
       inputSchema: MCP_SETTINGS_HISTORY_INPUT,
       annotations: toolAnnotations('read'),
     },
@@ -3228,12 +3491,8 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         'Lifetimes differ per field. rescore_cohort_size (5-25) and priority_cohort_size (5-25, at most rescore_cohort_size) are next-rollout policy: the platform reads them once when a benchmark rollout starts and freezes them onto the rollout row, so changing them NEVER resizes an in-flight rollout and takes effect only at the next rollout start. ' +
         'lane_cycle_size (2-12) and fresh_submission_slots are live but REFUSED while a benchmark rollout is open: the lane counter is completed jobs since rollout start mod N, so changing N mid-rollout discontinuously reassigns validators between lanes. The platform answers that attempt with 409 and an explanatory detail, surfaced verbatim; check effective.rollout_locked_fields first. fresh_submission_slots are the unique lane positions in [0, lane_cycle_size) that serve a fresh submission instead of a rollout-cohort job; the default [0,1,3] of 4 is three fresh-submission jobs per one cohort job per validator. The fresh lane can never be empty and can never be the whole cycle — that floor is what stops new miners from being starved. ' +
         'similarity_budget is a queue-fairness and capacity rail, not a copy-detection verdict. It ships enabled: concurrent_submission_limit (1-3) caps the simultaneous slots held by submissions whose miner-authored residual crosses either jaccard_threshold or containment_threshold (each 0.70-1.00); enabled=false is the immediate kill switch. The whole nested block is required on every write so changing another queue knob cannot silently re-enable the rail or reset its thresholds. ' +
-        'deferred_source_review is the expensive-review admission policy. mode=off keeps the legacy full source review before scoring. mode=observe builds and prescores normally and records which submissions would have qualified, without holding them. mode=enforce builds and prescores first, then deep-reviews every top-five entrant plus submissions that exceed the robust anomaly thresholds. Top-five qualification has no independent operator switch in enforce mode; min_cohort_size, composite_mad_multiplier, axis_mad_multiplier, min_composite_delta and min_axis_delta tune only the anomaly trigger. The whole nested block is required on every write so changing a lane knob cannot silently change screening admission. ' +
-        'integrity_double_check_mode (off|observe|enforce, independent of mode) is the top-five integrity double-check: every top-five row, including one that already passed the full pre-score screen, gets one stronger deep review. observe appends one score-audit record per would-be hold. enforce opens a pending deferred_source_review ATH hold (provenance trigger=integrity_double_check), which a screener re-claims on the latest screener review revision in scope integrity-double-check; a clean pass restores the agent, anything else stays an operator hold (or rejects through an enforcing adjudicator on that posture). Each agent is double-checked at most once and rows already held keep their rank slot so holds cannot cascade. The platform refuses enforce with 409 until that scope holds an enforce posture with L3 and the l1_l2 manifest. ' +
-        'mode=bypass is the NO-SOURCE-REVIEW mode, and the only one that runs neither half: admission is the same cheap build-only screen as enforce (the screened image still has to be built and verified before anything can score it) and no post-score qualification is computed, so no deferred hold can open and an admitted submission goes straight to validator scoring. Do not reach for off expecting this — off is the HEAVIEST mode, a full deep screen on every submission. Returning to enforce later re-qualifies whatever was mechanically admitted while bypass was set; nothing is lost, only deferred. ' +
+        'There is no deferred_source_review block any more: it gated only source review, which was retired on 2026-11-07, so do not send it. Revisions written before then still carry it; the platform drops it on read and stores nothing for it on write. Copy/plagiarism enforcement never read it and stays armed. Pending deferred_source_review ATH holds opened before the retirement are settled with resolve_ath_review. ' +
         'lineage_reference_mode (same_owner_version | same_owner | released_base; default same_owner_version) decides which already-screened artifact a screening attempt may be diffed against for a lineage-scoped (diff) review: only the same hotkey\'s prior version; also, with no such version, the latest earlier upload by the same payment coldkey that passed screening; or also a base the submission declares (DECLARATION/BASE/ATTRIBUTION/README SHA, UUID or name vN) whose exact SHA had a public handoff before the upload and that passed screening under the attempt policy, used only when it yields a diff scope with fewer changed lines. Every full-review rule still applies and the model review always runs. ' +
-        'Scope: this block is the SOURCE-INTEGRITY branch only. It never gates copy/plagiarism enforcement — copy holds are opened by the duplicate-signal decision at score finalization, which does not read this policy and runs first — so neither mode=off nor mode=bypass touches plagiarism detection, which stays fully armed. The transform/overfit audit likewise has its own switch. ' +
-        'Already-open deferred holds are unaffected by the mode and keep draining in all four: the screener re-claim that clears a pending hold is independent of this setting, so a flip changes only whether NEW holds open and can no longer strand the agents held at that instant out of the emission-eligible ledger. Nothing is auto-cleared, deliberately: a bulk clearance would write an unreasoned resolution onto each agent public audit record. Holds still settle the normal way — a deep pass with a real verdict, or resolve_ath_review. ' +
         'prev_gen_carryover admits previous-generation submissions that can never finalize on their own, because nobody will ever issue the third prior-version score once the new version activates. It ships DISABLED; enabled=true is an operator decision, not a default. min_score_count=2 admits only submissions that already hold 2 of 3 scores and have therefore demonstrated they can run, while 0 also admits never-ticketed ones. dedupe_scope="coldkey" means a miner who has already submitted something newer under the same coldkey does not get their older stranded submissions scored. max_agents (1-50) bounds the admitted set, include_exhausted and require_cohort_complete gate exhausted submissions and incomplete cohorts. ' +
         'The platform remains the authority on every bound and refusal. This is subnet scheduling policy in ditto-platform, not a Ditto app entitlement flag: those live in the private product Backroom and are not served by this server. Requires backroom:write.',
       inputSchema: setQueuePolicySettingsInputSchema,
@@ -3406,11 +3665,41 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get validator request outcomes',
       description:
-        'Read how each validator\'s signed requests ended, from the Platform API process\'s in-memory tally (resets on deploy; see tracking_since). Lanes: job (POST /validator/job), top5_confirmation (POST /validator/top5-confirmation-job) and scoring_ledger (GET /scoring/scores, the ledger every weight fold reads). Per validator and lane: last_poll_at, last_outcome, and per outcome total, recent_15m, first_at, last_at, last_slot_id. Outcomes: issued; served or served_stale on the ledger; a 204 decline gate (allocator_busy, not_accepting, slot_not_healthy, slot_ceiling, disk_breaker, slot_cap, round_reservation, validator_paused, no_candidate, ...; declined_unattributed for a 204 with no named gate); http_<status> with last_detail for a refused request (http_428 stale heartbeat on job, or on scoring_ledger a validator that could not fold weights, e.g. treasury fleet not ready or chain evidence invalid; http_426 software/protocol below minimum; http_409 replayed or stale claim; http_503 chain or ledger unavailable); or error_<Exception>. An old last_poll_at means the validator stopped polling. unauthenticated counts requests that failed signature checks, by lane, never per hotkey. Optional validatorHotkey filters to one validator. Requires backroom:read and changes nothing.',
+        'Read how each validator\'s signed requests ended, from the Platform API process\'s in-memory tally (resets on deploy; see tracking_since). Lanes: job (POST /validator/job), top5_confirmation (POST /validator/top5-confirmation-job) and scoring_ledger (GET /scoring/scores, the ledger every weight fold reads). Per validator and lane: last_poll_at, last_outcome, and per outcome total, recent_15m, first_at, last_at, last_slot_id. Outcomes: issued; served or served_stale on the ledger; a 204 decline gate (allocator_busy, not_accepting, slot_not_healthy, slot_ceiling, disk_breaker, slot_cap, round_reservation, validator_paused, no_candidate, ...; declined_unattributed for a 204 with no named gate); http_<status> with last_detail for a refused request (http_428 stale heartbeat on job, or on scoring_ledger a validator that could not fold weights, e.g. treasury fleet not ready or chain evidence invalid; http_426 software/protocol below minimum; http_409 replayed or stale claim; http_503 chain or ledger unavailable); retry_later with last_detail on job or top5_confirmation for a 503 carrying Retry-After (e.g. dueling slice preparation pending; on job the validator waits it out and re-polls the same slot); or error_<Exception>. An old last_poll_at means the validator stopped polling. unauthenticated counts requests that failed signature checks, by lane, never per hotkey. Optional validatorHotkey filters to one validator. Requires backroom:read and changes nothing.',
       inputSchema: { validatorHotkey: z.string().min(1).max(64).optional() },
       annotations: toolAnnotations('read'),
     },
     async ({ validatorHotkey }) => result(await fetchValidatorRequestOutcomes(validatorHotkey)),
+  )
+
+  registerTool(
+    'list_harness_memory',
+    {
+      title: 'List harness memory',
+      description:
+        'Read per-agent harness memory (SN-500), heaviest P95 first. Each run reports the harness cgroup memory.peak and time-weighted P50/P95 of memory.current; rows roll up per agent version: runs, scored_runs, failed_runs, oom_runs (harness_oom or harness_oom_grace), peak_bytes_max, p50/p95 medians, p95_bytes_max, limit_bytes_max; page with offset while has_more. Coverage starts with the release that added the telemetry; an absent agent was not measured. Feeds no scoring; miners see their own runs on the public pipeline. Requires backroom:read and changes nothing.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(200).default(50),
+        offset: z.number().int().min(0).max(100_000).default(0),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ limit, offset }) => result(await fetchHarnessMemoryList(limit, offset)),
+  )
+
+  registerTool(
+    'get_agent_harness_memory',
+    {
+      title: 'Get agent harness memory',
+      description:
+        'Read one agent version\'s harness memory (SN-500): the rollup (null when no run reported memory) and its newest runs, each with validator_hotkey, bench_version, lease_issued_at, outcome, failure reason/detail, peak/P50/P95 bytes, samples, sampled_seconds and limit_bytes. P50/P95 are time-weighted over memory.current at 1 MiB resolution; peak is the kernel high-water mark. Miners see their own runs, without failure reason/detail, on the public pipeline. Requires backroom:read and changes nothing.',
+      inputSchema: {
+        agentId: z.string().uuid(),
+        limit: z.number().int().min(1).max(200).default(50),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ agentId, limit }) => result(await fetchAgentHarnessMemory(agentId, limit)),
   )
 
   registerTool(
@@ -3675,7 +3964,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get hosted inference runtime metrics',
       description:
-        'Read the current hosted chat and embedding load plus 1, 5, 15, and 60 minute calls, tokens, latency, failures, timeouts, concurrency peaks, live concurrency AND request-per-minute admission limits, exact relay revisions, and per-process capacity-decline counters. Compare peak_*_concurrency_60m to per_*_limit AND to per_*_rpm_limit. A ticket glued to per_ticket_rpm_limit with idle concurrency is a rate-limit failure, not a full lane. This is the first tool to call before changing a concurrency or RPM setting.',
+        'Read the current hosted chat and embedding load plus 1, 5, 15, and 60 minute calls, tokens, latency, failures, timeouts, concurrency peaks, live concurrency AND request-per-minute admission limits, exact relay revisions, and per-process capacity-decline counters. Each relay may report danilabs_binding: loaded key presence, scope, deadline, and whether the Router competition lane takes precedence; null means unknown, including older relays. This is process configuration, not credential validity, actual route selection, provider readiness, or the live routing percentage. No key or fingerprint is returned. Compare peak_*_concurrency_60m to per_*_limit AND to per_*_rpm_limit. A ticket glued to per_ticket_rpm_limit with idle concurrency is a rate-limit failure, not a full lane. This is the first tool to call before changing a concurrency or RPM setting.',
       inputSchema: {
         costWindowHours: z.number().int().min(1).max(744).optional()
           .describe('Optional grant lifetime costs; not an invoice.'),
@@ -3707,7 +3996,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get source-review queue-age SLO',
       description:
-        'Read the ordinary (pre-score) source-review queue-age SLO: p50/p95/oldest actionable age in seconds, throughput (completions per hour over a fixed window), and the current backlog broken out by reason -- active_work (a screener is claimed and running), capacity_wait (uploaded, no screener has claimed it yet), infrastructure_backoff (the last attempt ended retryable_infra/inconclusive and is fail-closed parked for an operator-authorized retry), and escalation (an active anti-cheat quarantine hold, which wins regardless of what the underlying attempt itself reports, e.g. a rescreen that then failed). Age is the stable queue-entry clock (the submission\'s own upload time); a retry never resets it, so a long-overdue item stays overdue through every rescreen. Also reports four reconciliation counts that are visible but NEVER folded into the metrics above: stale_running_ghost_count (a screening attempt still looks running though its agent already reached a terminal or later status), resolved_quarantine_ghost_count (an agent stuck at quarantined status with no active quarantine row), terminal_quarantine_ghost_count (an active quarantine whose agent is already banned or rejected; close it with a fenced batch reject), and attempt_status_drift_ghost_count (the latest attempt reports a status this SLO\'s reason classification does not cover, e.g. a terminal verdict on an agent whose own status never advanced). overdue_count and p95_exceeds_threshold are null until an operator configures a threshold (there is no shipped default); this tool enforces nothing -- no alert, no operator escalation action. The top level covers ORDINARY screening review only. ath_review is the post-score ATH-hold queue (every pending ath_reviews hold; null with ath_review_error if that read failed): ath aggregates all holds, copy_review is the copy clock (legacy holds with no review_kind included), and classes gives one entry each for copy, benchmark_overfit, deferred_source_review, integrity_double_check (the top-five deep review), and anomalous_score, with the same reasons, oldest_agent_id/oldest_reason, resolved-review throughput, and null-until-configured thresholds. Its clock is COALESCE(reopened_at, opened_at): a deep-review retry never resets it, a reopen does. Copy, overfit, and anomalous-score holds are always escalation; deferred and double-check holds follow the newest screening attempt since the clock started until that pass concludes. Pending reviews whose agent is no longer ath_pending_review are stranded_terminal_ghost_count (banned/rejected) or stranded_hold_ghost_count (needs unsticking; resolving 409s), and held_without_review_ghost_count counts held agents with no pending row; none is backlog. Human escalation has no clock yet. Requires backroom:read and changes nothing.',
+        'Read the ordinary (pre-score) source-review queue-age SLO: p50/p95/oldest actionable age in seconds, throughput (completions per hour over a fixed window), and the current backlog broken out by reason -- active_work (a screener is claimed and running), capacity_wait (uploaded, no screener has claimed it yet), infrastructure_backoff (the last attempt ended retryable_infra/inconclusive and is fail-closed parked for an operator-authorized retry), and escalation (an active anti-cheat quarantine hold, which wins regardless of what the underlying attempt itself reports, e.g. a rescreen that then failed). Age is the stable queue-entry clock (the submission\'s own upload time); a retry never resets it, so a long-overdue item stays overdue through every rescreen. Also reports four reconciliation counts that are visible but NEVER folded into the metrics above: stale_running_ghost_count (a screening attempt still looks running though its agent already reached a terminal or later status), resolved_quarantine_ghost_count (an agent stuck at quarantined status with no active quarantine row), terminal_quarantine_ghost_count (an active quarantine whose agent is already banned or rejected; close it with a fenced batch reject), and attempt_status_drift_ghost_count (the latest attempt reports a status this SLO\'s reason classification does not cover, e.g. a terminal verdict on an agent whose own status never advanced). Every clock ships a threshold (SN-499; source review 24h max / 12h p95, ATH aggregate 72h/48h, copy 48h/24h, benchmark_overfit 72h/48h, deferred_source_review 48h/24h, integrity_double_check 24h/12h, anomalous_score 48h/24h), each overridable or set to off by env, so overdue_count and p95_exceeds_threshold are populated; null now means that threshold was turned off. This tool enforces nothing -- no alert, no operator escalation action. The top level covers ORDINARY screening review only. ath_review is the post-score ATH-hold queue (every pending ath_reviews hold; null with ath_review_error if that read failed): ath aggregates all holds, copy_review is the copy clock (legacy holds with no review_kind included), and classes gives one entry each for copy, benchmark_overfit, deferred_source_review, integrity_double_check (the top-five deep review), and anomalous_score, with the same reasons, oldest_agent_id/oldest_reason, resolved-review throughput, and its own thresholds. Its clock is COALESCE(reopened_at, opened_at): a deep-review retry never resets it, a reopen does. Copy, overfit, and anomalous-score holds are always escalation; deferred and double-check holds follow the newest screening attempt since the clock started until that pass concludes. Pending reviews whose agent is no longer ath_pending_review are stranded_terminal_ghost_count (banned/rejected) or stranded_hold_ghost_count (needs unsticking; resolving 409s), and held_without_review_ghost_count counts held agents with no pending row; none is backlog. Human escalation has no clock yet. Requires backroom:read and changes nothing.',
       annotations: toolAnnotations('read'),
     },
     async () => {
@@ -3725,6 +4014,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         ),
       ])
       return result({
+        // SN-499: one line per clock that is past its SLO, so a breach is the
+        // first thing a reader sees rather than a field deep in each class.
+        overdue_clocks: overdueQueueClocks(ordinary, ath.value),
         ...ordinary,
         ath_review: ath.value,
         ...(ath.error === null ? {} : { ath_review_error: ath.error }),
@@ -3860,10 +4152,10 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Set hosted inference concurrency and budget settings',
       description:
-        'Apply the complete hosted-inference and v10 runtime policy with expectedRevision, reason, and "APPLY INFERENCE CONCURRENCY SETTINGS". benchmark_runtime controls case_concurrency (1-64, default 4), sandbox_memory_limit_mib (the harness memory cap every validator applies, 512-32768, default 6144), and an off/shadow 0-5000ms delay range. Concurrent /run uses the session URL. Shadow never changes scores and holds only inside confirmation case windows. ' +
+        'Apply the complete hosted-inference and v10 runtime policy with expectedRevision, reason, and "APPLY INFERENCE CONCURRENCY SETTINGS". benchmark_runtime controls case_concurrency (1-64, default 4), sandbox_memory_limit_mib (the harness memory cap every validator applies, 512-32768, default 6144), memory_factor_posture/free_mib/floor_bps (SN-500 P95 memory factor: off/shadow/enforce, default shadow, 512 MiB, 9000 bps; flip at a season boundary), and an off/shadow 0-5000ms delay range; a write sends every benchmark_runtime field (the defaults are what a Platform predating a field reads as, never a write fallback). Concurrent /run uses the session URL. Shadow never changes scores and holds only inside confirmation case windows. ' +
         'chat_request_budget (1-32768, ships at 16384) and chat_token_budget (1-200000000, ships at 25000000) are the per-grant chat allowances. Both are STAMPED ONTO A GRANT WHEN IT IS MINTED and read from the grant row thereafter, so a revision governs the next lease and can never retroactively exhaust a run already in flight. chat_token_budget is the one to move when a legitimate strategy stuffs large contexts and dies partway through a run: raising chat_request_budget alone left the heaviest agents failing in exactly the same place, because tokens rather than calls were binding. It is a CAP, not a spend — an agent is charged what it consumes, so raising it changes only which runs are permitted to finish. ' +
         'The chat limits (each 1-512, shipping at 16/48/96) and embedding limits (each 1-512, shipping at 12/48/96) must each satisfy per_ticket <= per_validator <= global, and are enforced at admission rather than stamped. The six request-per-minute limits (1-100000, shipping at chat 1920/7680/23040 and embedding 10000/40000/100000) are the same live admission 503: 8-wide overlapping /run sat on the old boot-time 240 chat RPM cap and died as inference_lane_saturated while concurrency looked idle. Lowering either per-ticket value is a live emergency brake and is safe to pull mid-run. Global concurrency is enforced by a cross-grant aggregate, so it is best-effort under a simultaneous burst and should be sized as a load-shedding backstop with headroom, not as an exact valve. ' +
-        'scored_provider_routing picks the OpenRouter provider preference for scored gpt-oss chat: throughput (default; OpenRouter sorts ZDR providers by throughput, mostly Bedrock), bf16_price_order (DeepInfra bf16 first, then Bedrock, Groq and DekaLLM bf16, pinned with only, fallbacks on, ZDR and data_collection deny unchanged), or bf16_price_order_canary (the price order for benchmark_canary tickets only, for issue_benchmark_canary comparisons). It is live within five seconds with no restart and does not change the model, reasoning contract or route profile. Set throughput to revert; omit it to leave it unchanged. ' +
+        'scored_provider_routing picks the OpenRouter provider preference for scored gpt-oss chat: throughput (default), bf16_price_order or bf16_price_order_canary. danilabs_percent (0–100, default 0) samples eligible GPT-OSS requests only when a relay trial key, scope and unexpired free-trial deadline are configured. Large requests stay on OpenRouter; failures are not automatically replayed. Omit either field to preserve it. ' +
         'Every bound above uses the same hard ceiling enforced by the platform and Go relay, so Backroom cannot persist a value the admission process would refuse. The platform remains the authority on every bound and refusal. Requires backroom:write.',
       inputSchema: setInferenceConcurrencySettingsInputSchema,
       annotations: toolAnnotations('write', true),
@@ -3886,6 +4178,78 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           pageRevisionHistory(await fetchBurnSettings(), historyLimit, historyOffset),
           REVISION_LISTS,
         ),
+      ),
+  )
+
+  registerTool(
+    'get_edge_lane_settings',
+    {
+      title: 'Get Ditto Edge lane settings',
+      description:
+        'Read the Ditto Edge shadow lane policy (SN-481): mode (off, the default, refuses every node request; shadow runs the lane and measures opt-in Mac nodes into a ledger that pays nothing), the node cap, replicas per object, object and per-node byte caps, the total ingest budget, lease, poll, challenge deadline and window lengths, challenges per window with their retrieval and revoked shares, the eligibility minimum and availability floor, the placement rate and the revocation lookback. Returns the governing revision (0 means the built-in default, mode=off), whether it comes from a stored revision, the resolver TTL, the default, and effective.weight_eligible, which is always false. History is newest-first and opt-in with historyLimit (default 0). Opening the lane is a settings write that Backroom does not offer. Requires backroom:read and changes nothing.',
+      inputSchema: MCP_SETTINGS_HISTORY_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ historyLimit, historyOffset }) =>
+      result(
+        compacted(
+          pageRevisionHistory(await fetchEdgeLaneSettings(), historyLimit, historyOffset),
+          REVISION_LISTS,
+        ),
+      ),
+  )
+
+  registerTool(
+    'get_edge_lane_overview',
+    {
+      title: 'Get Ditto Edge lane overview',
+      description:
+        'Read the Ditto Edge shadow lane at a glance (SN-481): mode and settings revision; nodes active, live (polled within a lease), suspended and retired; objects active and revoked and their bytes; open and acknowledged (held) assignments; the current window index; and recently scored windows with node counts, eligible nodes and verified units. weight_eligible is always false and payouts is always none: the lane reaches no weights, emissions or track shares. Requires backroom:read and changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchEdgeLaneOverview()),
+  )
+
+  registerTool(
+    'list_edge_lane_nodes',
+    {
+      title: 'List Ditto Edge nodes',
+      description:
+        'List Ditto Edge shadow lane nodes (SN-481), most recent poll first: one page of limit (default 50) from offset, over the first 1000 nodes Platform returns (count is that total, has_more says whether another page of them follows, and may_be_truncated is true when the 1000-node cap of Platform was reached, so more nodes may exist beyond it). Each node has its id (edn_ plus 32 hex, from the Ed25519 device key), operator (the bound hotkey, else the node id), client name and version, self-reported platform labels (shown, never scored), status (active, suspended, retired), quota, enrollment and last poll, held objects and bytes under a live lease, and the latest scored window. Requires backroom:read and changes nothing.',
+      inputSchema: MCP_PAGINATION_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ limit, offset }) => {
+      const listing = await listEdgeLaneNodes({ limit: EDGE_LANE_NODES_CAP })
+      return result(
+        compacted(
+          {
+            ...paginateLocalCollection(listing, 'nodes', limit, offset),
+            // A full window may be the whole lane or only its most recently
+            // polled part: say it may be cut, never that it is.
+            platform_cap: EDGE_LANE_NODES_CAP,
+            may_be_truncated: listing.nodes.length >= EDGE_LANE_NODES_CAP,
+          },
+          { nodes: { pin: ['node_id'] } },
+        ),
+      )
+    },
+  )
+
+  registerTool(
+    'get_edge_lane_ledger',
+    {
+      title: 'Get Ditto Edge shadow ledger',
+      description:
+        'Read Ditto Edge shadow ledger rows (SN-481), newest window first, filtered by windowIndex or nodeId (edn_...), up to limit (default 200). Each row is one node in one window: scheduled, passed, failed, missed, refilled (re-downloaded to answer) and refused challenges, revocation checks and violations, held GiB-hours, availability, eligible with the reasons it is not (too_few_challenges, integrity_failure, revocation_violation, availability_below_floor, nothing_held), verified units, the hypothetical share, the settings revision and weight_eligible, always false. Before answering, Platform scores any window that has closed since the last poll (closed_now lists them): the same insert-once scoring a node poll runs, which never rewrites a scored row and pays nothing. Requires backroom:read.',
+      inputSchema: edgeLaneLedgerInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      result(
+        compacted(await fetchEdgeLaneLedger(input), {
+          rows: { pin: ['window_index', 'node_id'] },
+        }),
       ),
   )
 
@@ -4015,6 +4379,68 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => queueTreasuryManualTransfer(input, props.session.email)),
+  )
+  const airdropInput = {
+    asset: z.enum(['alpha', 'ditto_credits']),
+    mode: z.enum(['rehearsal', 'live']).optional(),
+    idempotency_key: z.string().min(8).max(128),
+    reason: z.string().min(8),
+    recipients: z.array(z.object({
+      kind: z.enum(['wallet', 'account']),
+      address: z.string().max(64),
+      amount: z.number().int().positive(),
+    })).min(1).max(1000),
+  }
+  registerTool(
+    'preview_airdrop',
+    {
+      title: 'Preview an SN118 airdrop',
+      description: 'Dry run of an SN118 airdrop; writes nothing and moves nothing. asset alpha pays wallet recipients (SS58 coldkeys) in rao; ditto_credits pays account recipients (SN118 miner hotkeys with an active Sign in with Ditto link) in credits. Give an idempotency_key (8-128 of A-Z a-z 0-9 . _ : -; reuse it unchanged on execute and every retry), an audit reason and 1-1000 recipients {kind, address, amount}. Returns each row\'s payee, refusal and prior_amount (paid or in flight under other keys), totals, the per-run cap, the funding balance, blockers, confirmation_digest and the exact confirmation phrase. Only rehearsal executors exist (SN-490), so mode live is blocked. Requires backroom:write.',
+      inputSchema: airdropInput,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => write(() => previewAirdrop(input, props.session.email)),
+  )
+  registerTool(
+    'execute_airdrop',
+    {
+      title: 'Execute an SN118 airdrop',
+      description: 'DESTRUCTIVE when dry_run=false. dry_run defaults to true and then returns only the preview. To run, resend the same inputs with dry_run=false, the preview\'s confirmation_digest and its exact confirmation phrase; Platform re-derives the preview and refuses any change. The idempotency_key names the run forever: the same key and inputs resume it and never resend a recipient that has started settling; the same key with other inputs is refused. After a timeout, retry with the same key, never a new one. Returns every recipient\'s status (settled, failed, uncertain, dispatching, pending) and receipt. Only rehearsal executors exist today, so nothing moves (SN-490). The signed-in operator is the audit actor. Requires backroom:write.',
+      inputSchema: {
+        ...airdropInput,
+        dry_run: z.boolean().optional(),
+        confirmation_digest: z.string().max(64).optional(),
+        confirmation: z.string().max(200).optional(),
+      },
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => executeAirdrop(input, props.session.email)),
+  )
+  registerTool(
+    'get_airdrop_run',
+    {
+      title: 'Read one airdrop run',
+      description: 'Read one airdrop run by run_id: asset, mode, executor, actor, reason, digest, status, totals, settled amount, per-status counts and each recipient\'s payee, amount, status, receipt and error. Requires backroom:read.',
+      inputSchema: { run_id: z.string().meta({ format: 'uuid' }) },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchAirdropRun(input.run_id)),
+  )
+  registerTool(
+    'list_airdrop_runs',
+    {
+      title: 'List airdrop runs',
+      description: 'List recent airdrop runs newest first (limit 1-100, default 20; offset), optionally filtered by idempotency_key, asset or mode, with the policy in force: max recipients, each asset\'s per-run cap, unit, recipient kind, rehearsal and live executor and funding source. Requires backroom:read.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(100).default(20),
+        offset: z.number().int().min(0).max(10_000).default(0),
+        idempotency_key: z.string().max(128).optional(),
+        asset: z.enum(['alpha', 'ditto_credits']).optional(),
+        mode: z.enum(['rehearsal', 'live']).optional(),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchAirdropRuns(input)),
   )
   registerTool(
     'get_treasury_receipt_preflight',
@@ -4204,9 +4630,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool(
     'void_infra_scores',
     {
-      title: 'Void infrastructure-tainted retest samples',
+      title: 'Void infrastructure-tainted samples and scores',
       description:
-        'Set aside continual-retest samples that measured an inference outage instead of the agent. Read get_continual_retest_diagnostic first and copy each sample\'s validator_hotkey, exact seed, run_id (expectedRunId) and composite (expectedComposite) from retest_samples. Each item is guarded on that exact run and composite (a re-run that already landed reads stale_guard) and gated on the serving grant\'s outage-class failures (upstream_http_402 credit refusal, upstream_http_429/503 backpressure): at least 5, and at least 20 or 5% of chat calls, else insufficient_evidence. dryRun defaults to true and writes nothing; dryRun=false needs confirmation "VOID INFRA SCORES" and is all-or-nothing (any item not applied/already_voided rolls the batch back). A void is append-only and audited (reason, evidence + digest, actor); the score row is never changed. Every fold read (official composite, owner representative, cohort, crown, validator ledger) skips a voided sample from the next epoch pin, which reopens its seed for the agent; the re-run lands at the next void_generation and counts. Canonical quorum scores are not voided here: use replace_validator_score. Requires backroom:write.',
+        'Set aside continual-retest samples that measured an inference outage instead of the agent. Read get_continual_retest_diagnostic first and copy each sample\'s validator_hotkey, exact seed, run_id (expectedRunId) and composite (expectedComposite) from retest_samples. Each item is guarded on that exact run and composite (a re-run that already landed reads stale_guard) and gated on the serving grant\'s outage-class failures (upstream_http_402 credit refusal, upstream_http_429/503 backpressure): at least 5, and at least 20 or 5% of chat calls, else insufficient_evidence. dryRun defaults to true and writes nothing; dryRun=false needs confirmation "VOID INFRA SCORES" and is all-or-nothing (any item not applied/already_voided/already_queued rolls the batch back). A void is append-only and audited (reason, evidence + digest, actor); the score row is never changed. Every fold read (official composite, owner representative, cohort, crown, validator ledger) skips a voided sample from the next epoch pin, which reopens its seed for the agent; the re-run lands at the next void_generation and counts. Canonical quorum scores (SN-489): copy validator_hotkey, seed, run_id and composite from get_agent_scores (or a get_provider_outages canonical_flagged row); sampleKind auto resolves a key\'s canonical run. The same guards and evidence gate apply to the score\'s own serving grant; applied queues a same-validator replacement re-test (retest_request_id, basis provider_outage_void) on the same seed, leased ahead of ordinary work and never charged to the miner\'s retry budget. The score stays canonical until the replacement lands, when it is swapped with a score_invalidated audit entry and every median recomputes. Canonical dispositions add already_queued, already_replaced, retest_busy (another re-test is open), retest_closed (the replacement closed without a score; use replace_validator_score), not_retestable and auto_cap_reached. Requires backroom:write.',
       inputSchema: voidInfraScoresInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -4230,7 +4656,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get provider outages',
       description:
-        'Current provider_outage_circuits rows (state, epoch, opened/retry/last-failure times, failure_count, last_status, last_error_code, outage_active including the recovery quiet window), the post-outage sweep policy (interval, batch, first lookback, evidence gate), and newest-first sweep runs. Each run lists its watermark range, examined/voided/error counts, the voids it wrote (source outage_sweep), the per-grant outage windows observed, and canonical scores whose grant shows the same outage evidence (canonical_flagged: review with replace_validator_score; never replaced automatically). withFindings keeps runs that voided, flagged or errored. Requires backroom:read.',
+        'Current provider_outage_circuits rows (state, epoch, opened/retry/last-failure times, failure_count, last_status, last_error_code, outage_active including the recovery quiet window), the post-outage sweep policy (interval, batch, first lookback, evidence gate), and newest-first sweep runs. Each run lists its watermark range, examined/voided/error counts, the voids it wrote (source outage_sweep), the per-grant outage windows observed, and canonical scores whose grant shows the same outage evidence (canonical_flagged, each with void_disposition/void_request_id: the sweep queues a same-validator replacement re-test that swaps the score when it lands; anything other than applied/already_queued needs operator review). withFindings keeps runs that voided, flagged or errored. Requires backroom:read.',
       inputSchema: getProviderOutagesInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -4350,7 +4776,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   }, async (input) => result(await listBenchmarkCanaries(input)))
   registerTool('get_benchmark_canary', {
     title: 'Get benchmark canary',
-    description: 'Read one exact diagnostic receipt. Completed means a signed result was recorded, not calibration or activation readiness. Scorer details and traces are not exposed. Requires backroom:read.',
+    description: 'Read one exact diagnostic receipt. Completed means a signed result was recorded, not calibration or activation readiness. Raw scorer details and traces are not exposed. From bench 16 `result.details` carries priced-cost numbers, dueling aggregates and composite-gate factors; from bench 18 `run_budget` reports the cost budget, whether it was exhausted or its meter lost, and admitted/unrun case counts by phase. Requires backroom:read.',
     inputSchema: getBenchmarkCanaryInputSchema,
     annotations: toolAnnotations('read'),
   }, async (input) => result(await getBenchmarkCanary(input)))
@@ -4408,7 +4834,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List stranded previous-era submissions',
       description:
-        'List every scored or live submission that holds accepted scores on the previous benchmark (the admission rollout from_version) but has no active-version score and no admission path into the active era: not a frozen rollout cohort member, not adopted carryover, not first queued after the rollout opened, and no audited contract refresh. By design the active era pins no dataset and issues no tickets for these rows, so they are absent from the active leaderboard; get_benchmark_contract_refresh reports "benchmark dataset is missing" and agent_scoring_readiness reports "historical submission is not admitted". Each row carries the previous-era score count and median, previous_finalized, has_active_dataset, queue_withdrawn, cohort_sibling_agent_id with reason owner_in_cohort (the owner is already on the active board through a frozen sibling) or owner_outside_cohort, and owner_best_stranded (the owner\'s highest-median stranded row). ownerBestOnly keeps one row per owner. Also returns the admission rollout and whether prev_gen_carryover is enabled. Rows are ordered best previous-era median first. Read-only: changes no admission, dataset, ticket or score. Requires backroom:read.',
+        'List every scored or live submission that holds accepted scores on the previous benchmark (the admission rollout from_version) but has no active-version score and no admission path into the active era: not a frozen rollout cohort member, not adopted carryover, not first queued after the rollout opened, and no audited contract refresh. By design the active era pins no dataset and issues no tickets for these rows, so they are absent from the active leaderboard; get_benchmark_contract_refresh reports "benchmark dataset is missing" and agent_scoring_readiness reports "historical submission is not admitted". Each row carries the previous-era score count and median, previous_finalized, has_active_dataset, queue_withdrawn, cohort_sibling_agent_id with reason owner_in_cohort (the owner is already on the active board through a frozen sibling) or owner_outside_cohort, and owner_best_stranded (the owner\'s highest-median stranded row). ownerBestOnly keeps one row per owner. Also returns the admission rollout and whether prev_gen_carryover is enabled. Rows are ordered best previous-era median first. Every listed row reads public status era_changed (next step: resubmit) on miner surfaces, with its previous-era scores still shown; admitting it flips that back on its own. Read-only: changes no admission, dataset, ticket or score. Requires backroom:read.',
       inputSchema: strandedPreviousEraInputSchema.shape,
       annotations: toolAnnotations('read'),
     },
@@ -4425,7 +4851,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Admit one stranded previous-era submission',
       description:
-        'Admit exactly ONE agent from list_stranded_previous_era_submissions onto the activated benchmark era, after activation. Pins its active-version dataset (rendered before commit), appends it to the activated rollout after the frozen cohort without resizing or re-gating it, and writes an audited stranded_admitted rollout event with actor, reason, artifact SHA and previous-era evidence. The agent stays scored/live with its previous-era scores and history untouched; the post-activation top-up lane then leases it toward an active-version quorum. Guards, all re-checked before commit: expectedActiveVersion equals the active bench, no rollout is open, expectedSha256 is the exact artifact SHA, the agent is in the stranded list (scored/live, previous-era scores, no active score, no admission path; banned and rejected agents never are), expectedPreviousScoreCount equals its previous-era score count, it is not withdrawn from the active queue, and its screened image satisfies the active contract. Confirmation: "ADMIT STRANDED {agentId} TO BENCHMARK V{expectedActiveVersion}" with the lowercase agent UUID. Read the effect with get_stranded_admissions or agent_scoring_readiness. Requires backroom:write.',
+        'Admit exactly ONE agent from list_stranded_previous_era_submissions onto the activated benchmark era, after activation. Pins its active-version dataset (rendered before commit), appends it to the activated rollout after the frozen cohort without resizing or re-gating it, and writes an audited stranded_admitted rollout event with actor, reason, artifact SHA and previous-era evidence. The agent stays scored/live with its previous-era scores and history untouched; the post-activation top-up lane then leases it toward an active-version quorum. Guards, all re-checked before commit: expectedActiveVersion equals the active bench, no rollout is open, expectedSha256 is the exact artifact SHA, the agent is in the stranded list (scored/live, previous-era scores, no active score, no admission path; banned and rejected agents never are), expectedPreviousScoreCount equals its previous-era score count, it is not withdrawn from the active queue, and its screened image satisfies the active contract. Optional category (ditto_fault when Ditto\'s fault kept the row out of the era, owner_policy otherwise) is audited so free admissions can be counted against SN-485 paid readmissions; omitted reads as unspecified. This free operator path is unchanged by paid readmission. Confirmation: "ADMIT STRANDED {agentId} TO BENCHMARK V{expectedActiveVersion}" with the lowercase agent UUID. Read the effect with get_stranded_admissions or agent_scoring_readiness. Requires backroom:write.',
       inputSchema: admitStrandedSubmissionInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -4437,11 +4863,23 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Read stranded admissions',
       description:
-        'List every audited stranded admission on the active era (optionally one agentId) with its live effect: admitted (the live admission predicate; false if later withdrawn), is_member, actor, reason, admitted_at, previous-era score count and median, the pinned dataset SHA, active-version score count and median, first_lease_at (earliest active-version lease), live_lease_count, ticket_state (awaiting_first_lease, leased, awaiting_next_lease, quorum_complete) and every active-version ticket. Read-only. Requires backroom:read.',
+        'List every audited stranded admission on the active era (optionally one agentId) with its origin (operator_stranded_admission, the free operator path, or paid_readmission, a miner\'s SN-485 self-serve paid readmission), category (ditto_fault, owner_policy or unspecified for an operator admission, paid for a readmission; null before SN-485), payment_ref (the proof, amount and funding of a paid readmission) and its live effect: admitted (the live admission predicate; false if later withdrawn), is_member, actor, reason, admitted_at, previous-era score count and median, the pinned dataset SHA, active-version score count and median, first_lease_at (earliest active-version lease), live_lease_count, ticket_state (awaiting_first_lease, leased, awaiting_next_lease, quorum_complete) and every active-version ticket. Read-only. Requires backroom:read.',
       inputSchema: strandedAdmissionsInputSchema.shape,
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchStrandedAdmissions(input)),
+  )
+
+  registerTool(
+    'list_readmissions',
+    {
+      title: 'List readmissions',
+      description:
+        'List every SN-485 readmission, newest first. paid is the readmission payment lane: outcome admitted (a miner paid the upload fee to readmit one stranded agent into the active era; funding fresh or credit, credit_audit keeps a spent credit\'s history) or credited (refused after payment, for example a rollout opened or the agent was withdrawn, and banked as a 30-day upload credit: credit_spent, credit_expires_at, refusal_reason). uploads are accepted uploads classified as readmissions of the owner\'s own lineage: identical_rescore (byte-identical, allow_identical_rescore) or near_duplicate (same normalized source, new bytes), with lineage_agent_id and whether that lineage ever finished a quorum; they paid the ordinary upload fee. totals counts and sums each lane; free_admissions_by_category counts the active era\'s stranded admissions by audited category (ditto_fault, owner_policy, unspecified free; paid). Also returns activation (as in get_submission_cooldown readmission) and cost_basis. Filter by benchVersion or minerColdkey (the filters scope totals too; free_admissions_by_category is always the whole active era); limit 1-500 (default 100) and offset page both lists; truncated says more exist. Platform-caused re-tests (dueling_season_rotation) are never readmissions and never appear here. Requires backroom:read and changes nothing.',
+      inputSchema: listReadmissionsInputSchema.shape,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchReadmissions(input)),
   )
 
   registerTool(
@@ -4554,6 +4992,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => rejectScreeningSubmission(input, props.session.email)),
+  )
+
+  registerTool(
+    'amend_screening_reject_reason',
+    {
+      title: 'Amend public reject reason',
+      description:
+        'Correct the miner-visible reason on one resolved screening reject (operator or automated, e.g. platform:v13-confirmed-violation) without changing the decision. Guards: quarantineId plus expectedAgentId, expectedArtifactSha256 and expectedAttemptId from get_screening_quarantine_context, and expectedReason, the exact public reason being replaced. The quarantine resolution reason, the attempt public reason and the agent screening_reason take the corrected text where they still carry the replaced one; status, resolved_by, the moderation record and evidence are untouched. The replaced text stays in the append-only resolution history, seeded with the original decision when none was recorded. Replaying the same reason is idempotent. Confirmation: "AMEND PUBLIC REJECT REASON". Requires backroom:write.',
+      inputSchema: amendQuarantineRejectReasonInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => amendQuarantineRejectReason(input, props.session.email)),
   )
 
   registerTool(

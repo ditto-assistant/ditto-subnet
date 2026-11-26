@@ -35,7 +35,29 @@ const (
 	// request and omission defaults to medium. It must never be confused with
 	// the fixed-medium v7/v8 aggregate profile.
 	V9AggregateProfileRevision = "openrouter-route-6a097486af3c178d-v1"
+
+	// FrontierOracleModel is the model the generator frontier oracle (and its
+	// escalation tier) answers on. The oracle is a second witness, not a panel
+	// agent, so it is decoupled from the bench contract's harness model: a
+	// witness no stronger than the panel attests little, and gpt-oss-20b's
+	// 131072-token window overflowed on whole rounds (SN-496). Only a
+	// generator-frontier-oracle-v1 run may bind a session on this model;
+	// every scored, panel and dueling run stays on HarnessModelForVersion.
+	FrontierOracleModel = "z-ai/glm-5.3-flash"
+
+	// FrontierOracleProfileRevision is Platform's aggregate OpenRouter route
+	// identity for FrontierOracleModel
+	// (inference_routing.aggregate_profile_revision): sha256 over
+	// {"model":"z-ai/glm-5.3-flash","provider":{"allow_fallbacks":true,
+	// "data_collection":"deny","zdr":true}}, compact with sorted keys.
+	FrontierOracleProfileRevision = "openrouter-route-7186def4bbdafe7e-v1"
 )
+
+// FrontierOracleRoute reports whether (model, profile) is the pinned frontier
+// oracle route.
+func FrontierOracleRoute(model, profile string) bool {
+	return model == FrontierOracleModel && profile == FrontierOracleProfileRevision
+}
 
 // HarnessModel returns the frozen locked model id every miner harness is scored
 // against. It is the model-routing indirection: callers force this on the

@@ -230,6 +230,21 @@ export function SubmissionCooldownControlPanel({
             </div>
           ) : null}
 
+          {state.readmission ? (
+            <p className="mt-5 text-xs leading-5 text-[var(--muted)]" aria-label="Readmission">
+              Readmission (read-only):{' '}
+              <span className="font-medium">
+                {state.readmission.active ? 'active' : 'inactive'}
+              </span>
+              {state.readmission.active
+                ? ` since ${formatWhen(state.readmission.effective_at)}`
+                : ` (${state.readmission.inactive_reasons.join(', ')})`}
+              . It costs the upload fee and applies from v{state.readmission.min_bench_version},{' '}
+              {Math.round(state.readmission.notice_period_seconds / 86400)} days after the
+              announcement; the announcement is set through the Platform admin API.
+            </p>
+          ) : null}
+
           <div className="mt-5 grid gap-2 sm:grid-cols-4">
             {presets.map((value) => (
               <button

@@ -4,8 +4,10 @@ from uuid import uuid4
 
 import pytest
 from prometheus_client import REGISTRY
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.generator import FRONTIER_ORACLE_MODEL
 from ditto.api_models.inference_concurrency_settings import (
     DecisionLaneSettings,
     InferenceConcurrencySettings,
@@ -13,7 +15,11 @@ from ditto.api_models.inference_concurrency_settings import (
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.config import InferenceProxyConfig
 from ditto.api_server.inference_concurrency_settings import apply_settings
-from ditto.api_server.inference_routing import benchmark_model
+from ditto.api_server.inference_routing import (
+    aggregate_profile_revision,
+    benchmark_model,
+    benchmark_reasoning,
+)
 from ditto.db.models import (
     Agent,
     AgentStatus,
@@ -23,6 +29,8 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.inference import (
+    CHAT_MODE,
+    NO_CHAT_MODE,
     USAGE_ACCOUNTING_VERSION,
     InferenceDecline,
     activate_inference_grant,
@@ -398,6 +406,65 @@ async def test_grant_rejects_wrong_bearer_model_budget_and_replay(
             )
             is InferenceDecline.NONCE_REPLAYED
         )
+
+
+@pytest.mark.asyncio
+async def test_a_no_chat_grant_refuses_chat_and_keeps_embeddings(
+    session: AsyncSession,
+) -> None:
+    """The no-inference mode (docs/no-inference-mode.md) disables chat per grant.
+
+    A ``no_chat`` grant answers every chat call ``model_not_permitted`` even for
+    the model it lists, and keeps its embedding lane. The decision lane is
+    served by the relay alone. The CHECK refuses a no-chat grant without a
+    decision pin, which could otherwise only embed.
+    """
+    config = replace(_config(), embedding_per_ticket_concurrency=8)
+    async with session.begin():
+        _ticket, grant, bearer, now = await _live_v7_embedding_grant(session, config)
+        grant.decision_model = "typesafe/jev-1.14"
+        grant.decision_request_budget = 10
+        grant.decision_token_budget = 1_000
+        grant.inference_mode = NO_CHAT_MODE
+        await session.flush()
+        assert (
+            await begin_inference_request(
+                session,
+                grant_id=grant.grant_id,
+                nonce=uuid4(),
+                bearer=bearer,
+                model=_CHAT_MODEL,
+                token_reservation=10,
+                now=now,
+                config=config,
+            )
+            is InferenceDecline.MODEL_NOT_PERMITTED
+        )
+        accepted = await begin_inference_request(
+            session,
+            grant_id=grant.grant_id,
+            nonce=uuid4(),
+            bearer=bearer,
+            model=config.embedding_model,
+            token_reservation=10,
+            now=now,
+            config=config,
+            request_kind="embedding",
+        )
+        assert not isinstance(accepted, InferenceDecline)
+        assert grant.request_count == 0 and grant.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_a_no_chat_grant_requires_a_decision_pin(session: AsyncSession) -> None:
+    with pytest.raises(IntegrityError, match="inference_mode"):
+        async with session.begin():
+            _ticket, grant, _bearer, _now = await _live_v7_embedding_grant(
+                session, _config()
+            )
+            assert grant.inference_mode == CHAT_MODE
+            grant.inference_mode = NO_CHAT_MODE
+            await session.flush()
 
 
 @pytest.mark.asyncio
@@ -1561,3 +1628,92 @@ async def test_lease_model_usage_excludes_embedding_spend(
 
     assert usage is not None
     assert usage.total_tokens == 75
+
+
+async def test_an_oracle_lease_grant_pins_its_own_model_on_the_aggregate_route(
+    session: AsyncSession,
+) -> None:
+    # SN-496: the frontier oracle answers on FRONTIER_ORACLE_MODEL, not the
+    # bench contract's harness model, on that model's aggregate route.
+    now = datetime.now(UTC)
+    contract_only = replace(_config(), routing_mode="aggregate_throughput")
+    both = replace(contract_only, allowed_models=(_CHAT_MODEL, FRONTIER_ORACLE_MODEL))
+    async with session.begin():
+        agent = Agent(
+            agent_id=uuid4(),
+            miner_hotkey="miner-oracle",
+            name="oracle",
+            sha256="ef" * 32,
+            status=AgentStatus.SCORED,
+            created_at=now,
+        )
+        ticket = ValidatorTicket(
+            agent_id=agent.agent_id,
+            validator_hotkey="validator-oracle",
+            slot_id="slot-0",
+            status=TicketStatus.ISSUED,
+            issued_at=now,
+            deadline=now + timedelta(minutes=20),
+            bench_version=18,
+            attempt_count=1,
+        )
+        session.add_all([agent, ticket])
+        session.add(
+            InferenceRoutingPolicy(
+                model=FRONTIER_ORACLE_MODEL,
+                enabled=False,
+                speed_weight=0.65,
+                cost_weight=0.25,
+                exploration_weight=0.10,
+                exploration_ticket_budget=3,
+                min_tool_accuracy=0.55,
+                min_composite=0.15,
+                min_calibration_samples=20,
+                max_error_rate=0.25,
+                max_timeout_rate=0.15,
+                cooldown_seconds=30,
+                ewma_alpha=0.20,
+                updated_at=now,
+            )
+        )
+        profile = aggregate_profile_revision(FRONTIER_ORACLE_MODEL, bench_version=18)
+        # The scorer pins exactly this identity (FrontierOracleProfileRevision).
+        assert profile == "openrouter-route-7186def4bbdafe7e-v1"
+        session.add(
+            InferenceProviderRoute(
+                model=FRONTIER_ORACLE_MODEL,
+                provider="openrouter",
+                profile_revision=profile,
+                status="discovered",
+                calibration_status="shadow",
+                sample_count=0,
+                discovered_at=now,
+            )
+        )
+        await session.flush()
+        # A model the inference config does not allow mints nothing.
+        assert (
+            await ensure_inference_grant(
+                session,
+                ticket=ticket,
+                config=contract_only,
+                model=FRONTIER_ORACLE_MODEL,
+            )
+            is None
+        )
+        grant = await ensure_inference_grant(
+            session, ticket=ticket, config=both, model=FRONTIER_ORACLE_MODEL
+        )
+        assert grant is not None
+        assert grant.allowed_models == [FRONTIER_ORACLE_MODEL]
+        assert grant.route_provider == "openrouter"
+        assert grant.route_profile == profile
+        # The lease keeps its grant: a later call without the override returns
+        # the same one rather than re-minting on the contract model.
+        again = await ensure_inference_grant(session, ticket=ticket, config=both)
+        assert again is not None and again.grant_id == grant.grant_id
+    # The oracle model carries the same pinned reasoning contract.
+    assert benchmark_reasoning(FRONTIER_ORACLE_MODEL) == {
+        "effort": "medium",
+        "exclude": True,
+    }

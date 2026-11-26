@@ -538,6 +538,11 @@ class ScreeningEvidence:
     agent_policy_version: int
     lineage_scope: str | None
     open_quarantines: int
+    build_only_attempt_id: str | None = None
+    """The newest passed build-only admission of this exact artifact. Since
+    2026-11-07 every new attempt is build-only and reads no source, so it never
+    satisfies ``delta_read``. It is reported so the blocker names what did
+    pass instead of reading as if screening never ran (SN-440, SN-499)."""
 
     @property
     def delta_read(self) -> bool:
@@ -556,6 +561,7 @@ class ScreeningEvidence:
             "lineage_scope": self.lineage_scope,
             "open_quarantines": self.open_quarantines,
             "delta_read": self.delta_read,
+            "build_only_passed_attempt_id": self.build_only_attempt_id,
         }
 
 
@@ -696,10 +702,22 @@ def family_verdict(context: FamilyContext, facts: FamilyFacts) -> FamilyVerdict:
     reject_cites = list(context.reject_precedents)
     blockers: list[str] = []
     if not context.screening.delta_read:
-        blockers.append(
-            "held agent has no passed screening of this exact artifact under its "
-            "current policy with no open quarantine (I1-I8 delta read missing)"
-        )
+        if (
+            context.screening.attempt_id is None
+            and context.screening.build_only_attempt_id is not None
+        ):
+            blockers.append(
+                "held agent passed only build-only admission (attempt "
+                f"{context.screening.build_only_attempt_id}), which reads no "
+                "source; no I1-I8 delta read exists for this artifact, so a "
+                "clear needs an operator ruling"
+            )
+        else:
+            blockers.append(
+                "held agent has no passed screening of this exact artifact under "
+                "its current policy with no open quarantine (I1-I8 delta read "
+                "missing)"
+            )
     delta = facts.held_delta
     delta_text = (
         f"held delta vs primary base: {delta.get('added_count', 0)} added, "

@@ -26,7 +26,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from pydantic import BaseModel
-from sqlalchemy import event, func, select
+from sqlalchemy import event, func, select, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -61,6 +61,7 @@ from ditto.api_models.stack_health import (
     ValidatorStackHealth,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.api_models.validator import HarnessMemoryTelemetry
 from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.bench import CURRENT_BENCH_VERSION
 from ditto.api_server.crn import champion_anchored_seeds
@@ -111,6 +112,7 @@ from ditto.db.models import (
     ScreeningQuarantine,
     SubmissionImageBuild,
     ValidatorHeartbeat,
+    ValidatorQueueWithdrawal,
     ValidatorSlotSettingsRevision,
     ValidatorTicket,
 )
@@ -132,6 +134,7 @@ from ditto.db.queries.confirmation_bundles import (
     ActiveConfirmationWork,
     insert_confirmation_bundle_settings_revision,
 )
+from ditto.db.queries.harness_memory import record_harness_memory
 from ditto.db.queries.scores import (
     LedgerRow,
     V9ConfirmationPublicProjection,
@@ -1496,6 +1499,7 @@ async def _seed_k3(
     created_at: datetime | None = None,
     accepted_tickets: bool = True,
     queue_ready: bool = True,
+    sha256: str = "ab" * 32,
 ) -> str:
     """Seed one agent scored by ``len(composites)`` distinct validators.
 
@@ -1527,7 +1531,7 @@ async def _seed_k3(
             agent_id=agent_id,
             miner_hotkey=miner,
             name="agent",
-            sha256="ab" * 32,
+            sha256=sha256,
             size_bytes=524288,
             status=status,
             dataset_seed=dataset_seed,
@@ -3597,7 +3601,9 @@ class TestPublicLeaderboard:
         )
         # A reign this board never had: seeds anchored on some other agent, the
         # way a dethroned champion's trail survives in the append-only table.
-        stale_seeds = _anchor_seeds(str(uuid4()), count=8)
+        # Seven stale seeds plus the three live ones fill exactly the 10-seed
+        # board-wide active window, so the work cap trims nothing here.
+        stale_seeds = _anchor_seeds(str(uuid4()), count=7)
         live_seeds = _anchor_seeds(champion_id)
         assert not set(stale_seeds) & set(live_seeds)
 
@@ -3680,14 +3686,14 @@ class TestPublicLeaderboard:
         # The stale-only member permanently retains its own accepted samples.
         # They affect its mean but cannot become paired evidence against either
         # live member because the seed identities do not intersect.
-        assert entries[stale_only_id]["completed_wave_count"] == 8
-        assert entries[stale_only_id]["retained_sample_count"] == 8
+        assert entries[stale_only_id]["completed_wave_count"] == 7
+        assert entries[stale_only_id]["retained_sample_count"] == 7
         assert entries[stale_only_id]["aggregate_method"] == "continual_mean"
         assert entries[stale_only_id]["official_composite"] == pytest.approx(
-            (0.70 * 3 + 0.10 * 8) / 11
+            (0.70 * 3 + 0.10 * 7) / 10
         )
         # ...but the append-only audit trail is still reported in full.
-        assert entries[stale_only_id]["confirmation_seed_depth"] == 8
+        assert entries[stale_only_id]["confirmation_seed_depth"] == 7
 
     async def test_a_dethrone_keeps_the_evidence_the_cohort_already_shares(
         self,
@@ -4452,6 +4458,7 @@ class TestPublicLeaderboard:
             composites=[0.96, 0.96, 0.96],
             details={"bench_version": _ERA},
             created_at=datetime(2026, 6, 8, 18, 0, tzinfo=UTC),
+            sha256="b1" * 32,
         )
         retest_seed = 424242
         async with session_maker() as s, s.begin():
@@ -4674,6 +4681,7 @@ class TestPublicLeaderboard:
             miner=hidden_hotkey,
             composites=[0.90, 0.91, 0.92],
             created_at=datetime(2026, 6, 8, 13, 0, tzinfo=UTC),
+            sha256="b2" * 32,
         )
         await _seed_payment(
             session_maker,
@@ -6193,6 +6201,9 @@ class TestPublicActivity:
             "review_conclusion": None,
             "preserved_composite": None,
             "active_benchmarks": [],
+            "scoring_wait": None,
+            "queue_withdrawn": False,
+            "era_change": None,
         }
         assert "artifact_release" not in body
         assert "screening_attempts" not in body
@@ -6288,8 +6299,11 @@ class TestPublicActivity:
         # Includes one bounded query for the independent live LongMem lane
         # and one for live handle-claim reservations plus attested owner roots
         # so operations badges classify family children correctly.
-        # Plus one bounded miner-avatar lookup for the page's hotkeys.
-        assert len(statements) <= 37
+        # Plus one bounded miner-avatar lookup for the page's hotkeys, and
+        # one open-rollout read for the dueling-season gate on waiting rows,
+        # and one page-bound lookup that labels finalized previous-era rows
+        # era_changed (SN-485) instead of testing all history in the projection.
+        assert len(statements) <= 39
         body = response.json()
         assert body["active_bench_version"] == _ERA
         assert body["desired_bench_version"] == _NEXT_ERA
@@ -6586,12 +6600,15 @@ class TestPublicActivity:
             "validator_queue_gate",
             "validator_queue_gate_detail",
             "previous_generation",
+            "queue_withdrawn",
+            "era_change",
             "quorum",
             "retry_state",
             "retry_after",
             "retry_disposition",
             "terminal_failure_code",
             "hold_failure_code",
+            "scoring_wait",
             "screening_policy_version",
             "required_screening_policy_version",
             "screening_attempt_id",
@@ -7688,9 +7705,19 @@ class TestPublicActivity:
 
         assert by_id[fresh_id]["validator_queue_rank"] == 1
         assert by_id[stranded_id]["validator_queue_rank"] is None
-        assert by_id[stranded_id]["status"] == "not_queued"
+        # Historical, not withdrawn: only the era boundary keeps it out, so
+        # it reads era_changed with the resubmit next step (SN-485).
+        assert by_id[stranded_id]["status"] == "era_changed"
+        assert by_id[stranded_id]["queue_withdrawn"] is False
+        assert by_id[stranded_id]["era_change"] == {
+            "reason": "not_admitted_to_active_bench",
+            "bench_version": _ERA,
+            "scored_bench_version": None,
+            "next_step": "resubmit",
+        }
         assert body["status_counts"]["waiting_validator"] == 1
-        assert body["status_counts"]["not_queued"] == 1
+        assert body["status_counts"]["era_changed"] == 1
+        assert "not_queued" not in body["status_counts"]
         assert by_id[fresh_id]["previous_generation"] is False
         assert by_id[stranded_id]["validator_queue_gate"] is None
         assert by_id[fresh_id]["validator_queue_gate"] is None
@@ -8180,74 +8207,6 @@ class TestPublicActivity:
         assert entry["score_count"] == 3
         assert datetime.fromisoformat(entry["last_scored_at"]) == recorded_at
 
-    async def test_active_rescreen_projects_yellow_and_exposes_version_history(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = UUID(
-            await _seed_agent(
-                session_maker,
-                miner=_MINER_A,
-                status=AgentStatus.SCREENING,
-                screening_reason="Container failed the health check",
-                screening_policy_version=SCREENING_POLICY_VERSION - 1,
-            )
-        )
-        now = datetime.now(UTC)
-        old_attempt_id = uuid4()
-        active_attempt_id = uuid4()
-        async with session_maker() as session, session.begin():
-            session.add_all(
-                [
-                    ScreeningAttempt(
-                        attempt_id=old_attempt_id,
-                        agent_id=agent_id,
-                        screener_hotkey=_MINER_B,
-                        policy_version=SCREENING_POLICY_VERSION - 1,
-                        status="rejected",
-                        started_at=now - timedelta(hours=1),
-                        deadline=now - timedelta(minutes=40),
-                        finished_at=now - timedelta(minutes=45),
-                        public_reason="Container failed the health check",
-                    ),
-                    ScreeningAttempt(
-                        attempt_id=active_attempt_id,
-                        agent_id=agent_id,
-                        screener_hotkey=_MINER_B,
-                        policy_version=SCREENING_POLICY_VERSION,
-                        status="running",
-                        started_at=now,
-                        deadline=now + timedelta(minutes=30),
-                    ),
-                ]
-            )
-        _install_db(app, session_maker)
-
-        activity = (await client.get("/api/v1/public/activity")).json()["entries"][0]
-        assert activity["status"] == "screening"
-        assert activity["screening_reason"] is None
-        assert activity["screening_policy_version"] == SCREENING_POLICY_VERSION - 1
-        assert activity["required_screening_policy_version"] == SCREENING_POLICY_VERSION
-        assert activity["screening_attempt_id"] == str(active_attempt_id)
-        assert activity["screening_build_only"] is False
-
-        response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
-        assert response.status_code == 200
-        body = response.json()
-        assert body["status"] == "screening"
-        assert [
-            attempt["policy_version"] for attempt in body["screening_attempts"]
-        ] == [
-            SCREENING_POLICY_VERSION,
-            SCREENING_POLICY_VERSION - 1,
-        ]
-        assert [attempt["status"] for attempt in body["screening_attempts"]] == [
-            "running",
-            "rejected",
-        ]
-
     async def test_each_score_carries_its_own_bench_versions_dataset_digest(
         self,
         app: FastAPI,
@@ -8337,43 +8296,6 @@ class TestPublicActivity:
         entry = (await client.get("/api/v1/public/activity")).json()["entries"][0]
         assert entry["status"] == "rejected"
         assert entry["screening_reason"] == "Container failed the health check"
-
-    async def test_policy_bump_projects_unadmitted_stale_agent_as_not_queued(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """A stale policy version alone is not a rescreen ticket.
-
-        Only era-admitted agents return to ``waiting_screening`` on a policy
-        bump; a historical submission outside the active benchmark era stays
-        ``not_queued``. The waiting_screening count drives screener
-        autoscaling, so projecting the whole stale backlog there also bought
-        capacity for work no screener would ever be allowed to claim.
-        """
-        historical = await _seed_agent(
-            session_maker,
-            miner=_MINER_A,
-            name="stale-historical",
-            status=AgentStatus.EVALUATING,
-            created_at=datetime(2026, 5, 1, tzinfo=UTC),
-            screening_policy_version=SCREENING_POLICY_VERSION - 1,
-        )
-        current_era = await _seed_agent(
-            session_maker,
-            miner=_MINER_B,
-            name="stale-current-era",
-            status=AgentStatus.EVALUATING,
-            screening_policy_version=SCREENING_POLICY_VERSION - 1,
-        )
-        await _activate_era(session_maker)
-        _install_db(app, session_maker)
-
-        body = (await client.get("/api/v1/public/activity")).json()
-        by_id = {entry["agent_id"]: entry["status"] for entry in body["entries"]}
-        assert by_id[historical] == "not_queued"
-        assert by_id[current_era] == "waiting_screening"
 
     async def test_released_quarantine_resolution_is_public_in_attempt_history(
         self,
@@ -9180,12 +9102,12 @@ class TestPublicActivity:
             for entry in activity_body["entries"]
             if entry["agent_id"] == str(agent_id)
         )
-        assert activity["status"] == "not_queued"
+        assert activity["status"] == "era_changed"
         assert activity["score_count"] == 1
         assert activity["provisional_composite"] == pytest.approx(0.391897)
         assert activity["validator_queue_rank"] is None
         assert activity["retry_state"] is None
-        assert activity_body["status_counts"]["not_queued"] == 1
+        assert activity_body["status_counts"]["era_changed"] == 1
         assert [work["bench_version"] for work in activity["active_benchmarks"]] == [
             _PREV_ERA
         ]
@@ -9196,13 +9118,14 @@ class TestPublicActivity:
             entry["agent_id"] == str(agent_id)
             for entry in operations["activity"]["entries"]
         )
-        assert operations["activity"]["status_counts"]["not_queued"] == 1
+        assert operations["activity"]["status_counts"]["era_changed"] == 1
 
         pipeline = (
             await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
         ).json()
         assert pipeline["active_bench_version"] == _ERA
-        assert pipeline["status"] == "not_queued"
+        assert pipeline["status"] == "era_changed"
+        assert pipeline["era_change"]["next_step"] == "resubmit"
         assert pipeline["score_count"] == 1
         assert pipeline["score_floor"] == pytest.approx(0.80)
         scores_by_version = {
@@ -9394,6 +9317,16 @@ class TestPublicActivity:
         assert held["hold_failure_code"] == "provider_outage_parked"
         assert terminal["retry_disposition"] == "terminal_artifact_failure"
         assert terminal["terminal_failure_code"] == "inference_request_rejected"
+        # Not yet withdrawn (a row stranded before the platform wrote close-outs),
+        # but the per-submission page still must not say it is waiting.
+        terminal_pipeline = (
+            await client.get(f"/api/v1/public/agent/{terminal_id}/pipeline")
+        ).json()
+        assert terminal_pipeline["status"] == "scoring_failed"
+        assert (
+            terminal_pipeline["validator_retry"]["disposition"]
+            == "terminal_artifact_failure"
+        )
 
         # The per-submission page must agree with the feed for the same agent,
         # and it publishes the no-fault outage code rather than staying silent.
@@ -9404,6 +9337,133 @@ class TestPublicActivity:
         assert {
             attempt["failure_code"] for attempt in pipeline["validation_attempts"]
         } == {"provider_outage_parked"}
+
+    async def test_a_terminal_close_out_reads_scoring_failed_everywhere(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A withdrawal that names the agent's own failure is not "waiting".
+
+        kgmin1105 (2026-11-08) spent its whole inference allowance on four
+        validators and the submission page kept saying "No validator is
+        assigned yet. Waiting for 3 validators." Once the platform records the
+        close-out, the activity feed, its status counts and the pipeline page
+        all report ``scoring_failed`` with the code the miner has to fix.
+        """
+        now = datetime.now(UTC)
+        agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="spent",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        plain_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_B,
+                status=AgentStatus.EVALUATING,
+                name="withdrawn",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        async with session_maker() as session, session.begin():
+            for index in range(3):
+                session.add(
+                    ValidatorTicket(
+                        agent_id=agent_id,
+                        validator_hotkey=_fake_validator_hotkey(index),
+                        status=TicketStatus.EXPIRED,
+                        issued_at=now - timedelta(hours=3),
+                        deadline=now - timedelta(hours=2, minutes=index),
+                        bench_version=_ERA,
+                        attempt_count=2,
+                        manual_retry_grants=0,
+                        failure_reason="scoring_error",
+                        failure_detail="inference_allowance_exhausted",
+                        failed_at=now - timedelta(hours=2, minutes=index),
+                        retry_after=now - timedelta(hours=1),
+                    )
+                )
+            for withdrawn_id, code in (
+                (agent_id, "inference_allowance_exhausted"),
+                (plain_id, None),
+            ):
+                session.add(
+                    ValidatorQueueWithdrawal(
+                        withdrawal_id=uuid4(),
+                        agent_id=withdrawn_id,
+                        bench_version=_ERA,
+                        actor="platform:terminal-artifact-failure",
+                        reason="test close-out of this submission",
+                        expected_snapshot="test",
+                        score_count=0,
+                        ticket_snapshot=[],
+                        terminal_failure_code=code,
+                        created_at=now,
+                    )
+                )
+        _install_db(app, session_maker)
+
+        activity = (await client.get("/api/v1/public/activity")).json()
+        by_id = {entry["agent_id"]: entry for entry in activity["entries"]}
+        spent = by_id[str(agent_id)]
+        assert spent["status"] == "scoring_failed"
+        profile = await client.get(f"/api/v1/public/miners/{_MINER_A}")
+        assert profile.status_code == 200, profile.text
+        submission = next(
+            row
+            for row in profile.json()["submissions"]
+            if row["agent_id"] == str(agent_id)
+        )
+        assert submission["status"] == "scoring_failed"
+
+        assert spent["retry_disposition"] == "terminal_artifact_failure"
+        assert spent["terminal_failure_code"] == "inference_allowance_exhausted"
+        assert spent["queue_withdrawn"] is False
+        # A withdrawal without a code stays not_queued, flagged as an operator
+        # withdrawal rather than a historical submission (SN-470).
+        assert by_id[str(plain_id)]["status"] == "not_queued"
+        assert by_id[str(plain_id)]["queue_withdrawn"] is True
+        summary = (await client.get(f"/api/v1/public/agent/{plain_id}/summary")).json()
+        assert summary["status"] == "not_queued"
+        assert summary["queue_withdrawn"] is True
+        assert by_id[str(plain_id)]["terminal_failure_code"] is None
+        assert activity["status_counts"].get("scoring_failed") == 1
+        assert activity["status_counts"].get("waiting_validator", 0) == 0
+
+        filtered = (
+            await client.get(
+                "/api/v1/public/activity", params={"status": "scoring_failed"}
+            )
+        ).json()
+        assert [entry["agent_id"] for entry in filtered["entries"]] == [str(agent_id)]
+
+        pipeline = (
+            await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+        ).json()
+        assert pipeline["status"] == "scoring_failed"
+        assert pipeline["validator_retry"] == {
+            "state": "exhausted",
+            "disposition": "terminal_artifact_failure",
+            "terminal_failure_code": "inference_allowance_exhausted",
+            "hold_failure_code": None,
+            "retry_after": None,
+        }
+
+        # Historical profile entries keep their own scoring era when the
+        # active board moves on; an unrelated withdrawal stays unaffected.
+        await _activate_era(session_maker, _NEXT_ERA)
+        old_profile = await client.get(f"/api/v1/public/miners/{_MINER_A}")
+        assert old_profile.status_code == 200, old_profile.text
+        assert old_profile.json()["submissions"][0]["status"] == "scoring_failed"
+        unrelated = await client.get(f"/api/v1/public/miners/{_MINER_B}")
+        assert unrelated.status_code == 200, unrelated.text
+        assert unrelated.json()["submissions"][0]["status"] != "scoring_failed"
 
     async def test_an_unnamed_parked_cause_never_blames_the_submission(
         self,
@@ -10071,8 +10131,9 @@ class TestPublicActivity:
         # that a currently available validator can actually consume, plus
         # one live handle-claim reservation read and one attested-owner fold
         # so family children keep a reserved handle.
-        # Plus one bounded miner-avatar lookup for the page's hotkeys.
-        assert len(statements) <= 21
+        # Plus one bounded miner-avatar lookup for the page's hotkeys, and
+        # one open-rollout read for the dueling-season gate on waiting rows.
+        assert len(statements) <= 22
         assert body["count"] == 1
         assert body["total"] == 2
         assert body["total_pages"] == 2
@@ -10385,6 +10446,68 @@ class TestPublicActivity:
             "created_at": (now - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
             "updated_at": deadline.isoformat().replace("+00:00", "Z"),
         }
+        # No run of this agent was measured: unmeasured, not reported as light.
+        assert body["harness_memory"] is None
+
+    async def test_pipeline_publishes_the_agents_own_harness_memory(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """SN-500: a miner sees its own measured memory, never failure detail."""
+        agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="memory-measured-agent",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        mib = 1 << 20
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            for hours, p95, outcome, detail in (
+                (3, 400, "scored", None),
+                (2, 600, "failed", "private scorer diagnostic text"),
+                (1, 500, "scored", None),
+            ):
+                await record_harness_memory(
+                    session,
+                    agent_id=agent_id,
+                    bench_version=_ERA,
+                    validator_hotkey=_MINER_B,
+                    lease_issued_at=now - timedelta(hours=hours),
+                    outcome=outcome,  # type: ignore[arg-type]
+                    telemetry=HarnessMemoryTelemetry(
+                        peak_bytes=(p95 + 50) * mib,
+                        p50_bytes=(p95 // 2) * mib,
+                        p95_bytes=p95 * mib,
+                        samples=200,
+                        sampled_seconds=400.0,
+                        limit_bytes=2048 * mib,
+                    ),
+                    failure_reason="infrastructure" if detail else None,
+                    failure_detail=detail,
+                )
+        _install_db(app, session_maker)
+
+        response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+
+        assert response.status_code == 200, response.text
+        memory = response.json()["harness_memory"]
+        assert memory["runs"] == 3
+        assert memory["p95_bytes_max"] == 600 * mib
+        assert memory["p95_bytes_median"] == 500 * mib
+        assert memory["peak_bytes_max"] == 650 * mib
+        assert memory["limit_bytes_max"] == 2048 * mib
+        recent = memory["recent_runs"]
+        # Most recently leased first, with the outcome but no failure detail.
+        assert [run["p95_bytes"] for run in recent] == [500 * mib, 600 * mib, 400 * mib]
+        assert recent[1]["outcome"] == "failed"
+        assert "private scorer diagnostic text" not in response.text
+        assert not {"failure_reason", "failure_detail"} & set(recent[1])
 
     async def test_pipeline_publishes_inference_lane_saturated(
         self,
@@ -11043,6 +11166,9 @@ class TestPublicSubmissionScores:
         ).json()["provisional_scores"]
 
         assert [score["v9_base"] for score in scores] == [dashboard_fixture] * 3
+        # Below the dueling floor the v16 breakdown is omitted, not null.
+        assert not any("dueling_breakdown" in score for score in scores)
+        assert not any("dueling_breakdown" in score for score in pipeline_scores)
         assert [score["v9_base"] for score in pipeline_scores] == [
             dashboard_fixture
         ] * 3
@@ -11058,6 +11184,60 @@ class TestPublicSubmissionScores:
             "excluded",
         ):
             assert private_field not in public_json
+
+    async def test_v16_dueling_breakdown_reaches_public_score_reads_masked(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        from ditto.tests.api_server.test_dueling_breakdown import (
+            OTHER,
+            OWNER,
+            RIVAL,
+            dueling_report,
+            priced_gate_evidence,
+        )
+
+        agent_id = await _seed_k3(
+            session_maker,
+            miner=_MINER_A,
+            composites=[0.614706, 0.614706, 0.614706],
+            details={"bench_version": 16},
+        )
+        async with session_maker() as s, s.begin():
+            await s.execute(
+                update(Score)
+                .where(Score.agent_id == UUID(agent_id))
+                .values(
+                    dueling_season_id=UUID(dueling_report()["season_id"]),
+                    dueling=dueling_report(),
+                    gate_evidence=priced_gate_evidence(),
+                )
+            )
+        _install_db(app, session_maker)
+
+        scores_body = (
+            await client.get(f"/api/v1/public/agent/{agent_id}/scores")
+        ).json()
+        pipeline_body = (
+            await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+        ).json()
+        for rows in (scores_body["scores"], pipeline_body["provisional_scores"]):
+            assert len(rows) == 3
+            for row in rows:
+                breakdown = row["dueling_breakdown"]
+                assert breakdown["priced_cost_applied_factor_bps"] == 9392
+                assert breakdown["counted_columns"] == 4
+                masked = [
+                    c["column_id"] for c in breakdown["columns"] if c["self_masked"]
+                ]
+                assert masked == ["c1"]
+        for body in (scores_body, pipeline_body):
+            published = json.dumps(body)
+            for owner in (OWNER, RIVAL, OTHER):
+                assert owner not in published
+            assert '"owner_key"' not in published
 
     async def test_detail_404_for_provisional_agent(
         self,

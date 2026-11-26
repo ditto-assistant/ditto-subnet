@@ -43,6 +43,10 @@ locals {
     # builds than e2 at a small price premium; kept as its own logical size so
     # e2 consumers don't move.
     "screener-burst-n2d" = "n2d-standard-8" # 8 vCPU / 32 GB
+
+    # Compute-optimised on-demand screener (the AWS c7a.2xlarge analogue):
+    # AMD Genoa, 8 vCPU / 16 GB.
+    "screener-on-demand" = "c3d-highcpu-8" # 8 vCPU / 16 GB
   }
 
   # Logical → native GCE image (project/family form resolves the newest image).

@@ -366,3 +366,102 @@ func TestExecuteIncludeRunsOnlySelectedCases(t *testing.T) {
 		t.Fatalf("harness saw %d runs and %d seeds, want 3 and %d", len(h.runs), len(h.seeded), len(p.MemoryWaves))
 	}
 }
+
+// A case Admit refuses never reaches the harness and comes back
+// BudgetExhausted with score 0, never as a fault.
+func TestExecuteSkipsCasesTheBudgetRefuses(t *testing.T) {
+	p := challenge.ReferencePack(4, testHotkey)
+	h := &fakeHarness{answer: answersByQuestion(p, gold)}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	admitted := 0
+	out, err := Execute(context.Background(), srv.URL, p, Options{Nonce: []byte("pinned"), Concurrency: 1, Admit: func() bool {
+		admitted++
+		return admitted <= 2
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ran, refused := 0, 0
+	for _, o := range out {
+		switch {
+		case o.BudgetExhausted:
+			refused++
+			if o.Score != 0 || o.Fault {
+				t.Fatalf("refused case %+v", o)
+			}
+		default:
+			ran++
+		}
+	}
+	if ran != 2 || refused != len(p.Cases)-2 {
+		t.Fatalf("ran %d refused %d of %d", ran, refused, len(p.Cases))
+	}
+}
+
+// Once the budget is spent, later waves are not seeded; their cases still
+// come back BudgetExhausted.
+func TestExecuteSkipsSeedingOnceTheBudgetIsSpent(t *testing.T) {
+	p := challenge.ReferencePack(4, testHotkey)
+	h := &fakeHarness{answer: answersByQuestion(p, gold)}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	out, err := Execute(context.Background(), srv.URL, p, Options{
+		Nonce: []byte("pinned"), Concurrency: 1,
+		Admit:     func() bool { return false },
+		Exhausted: func() bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.seeded) != 0 || len(h.runs) != 0 {
+		t.Fatalf("a spent budget seeded %d waves and ran %d cases", len(h.seeded), len(h.runs))
+	}
+	for _, o := range out {
+		if !o.BudgetExhausted || o.Score != 0 || o.Fault {
+			t.Fatalf("refused case %+v", o)
+		}
+	}
+}
+
+func TestExecuteOracleSeedsOnlyEachCasesContext(t *testing.T) {
+	p := challenge.ReferencePack(4, testHotkey)
+	ids := []string{p.Cases[5].ID, p.Cases[0].ID}
+	h := &fakeHarness{answer: answersByQuestion(p, gold)}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	out, err := ExecuteOracle(context.Background(), srv.URL, p, ids, Options{Nonce: []byte("pinned")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 2 || out[0].CaseID != ids[0] || out[1].CaseID != ids[1] {
+		t.Fatalf("outcomes must follow caseIDs: %+v", out)
+	}
+	for _, o := range out {
+		if o.Fault || o.Score != 1 {
+			t.Fatalf("a gold answer grades 1 under the oracle: %+v", o)
+		}
+	}
+	// One seeding per case, each with that case's bounded context, under
+	// distinct opaque users, and only the requested cases ran.
+	if len(h.seeded) != 2 || len(h.runs) != 2 {
+		t.Fatalf("seeded %d graphs and ran %d cases", len(h.seeded), len(h.runs))
+	}
+	if h.seeded[0].UserID == h.seeded[1].UserID {
+		t.Fatal("each oracle case needs its own memory graph")
+	}
+	for _, w := range h.seeded {
+		if len(w.Pairs) == 0 || len(w.Pairs) > challenge.OracleMaxPairs {
+			t.Fatalf("an oracle graph holds 1..%d pairs, got %d", challenge.OracleMaxPairs, len(w.Pairs))
+		}
+	}
+	if _, err := ExecuteOracle(context.Background(), srv.URL, p, []string{"missing"}, Options{}); err == nil {
+		t.Fatal("an unknown oracle case must be refused")
+	}
+	bad := p
+	bad.Cases = append([]challenge.Case(nil), p.Cases...)
+	bad.Cases[0].EvidencePairIDs = nil
+	if _, err := ExecuteOracle(context.Background(), srv.URL, bad, ids, Options{}); err == nil {
+		t.Fatal("the source pack must still validate")
+	}
+}

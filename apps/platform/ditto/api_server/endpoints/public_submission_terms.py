@@ -9,9 +9,11 @@ rule. See :mod:`ditto.api_models.submission_terms`.
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.generator import (
@@ -20,6 +22,15 @@ from ditto.api_models.generator import (
     MIN_PACK_CASES,
     SOURCE_SIGNATURE_DOMAIN,
     GeneratorCompetitionSettings,
+)
+from ditto.api_models.model_context import (
+    COMMITMENT_PREFIX,
+    CPM_SCORE_VERSION,
+    MANIFEST_FILENAME,
+    MANIFEST_SCHEMA,
+    MAX_MANIFEST_BYTES,
+    SIGNATURE_DOMAIN,
+    ModelContextSettings,
 )
 from ditto.api_models.submission_terms import (
     ArtifactContract,
@@ -36,10 +47,16 @@ from ditto.api_server.endpoints.upload import (
     MAX_TARBALL_SIZE_BYTES,
 )
 from ditto.api_server.generator_competition import load_settings
+from ditto.api_server.model_context_competition import (
+    load_settings as load_model_context_settings,
+)
+from ditto.api_server.readmission import readmission_terms
+from ditto.api_server.readmission_cost_basis import readmission_cost_basis
 from ditto.api_server.source_inspect import (
     UPLOAD_MAX_MEMBERS,
     UPLOAD_MAX_UNPACKED_BYTES,
 )
+from ditto.db.queries.readmission_gate import current_readmission_activation
 from ditto.db.queries.submission_settings import (
     EffectiveSubmissionSettings,
     effective_submission_settings,
@@ -58,10 +75,12 @@ from ditto_screening_protocol.source_limits import (
     SOURCE_LIMITS_EFFECTIVE_AT,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/public/submission-terms", tags=["public"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
-COMPETITIONS: tuple[CompetitionId, ...] = ("memory", "generator")
+COMPETITIONS: tuple[CompetitionId, ...] = ("memory", "generator", "model_context")
 _SOURCE_LIMITS = "ditto_screening_protocol.source_limits"
 
 
@@ -216,6 +235,60 @@ def _generator_deliverable(settings: GeneratorCompetitionSettings) -> ArtifactCo
     )
 
 
+def _model_context_deliverable(settings: ModelContextSettings) -> ArtifactContract:
+    bases = ", ".join(
+        f"{b.base_id} ({b.hf_repo}@{b.revision})" for b in settings.base_allowlist
+    )
+    return ArtifactContract(
+        kind="model_weights_repo",
+        format=(
+            "a public Hugging Face repo pinned at a 40-hex commit: a LoRA "
+            "(adapter_config.json + adapter_model.safetensors) or a full "
+            "fine-tune (config.json + model*.safetensors) of an allowlisted base"
+        ),
+        contract_version=f"{MANIFEST_SCHEMA}; cpm_score_version {CPM_SCORE_VERSION}",
+        required_files=[MANIFEST_FILENAME],
+        limits=[
+            ArtifactLimit(
+                name="max_total_bytes",
+                value=settings.max_total_bytes,
+                unit="bytes",
+                source="setting",
+                reference="model_context.max_total_bytes",
+                description="total size of the files the manifest lists",
+            ),
+            ArtifactLimit(
+                name="max_lora_rank",
+                value=settings.max_lora_rank,
+                unit="rank",
+                source="setting",
+                reference="model_context.max_lora_rank",
+                description="the largest LoRA rank (r) a lora submission may use",
+            ),
+            ArtifactLimit(
+                name="max_manifest_bytes",
+                value=MAX_MANIFEST_BYTES,
+                unit="bytes",
+                source="code",
+                reference="ditto.api_models.model_context.MAX_MANIFEST_BYTES",
+                description=f"the {MANIFEST_FILENAME} file",
+            ),
+        ],
+        upload_endpoint="/api/v1/model-context/submissions",
+        signature_payload=(
+            f"{SIGNATURE_DOMAIN}:{{hotkey}}:{{hf_repo}}:{{revision}}:"
+            "{manifest_sha256}:{ts}:{nonce}"
+        ),
+        notes=[
+            f"commit {COMMITMENT_PREFIX}<manifest_sha256> on chain first; "
+            "the earlier commitment block owns duplicate weights",
+            "safetensors only: no pickle, no *.py, no trust_remote_code; the "
+            "base tokenizer is always used",
+            f"bases: {bases}",
+        ],
+    )
+
+
 def _fee(
     effective: EffectiveSubmissionSettings,
     competition: CompetitionId,
@@ -243,6 +316,25 @@ async def _all_terms(
         default_payment_address=request.app.state.config.upload_payment_address,
     )
     generator = (await load_settings(session)).settings
+    model_context = (await load_model_context_settings(session)).settings
+    activation = await current_readmission_activation(session, settings=effective)
+    # The cost basis is published once readmission is announced; before that
+    # the public terms skip the aggregation entirely. It is informational, so
+    # a failed measurement serves the terms without it rather than failing
+    # the routes miners read before paying.
+    cost_basis = None
+    if activation.announced_at is not None:
+        try:
+            cost_basis = await readmission_cost_basis(
+                session, bench_version=activation.active_bench_version
+            )
+        except SQLAlchemyError:
+            logger.exception(
+                "readmission cost basis unavailable for v%s",
+                activation.active_bench_version,
+            )
+            await session.rollback()
+    readmission = readmission_terms(activation, cost_basis)
     return [
         CompetitionSubmissionTerms(
             competition="memory",
@@ -256,6 +348,7 @@ async def _all_terms(
             ),
             fee=_fee(effective, "memory", competition_requires_fee=True),
             terms_endpoint="/api/v1/upload/check",
+            readmission=readmission,
         ),
         CompetitionSubmissionTerms(
             competition="generator",
@@ -273,6 +366,23 @@ async def _all_terms(
                 competition_requires_fee=generator.upload_fee_required,
             ),
             terms_endpoint="/api/v1/generator/upload-terms",
+        ),
+        CompetitionSubmissionTerms(
+            competition="model_context",
+            accepting=model_context.mode != "off",
+            deliverable=_model_context_deliverable(model_context),
+            cooldown=SubmissionCooldownTerms(
+                seconds=model_context.upload_cooldown_seconds,
+                scope="hotkey",
+                source="setting",
+                reference="model_context.upload_cooldown_seconds",
+            ),
+            fee=_fee(
+                effective,
+                "model_context",
+                competition_requires_fee=model_context.upload_fee_required,
+            ),
+            terms_endpoint="/api/v1/model-context/upload-terms",
         ),
     ]
 

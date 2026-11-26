@@ -6,9 +6,10 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, case, or_, select
+from sqlalchemy import ColumnElement, case, false, or_, select
 from sqlalchemy.orm.util import AliasedClass
 
+from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.ticket_status import TicketPurpose
 from ditto.db.models import (
     Agent,
@@ -116,8 +117,9 @@ def first_queued_in_era_predicate(
     The rule needs positive evidence of a first queue entry at or after the
     rollout opened, and no evidence of an earlier one:
 
-    * a non-build-only screening pass, or a quarantine released by an operator,
-      at or after ``rollout.created_at`` -- the two transitions that move a
+    * a screening pass (build-only included, since every admission has been
+      build-only from 2026-11-07), or a quarantine released by an operator, at
+      or after ``rollout.created_at`` -- the two transitions that move a
       submission into ``evaluating``;
     * no screening pass (build-only included) and no release before it;
     * no previous-era queue ticket or accepted score.
@@ -140,12 +142,14 @@ def first_queued_in_era_predicate(
     era_start = rollout.created_at
     passed = ScreeningAttempt.status == "passed"
     released = ScreeningQuarantine.resolution == "release"
+    # Any pass counts: since source review was retired (2026-11-07) every
+    # admission is build-only. A build-only rebuild of already-queued work is
+    # still excluded, because that work has an earlier pass or release.
     passed_in_era = (
         select(ScreeningAttempt.attempt_id)
         .where(
             ScreeningAttempt.agent_id == agent.agent_id,
             passed,
-            ScreeningAttempt.build_only.is_(False),
             ScreeningAttempt.finished_at >= era_start,
         )
         .correlate(agent)
@@ -281,6 +285,82 @@ def benchmark_admission_predicate(
     )
 
 
+def previous_era_scored_predicate(
+    *,
+    rollout: BenchmarkRollout,
+    bench_version: int,
+    agent: type[Agent] | AliasedClass[Agent] = Agent,
+) -> ColumnElement[bool]:
+    """A finalized previous-era submission the active era does not admit.
+
+    ``scored``/``live``, holding scores on ``rollout.from_version``, no score on
+    ``bench_version`` and refused by :func:`benchmark_admission_predicate`.
+    This is exactly the population
+    :func:`~ditto.db.queries.benchmark_era_stranded.stranded_previous_era_agents`
+    lists, and the one the public ``era_changed`` status names for scored
+    rows. A queue withdrawal is deliberately not consulted: a scored row is not
+    in a queue, and the listing reports withdrawals as a separate field.
+
+    The status test comes first, then the two score probes, so the admission
+    subqueries run only for rows that can match.
+    """
+
+    if rollout.from_version >= bench_version:
+        return false()
+    previous_score = (
+        select(Score.agent_id)
+        .where(
+            Score.agent_id == agent.agent_id,
+            Score.bench_version == rollout.from_version,
+        )
+        .correlate(agent)
+        .exists()
+    )
+    active_score = (
+        select(Score.agent_id)
+        .where(
+            Score.agent_id == agent.agent_id,
+            Score.bench_version == bench_version,
+        )
+        .correlate(agent)
+        .exists()
+    )
+    # Cheapest refusal first. Most finalized history is older than the
+    # previous era, so the one previous-version probe ends it.
+    return (
+        agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE))
+        & previous_score
+        & ~active_score
+        & ~benchmark_admission_predicate(
+            rollout=rollout, bench_version=bench_version, agent=agent
+        )
+    )
+
+
+async def previous_era_scored_agent_ids(
+    session: AsyncSession,
+    *,
+    agent_ids: Sequence[UUID],
+    bench_version: int,
+    rollout: BenchmarkRollout | None,
+) -> set[UUID]:
+    """Which of these agents :func:`previous_era_scored_predicate` names."""
+
+    requested = list(agent_ids)
+    if not requested or rollout is None or rollout.from_version >= bench_version:
+        return set()
+    return set(
+        await session.scalars(
+            select(Agent.agent_id).where(
+                Agent.agent_id.in_(requested),
+                previous_era_scored_predicate(
+                    rollout=rollout, bench_version=bench_version
+                ),
+            )
+        )
+    )
+
+
 async def admitted_agent_ids(
     session: AsyncSession,
     *,
@@ -336,3 +416,27 @@ async def agent_is_admitted(
     return agent_id in await admitted_agent_ids(
         session, bench_version=bench_version, agent_ids=[agent_id]
     )
+
+
+async def agent_is_era_admitted(
+    session: AsyncSession, *, bench_version: int, agent_id: UUID
+) -> bool:
+    """Whether one exact agent clears the era boundary, ignoring queue removals.
+
+    :func:`agent_is_admitted` is this AND no in-force queue removal. A reader
+    that names *which* gate refused a submission needs this half on its own: an
+    operator's removal of a current-era arrival does not make it historical.
+    """
+
+    rollout = await admission_rollout_for_active_version(
+        session, bench_version=bench_version
+    )
+    if rollout is None:
+        return True
+    admitted = await session.scalar(
+        select(Agent.agent_id).where(
+            Agent.agent_id == agent_id,
+            benchmark_admission_predicate(rollout=rollout, bench_version=bench_version),
+        )
+    )
+    return admitted is not None

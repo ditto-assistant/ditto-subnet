@@ -13,11 +13,12 @@ import (
 
 func u64(v uint64) *uint64 { return &v }
 
-// TestResourceFailureRules pins the published OOM rule: the miner is charged
-// only on an OOM kill at its own cap while the host had headroom; every gap in
-// that evidence is the validator's.
+// TestResourceFailureRules pins the published OOM rule (SN-488): an OOM kill
+// proven at the harness's own cgroup cap is a failed agent run whatever the
+// host had left; a peak at the cap counts only when the host had headroom;
+// every other kill is genuine validator infrastructure and is retried.
 func TestResourceFailureRules(t *testing.T) {
-	limit := uint64(8 << 30)
+	limit := uint64(2048 << 20)
 	floor := uint64(PublishedEnvelope.OOM.HostAvailableFloorMiB) * mib
 	tolerance := uint64(PublishedEnvelope.OOM.PeakToleranceMiB) * mib
 	cases := []struct {
@@ -41,6 +42,26 @@ func TestResourceFailureRules(t *testing.T) {
 		{"no host evidence never charges the miner", RuntimeDiagnostics{
 			OOMKilled: true, MemoryLimitBytes: u64(limit), MemoryPeakBytes: u64(limit),
 		}, CodeHostMemoryPressure, false},
+		// SN-488: a tightly packed host sits near the floor, so the proven
+		// form must not depend on it.
+		{"own cgroup oom on a short host is still the agent's", RuntimeDiagnostics{
+			OOMKilled: true, MemoryEvents: map[string]uint64{"oom": 2, "oom_kill": 1},
+			MemoryLimitBytes: u64(limit), MemoryPeakBytes: u64(limit), HostMemAvailableMinBytes: u64(floor / 4),
+		}, CodeHarnessOOM, true},
+		{"own cgroup oom needs no host evidence", RuntimeDiagnostics{
+			MemoryEvents: map[string]uint64{"oom": 1, "oom_kill": 1},
+		}, CodeHarnessOOM, true},
+		{"host-wide kill near the cap stays infrastructure", RuntimeDiagnostics{
+			MemoryEvents:     map[string]uint64{"oom": 0, "oom_kill": 1},
+			MemoryLimitBytes: u64(limit), MemoryPeakBytes: u64(limit - tolerance), HostMemAvailableMinBytes: u64(floor / 4),
+		}, CodeHostMemoryPressure, false},
+		{"host-wide kill below the cap stays infrastructure", RuntimeDiagnostics{
+			MemoryEvents:     map[string]uint64{"oom_kill": 1},
+			MemoryLimitBytes: u64(limit), MemoryPeakBytes: u64(limit / 2), HostMemAvailableMinBytes: u64(16 << 30),
+		}, CodeHostMemoryPressure, false},
+		{"full tmpfs is infrastructure", RuntimeDiagnostics{
+			TmpfsUsedBytes: u64(512 << 20), TmpfsCapacityBytes: u64(512 << 20),
+		}, CodeTmpfsExhausted, false},
 		{"bare 137 is infrastructure", RuntimeDiagnostics{
 			StateKnown: true, ExitCode: 137,
 		}, CodeHarnessKilled137, false},

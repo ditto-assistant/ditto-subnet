@@ -72,7 +72,7 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 	if ip.TimeoutSeconds != 90 || ip.MaxOutputTokens != 32768 {
 		t.Errorf("timeout/max tokens wrong: %d/%d", ip.TimeoutSeconds, ip.MaxOutputTokens)
 	}
-	if len(ip.AllowedModels) != 2 || ip.AllowedModels[0] != "qwen/qwen3-32b" || ip.AllowedModels[1] != "openai/gpt-oss-20b" {
+	if len(ip.AllowedModels) != 3 || ip.AllowedModels[0] != "qwen/qwen3-32b" || ip.AllowedModels[1] != "openai/gpt-oss-20b" || ip.AllowedModels[2] != "z-ai/glm-5.3-flash" {
 		t.Errorf("allowed models default wrong: %v", ip.AllowedModels)
 	}
 	if ip.EmbeddingModel != PinnedEmbeddingModel || ip.EmbeddingDimensions != 768 {
@@ -574,5 +574,19 @@ func TestOpenRouterSessionAffinityRequiresExplicitOptIn(t *testing.T) {
 	cfg, err = Load(MapLookup(env))
 	if err != nil || cfg.Inference.OpenRouterSessionAffinity {
 		t.Fatal("unrecognized boolean must not enable affinity")
+	}
+}
+
+func TestInferenceTimeoutStaysInsideTheBrokerClientTimeout(t *testing.T) {
+	for value, ok := range map[string]bool{"1": true, "90": true, "95": true, "96": false, "120": false, "0": false} {
+		env := minimalEnv()
+		env["DITTO_INFERENCE_TIMEOUT_SECONDS"] = value
+		_, err := Load(MapLookup(env))
+		if ok && err != nil {
+			t.Fatalf("timeout %s must boot: %v", value, err)
+		}
+		if !ok && (err == nil || !strings.Contains(err.Error(), "DITTO_INFERENCE_TIMEOUT_SECONDS")) {
+			t.Fatalf("timeout %s must fail boot naming the variable, got %v", value, err)
+		}
 	}
 }

@@ -27,6 +27,12 @@ from ditto.api_server.endpoints.validator import _KothLaneSnapshot
 from ditto.api_server.koth import KothEntry, continual_composite
 from ditto.chain import ChainClient
 from ditto.db.queries.confirmation_score_voids import VoidRerunDebt
+from ditto.db.queries.dueling_season_expiry import (
+    SeasonCoverage,
+    SeasonRetestState,
+    SeasonScore,
+)
+from ditto.db.queries.dueling_season_window import DuelingSeasonWindow
 from ditto.db.queries.retest_sample_inference import RetestSampleInference
 
 pytestmark = pytest.mark.asyncio
@@ -261,6 +267,13 @@ def _install(
     monkeypatch.setattr(
         admin_leaderboard, "read_provider_circuit", AsyncMock(return_value=circuit)
     )
+    # Bench v13 sits below the dueling floor: no season coverage, no pin read.
+    monkeypatch.setattr(
+        admin_leaderboard, "season_coverage", AsyncMock(return_value={})
+    )
+    monkeypatch.setattr(
+        admin_leaderboard, "_in_current_pin", AsyncMock(return_value=None)
+    )
 
 
 def _chain(block: int = 1_000) -> object:
@@ -347,6 +360,11 @@ async def test_exact_agent_diagnostic_preserves_seeds_and_owner_reason(
     assert claim.claimable_seed_available
     assert claim.live_lease_count == 0
     assert claim.decision == "claimable"
+    # Season duels are off by default and say so rather than guessing.
+    assert claim.retest_mode == "continual"
+    assert claim.season_duel_seed_count is None
+    assert claim.season_duel_anchor_champion_id is None
+    assert claim.season_duel_held_seed_count is None
     # Outstanding work is a count. No seed value reaches the claim projection.
     assert all(
         str(seed) not in claim.model_dump_json() for seed in (_SEEDS[0], _SEEDS[1])
@@ -413,6 +431,11 @@ async def test_stronger_successor_is_outside_the_cohort_it_outscores(
     assert incumbent_result.official_sample_count == 18
     assert incumbent_result.representative_selection == "self"
     assert incumbent_result.representative_margin == 0
+    # The lane's seed budget is visible: floor 8, work cap 10, and the live
+    # variance target (no recorded wave variance here, so the floor).
+    assert incumbent_result.confirmation_seed_floor == 8
+    assert incumbent_result.confirmation_seed_cap == 10
+    assert incumbent_result.confirmation_seed_target == 8
 
 
 def _decide(
@@ -627,3 +650,99 @@ async def test_closed_provider_gate_blocks_every_route_in_the_projection(
     assert claim.decision == "provider_outage"
     assert _decide(provider_gate_closed=True) == "provider_outage"
     assert _decide(lane_enabled=False, provider_gate_closed=True) == "lane_disabled"
+
+
+_EXPIRED = UUID("04956b03-dd1d-418d-acab-39abf30628af")
+_SEASON_EXPIRED = UUID("87a46084-1664-4dbe-bc56-6fb8d3f57200")
+_SEASON_PREVIOUS = UUID("5b1c5a3e-0d0e-4a52-9a0c-3d1b8f0c2a10")
+_SEASON_CURRENT = UUID("428a8bc5-b002-4af4-91e4-964cb83128f4")
+
+
+def _expired_coverage() -> SeasonCoverage:
+    """logan v15 at 10:47 ET: a 3/3 quorum, all of it from season 26101."""
+    return SeasonCoverage(
+        agent_id=_EXPIRED,
+        bench_version=17,
+        window=DuelingSeasonWindow(
+            bench_version=17, current=_SEASON_CURRENT, previous=_SEASON_PREVIOUS
+        ),
+        scores=tuple(
+            SeasonScore(
+                validator_hotkey=f"5Val{index}",
+                dueling_season_id=_SEASON_EXPIRED,
+                composite=composite,
+                n=350,
+            )
+            for index, composite in enumerate((0.95, 0.960714, 0.97), start=1)
+        ),
+        opened_seasons=(_SEASON_CURRENT, _SEASON_PREVIOUS, _SEASON_EXPIRED),
+    )
+
+
+@pytest.mark.parametrize(
+    ("coverage", "in_pin", "reason"),
+    [
+        (_expired_coverage(), True, "expired_dueling_season"),
+        (None, None, "not_current_finalized_ledger"),
+    ],
+)
+async def test_an_expired_season_quorum_is_named_not_reported_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    coverage: SeasonCoverage | None,
+    in_pin: bool | None,
+    reason: str,
+) -> None:
+    """SN-466: an agent absent from the ledger because its quorum aged out of
+    the two-season window says so, with the seasons on both sides."""
+    _install(monkeypatch, snapshot=_snapshot(challenger=False), catchup=frozenset())
+    monkeypatch.setattr(
+        admin_leaderboard,
+        "season_coverage",
+        AsyncMock(return_value={} if coverage is None else {_EXPIRED: coverage}),
+    )
+    monkeypatch.setattr(
+        admin_leaderboard, "_in_current_pin", AsyncMock(return_value=in_pin)
+    )
+    monkeypatch.setattr(
+        admin_leaderboard,
+        "season_retest_states",
+        AsyncMock(
+            return_value={
+                _EXPIRED: SeasonRetestState(
+                    state="not_queued",
+                    reason="over_budget",
+                    dueling_season_id=_SEASON_CURRENT,
+                )
+            }
+        ),
+    )
+    result = await admin_leaderboard.continual_retest_diagnostic(
+        _request(),
+        Response(),
+        _session(ticket_rows=[]),
+        cast(ChainClient, _chain()),
+        None,
+        _EXPIRED,
+    )
+
+    assert result.admission_reason == reason
+    assert not result.ledger_eligible
+    assert result.official_composite is None
+    assert result.in_current_pin is in_pin
+    if coverage is None:
+        assert result.score_dueling_season_ids == []
+        assert result.window_dueling_season_ids == []
+        assert result.in_window_score_count is None
+        assert result.last_valid_composite is None
+        assert result.season_retest is None
+        return
+    assert result.score_dueling_season_ids == [_SEASON_EXPIRED]
+    assert result.window_dueling_season_ids == [_SEASON_CURRENT, _SEASON_PREVIOUS]
+    assert result.in_window_score_count == 0
+    assert result.last_valid_composite == pytest.approx(0.960714)
+    # SN-486: the diagnostic names why it is not being re-scored.
+    assert result.season_retest is not None
+    assert result.season_retest.state == "not_queued"
+    assert result.season_retest.reason == "over_budget"
+    assert result.season_retest.dueling_season_id == _SEASON_CURRENT
+    assert "budget" in result.season_retest.note

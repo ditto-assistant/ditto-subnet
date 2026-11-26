@@ -45,7 +45,7 @@ function BenchmarkRolloutPending() {
   )
 }
 
-function BenchmarkRolloutError({ error }: { error: Error }) {
+function BenchmarkRolloutError({ error }: { error: unknown }) {
   const router = useRouter()
   return (
     <div className="mx-auto mt-6 max-w-2xl rounded-xl border border-[var(--red)]/25 bg-[var(--red-dim)] p-6">
@@ -57,7 +57,7 @@ function BenchmarkRolloutError({ error }: { error: Error }) {
         footer guessing at the cause used to contradict it, and cost an
         operator an hour chasing an endpoint and a token that were both fine.
       */}
-      <p className="mt-2 text-sm leading-6 text-[var(--muted-strong)]">{error.message}</p>
+      <p className="mt-2 text-sm leading-6 text-[var(--muted-strong)]">{error instanceof Error ? error.message : 'An unexpected error occurred'}</p>
       <button
         type="button"
         onClick={() => void router.invalidate()}

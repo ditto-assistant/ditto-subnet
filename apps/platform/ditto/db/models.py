@@ -27,6 +27,7 @@ from sqlalchemy import (
     MetaData,
     Numeric,
     PrimaryKeyConstraint,
+    SmallInteger,
     Text,
     UniqueConstraint,
     false,
@@ -1999,6 +2000,14 @@ class EvaluationPayment(Base):
     )
     """Earlier same-owner agent whose identical artifact created this credit."""
 
+    credit_origin: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Why this proof became a credit. ``None``: a byte-identical upload (and
+    every row before SN-485). ``readmission``: a paid readmission of
+    ``credit_for_agent_id`` was refused after payment; such a credit stays
+    spendable for 30 days. Kept after an upload spends the credit; a
+    readmission that spends it moves the proof to ``readmission_payments``,
+    whose ``credit_audit`` keeps this origin."""
+
     miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
     """Signer hotkey on the payment extrinsic. FK-bound to ``agents.miner_hotkey``."""
 
@@ -2051,6 +2060,10 @@ class EvaluationPayment(Base):
         CheckConstraint(
             "(agent_id IS NOT NULL) <> (credit_for_agent_id IS NOT NULL)",
             name="evaluation_payments_assignment_xor_credit",
+        ),
+        CheckConstraint(
+            "credit_origin IS NULL OR credit_origin = 'readmission'",
+            name="evaluation_payments_credit_origin_check",
         ),
         CheckConstraint("amount_rao > 0", name="evaluation_payments_amount_rao_check"),
         CheckConstraint(
@@ -5309,8 +5322,9 @@ class ConfirmationSeedAnchor(Base):
     CRN seeds (:mod:`ditto.api_server.crn`) hash one input a miner cannot know
     when they submit: the hash of ``anchor_block = ready_block + Δ``, read only
     once that height is **finalized**. One row per ``(champion, bench_version)``
-    reign, created at the first continual-retest claim of the reign with the
-    hash still null (the finality wait), then pinned exactly once. The row is
+    reign (``(champion, bench_version, season)`` from the dueling floor),
+    created at the first continual-retest claim of the reign with the hash
+    still null (the finality wait), then pinned exactly once. The row is
     append-only after the pin: the family it names is what validators already
     scored, so a re-pin would tear every recorded wave.
 
@@ -5326,6 +5340,16 @@ class ConfirmationSeedAnchor(Base):
 
     bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
     """Major benchmark version the family is scoped to."""
+
+    season_key: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True),
+        nullable=False,
+        server_default=text("'00000000-0000-0000-0000-000000000000'::uuid"),
+    )
+    """Bench v16+: the dueling season this reign anchor belongs to, so every
+    season rotation starts a fresh confirmation family per ``(champion,
+    bench_version, season)``. The nil UUID below the dueling floor (one anchor
+    per reign) and at v16+ while no season has opened."""
 
     ready_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
     """``B_ready``: the latest block when the reign first asked for a seed."""
@@ -5350,7 +5374,13 @@ class ConfirmationSeedAnchor(Base):
         PrimaryKeyConstraint(
             "champion_agent_id",
             "bench_version",
+            "season_key",
             name="confirmation_seed_anchors_pkey",
+        ),
+        CheckConstraint(
+            "season_key = '00000000-0000-0000-0000-000000000000'::uuid "
+            "OR bench_version >= 16",
+            name="confirmation_seed_anchors_season_floor",
         ),
         ForeignKeyConstraint(
             ["champion_agent_id"],
@@ -6111,7 +6141,7 @@ class ScreenerNodeBootstrapGrant(Base):
             name="screener_node_bootstrap_grants_node_id_length_check",
         ),
         CheckConstraint(
-            "provider IN ('gcp', 'targon', 'hetzner', 'home', 'test')",
+            "provider IN ('gcp', 'targon', 'hetzner', 'aws', 'home', 'test')",
             name="screener_node_bootstrap_grants_provider_check",
         ),
         CheckConstraint(
@@ -6173,7 +6203,7 @@ class ScreenerNode(Base):
             name="screener_nodes_node_id_length_check",
         ),
         CheckConstraint(
-            "provider IN ('gcp', 'targon', 'hetzner', 'home', 'test')",
+            "provider IN ('gcp', 'targon', 'hetzner', 'aws', 'home', 'test')",
             name="screener_nodes_provider_check",
         ),
         CheckConstraint(
@@ -6357,7 +6387,7 @@ class ScreenerCapacityEvent(Base):
     __table_args__ = (
         CheckConstraint(
             "provider IS NULL OR "
-            "provider IN ('gcp', 'targon', 'hetzner', 'home', 'test')",
+            "provider IN ('gcp', 'targon', 'hetzner', 'aws', 'home', 'test')",
             name="screener_capacity_events_provider_check",
         ),
         Index(
@@ -6520,7 +6550,7 @@ class TrustedImageBuild(Base):
             name="trusted_image_builds_status_check",
         ),
         CheckConstraint(
-            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner')",
+            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner', 'aws')",
             name="trusted_image_builds_provider_check",
         ),
         CheckConstraint(
@@ -6640,7 +6670,7 @@ class SubmissionImageBuild(Base):
             name="submission_image_builds_status_check",
         ),
         CheckConstraint(
-            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner')",
+            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner', 'aws')",
             name="submission_image_builds_provider_check",
         ),
         CheckConstraint(
@@ -6765,7 +6795,7 @@ class SubmissionSourceReview(Base):
             name="submission_source_reviews_status_check",
         ),
         CheckConstraint(
-            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner')",
+            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner', 'aws')",
             name="submission_source_reviews_provider_check",
         ),
         CheckConstraint(
@@ -6947,6 +6977,12 @@ class SubmissionSettingsRevision(Base):
     """Per-competition overrides, ``{competition: {"fee_amount_rao": int |
     null, "fee_required": bool | null}}``; ``null`` (or a missing entry)
     inherits. See :mod:`ditto.db.queries.submission_settings`."""
+    readmission_announced_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    """When the readmission fee was announced (SN-485); null until an operator
+    writes it, which keeps readmission inactive. See
+    :mod:`ditto.db.queries.readmission_gate`."""
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -7130,6 +7166,218 @@ class UploadAdmissionReservation(Base):
             name="upload_admission_sha256_length_check",
         ),
         Index("upload_admission_expires_at_idx", "expires_at"),
+    )
+
+
+class ReadmissionPayment(Base):
+    """The finalized TAO transfer that paid one readmission (SN-485).
+
+    A readmission re-enters an existing agent into one benchmark era, so the
+    row binds a proof to ``(agent_id, bench_version)`` rather than to a new
+    upload. The primary key ``(block_hash, extrinsic_index)`` stops a replay
+    within the lane; :func:`ditto.db.queries.readmission_payments.\
+insert_readmission_payment` refuses a proof already recorded by the agent or
+    generator upload lane under the shared per-proof advisory lock, and both of
+    those lanes refuse a proof recorded here, so one transfer funds exactly one
+    thing across all three lanes.
+
+    ``outcome`` is ``admitted`` (the readmission was written) or ``credited``
+    (it was refused after payment: the proof is also banked as an
+    :class:`EvaluationPayment` credit with ``credit_origin = 'readmission'``,
+    which is the only case one proof appears in two tables). At most one
+    admitted readmission exists per agent and era. ``funding`` is ``fresh`` for
+    a new transfer and ``credit`` when an earlier credit paid for it.
+    """
+
+    __tablename__ = "readmission_payments"
+
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    rollout_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    miner_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    """Coldkey that owned the hotkey and signed the transfer at payment time."""
+    amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    tao_usd_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    dest_address: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    """On-chain block timestamp."""
+    funding: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    refusal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Why a credited readmission was refused after payment."""
+    credit_audit: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Set exactly when ``funding = 'credit'``: the history of the credit that
+    paid, kept because spending it removes the ``evaluation_payments`` credit
+    row (``credit_origin``, ``credit_for_agent_id``, ``credit_recorded_at``,
+    and for a readmission-origin credit the earlier ``refusal_reason`` and
+    ``credited_agent_id``/``credited_bench_version``)."""
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "block_hash", "extrinsic_index", name="readmission_payments_pkey"
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="readmission_payments_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["rollout_id"],
+            ["benchmark_rollouts.rollout_id"],
+            ondelete="RESTRICT",
+            name="readmission_payments_rollout_id_fkey",
+        ),
+        CheckConstraint("amount_rao > 0", name="readmission_payments_amount_rao_check"),
+        CheckConstraint(
+            "tao_usd_rate IS NULL OR tao_usd_rate > 0",
+            name="readmission_payments_tao_usd_rate_positive",
+        ),
+        CheckConstraint(
+            "extrinsic_index >= 0",
+            name="readmission_payments_extrinsic_index_check",
+        ),
+        CheckConstraint(
+            "bench_version >= 1", name="readmission_payments_bench_version_check"
+        ),
+        CheckConstraint(
+            "funding IN ('fresh', 'credit')",
+            name="readmission_payments_funding_check",
+        ),
+        CheckConstraint(
+            "(funding = 'credit') = (credit_audit IS NOT NULL)",
+            name="readmission_payments_credit_audit_check",
+        ),
+        CheckConstraint(
+            "(outcome = 'admitted' AND refusal_reason IS NULL) OR "
+            "(outcome = 'credited' AND funding = 'fresh' "
+            "AND length(trim(refusal_reason)) > 0)",
+            name="readmission_payments_outcome_check",
+        ),
+        Index(
+            "readmission_payments_admitted_once",
+            "agent_id",
+            "bench_version",
+            unique=True,
+            postgresql_where=text("outcome = 'admitted'"),
+        ),
+        Index("readmission_payments_miner_coldkey_idx", "miner_coldkey", "created_at"),
+        Index("readmission_payments_bench_version_idx", "bench_version", "created_at"),
+    )
+
+
+class UploadReadmission(Base):
+    """An accepted upload classified as a readmission of the owner's lineage.
+
+    Written in the upload transaction, only while the SN-485 readmission fee
+    is active, so nothing uploaded before activation is ever relabelled. The
+    upload still pays through ``evaluation_payments`` at the upload fee; this
+    row only labels it for accounting and the readmission rules. ``kind`` is
+    ``identical_rescore`` (byte-identical, ``allow_identical_rescore``) or
+    ``near_duplicate`` (the same ``normalized_source_hash`` under new bytes),
+    and ``lineage_agent_id`` the owner's earliest such agent.
+    """
+
+    __tablename__ = "upload_readmissions"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    lineage_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    """The active benchmark era when the upload was accepted."""
+    miner_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    lineage_evaluation_completed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    """Whether the lineage agent had finished a scoring quorum in some era."""
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="upload_readmissions_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["lineage_agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="upload_readmissions_lineage_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "kind IN ('identical_rescore', 'near_duplicate')",
+            name="upload_readmissions_kind_check",
+        ),
+        CheckConstraint(
+            "agent_id <> lineage_agent_id", name="upload_readmissions_lineage_check"
+        ),
+        Index("upload_readmissions_coldkey_idx", "miner_coldkey", "created_at"),
+        Index("upload_readmissions_bench_version_idx", "bench_version", "created_at"),
+    )
+
+
+class ReadmissionReservation(Base):
+    """Pre-payment fee and address snapshot for one readmission (SN-485).
+
+    Keyed by ``(agent_id, bench_version)``, not by coldkey, so reserving a
+    readmission never takes the coldkey's upload slot. The reservation and the
+    upload slot still serialize on the same per-coldkey advisory lock.
+    """
+
+    __tablename__ = "readmission_reservations"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    token: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    rollout_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    miner_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    fee_amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    payment_send_address: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "agent_id", "bench_version", name="readmission_reservations_pkey"
+        ),
+        UniqueConstraint("token", name="readmission_reservations_token_key"),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="readmission_reservations_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "cooldown_seconds BETWEEN 60 AND 86400",
+            name="readmission_reservations_cooldown_seconds_check",
+        ),
+        CheckConstraint(
+            "fee_amount_rao BETWEEN 1 AND 1000000000000",
+            name="readmission_reservations_fee_amount_rao_check",
+        ),
+        Index("readmission_reservations_expires_at_idx", "expires_at"),
+        Index("readmission_reservations_miner_coldkey_idx", "miner_coldkey"),
     )
 
 
@@ -8286,6 +8534,16 @@ class InferenceGrant(Base):
     decision_active_requests: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    inference_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, default="chat", server_default=text("'chat'")
+    )
+    """Which hosted lanes the grant may use: ``chat`` or ``no_chat``.
+
+    ``chat`` is every grant minted before the no-inference mode existed.
+    ``no_chat`` (docs/no-inference-mode.md) refuses every chat call as
+    ``model_not_permitted`` while embeddings and the decision lane stay open,
+    so it requires a decision pin. Stamped at mint, immutable for the lease.
+    """
     request_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
@@ -8384,6 +8642,11 @@ class InferenceGrant(Base):
             "AND (decision_model IS NULL OR "
             "(decision_request_budget > 0 AND decision_token_budget > 0))",
             name="inference_grants_decision_accounting",
+        ),
+        CheckConstraint(
+            "inference_mode IN ('chat', 'no_chat') "
+            "AND (inference_mode = 'chat' OR decision_model IS NOT NULL)",
+            name="inference_grants_inference_mode",
         ),
         Index("inference_grants_expiry_idx", "expires_at"),
     )
@@ -8947,6 +9210,17 @@ class ValidatorQueueWithdrawal(Base):
     table. The reinstatement's own actor, reason, and evidence live in
     :class:`ValidatorQueueReinstatement`; this column carries only the fact.
     """
+    terminal_failure_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The agent-attributable code that made quorum unreachable, or ``NULL``.
+
+    Set only when every remaining quorum slot died on the same named
+    agent-attributable failure (see
+    :data:`ditto.db.queries.retry_state.AGENT_ATTRIBUTABLE_FAILURE_DETAILS`).
+    An in-force row with a code is what public surfaces report as
+    ``scoring_failed``: the artifact cannot finish scoring on this benchmark
+    version and the miner has to ship a new one. A withdrawal without a code
+    stays a neutral ``not_queued``.
+    """
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -8957,6 +9231,11 @@ class ValidatorQueueWithdrawal(Base):
             ["agents.agent_id"],
             ondelete="RESTRICT",
             name="validator_queue_withdrawals_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "terminal_failure_code IS NULL "
+            "OR length(trim(terminal_failure_code)) BETWEEN 1 AND 120",
+            name="validator_queue_withdrawals_terminal_failure_code_length",
         ),
         CheckConstraint(
             "bench_version > 0",
@@ -12253,6 +12532,10 @@ class ConversationAssessment(Base):
     report: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
     worker_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_of: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    repeat_index: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="0", default=0
+    )
+    """0 is the canonical assessment; 1..N are fresh-seed shadow repeats."""
     retry_authorization: Mapped[dict | None] = mapped_column(
         _NULLABLE_JSON_VARIANT, nullable=True
     )
@@ -12266,12 +12549,17 @@ class ConversationAssessment(Base):
         ),
         UniqueConstraint("retry_of", name="conversation_one_manual_retry"),
         Index("conversation_created_at", "created_at"),
+        CheckConstraint(
+            "repeat_index >= 0 AND repeat_index <= 8",
+            name="conversation_repeat_index_range",
+        ),
         Index(
             "conversation_assessment_identity",
             "agent_id",
             "artifact_sha256",
             "bench_version",
             "instrument",
+            "repeat_index",
             unique=True,
             postgresql_where=text("retry_of IS NULL"),
             sqlite_where=text("retry_of IS NULL"),
@@ -12286,7 +12574,9 @@ class ConversationAssessment(Base):
             name="conversation_base_quality",
         ),
         CheckConstraint(
-            "reserved_microusd = 30000000", name="conversation_reserved_cost"
+            # Legacy $30 v1 hold, or the $1 hold from 2026-11-08.
+            "reserved_microusd IN (30000000, 1000000)",
+            name="conversation_reserved_cost",
         ),
         CheckConstraint("bench_version >= 9", name="conversation_bench_version"),
     )
@@ -13959,6 +14249,11 @@ class GeneratorSubmission(Base):
     round_scored_index: Mapped[int | None] = mapped_column(BigInteger)
     """The latest scored round this generator had a column in, and its column
     score there; columns are filled best-first from these."""
+    prescreen_score: Mapped[float | None] = mapped_column(Float)
+    prescreen_index: Mapped[int | None] = mapped_column(BigInteger)
+    """The latest pre-screen (:class:`GeneratorPrescreen`) this generator had
+    a column in, and its column score there when that pre-screen scored. A
+    pre-screen score only orders the challenger queue; it is never paid."""
     name: Mapped[str | None] = mapped_column(Text)
     """Optional miner-chosen display name (1-64 characters), shown with the
     miner's profile on the public generator pages. ``None`` renders a short
@@ -14348,8 +14643,11 @@ class GeneratorRound(Base):
     and panel frozen, ``seed`` derived from the secret and the open block),
     then ``running`` once the scorer posts the round dataset, ``scoring``
     when the round closes, and ``scored``. A round that cannot finish is
-    ``void`` with a reason. ``secret`` and the dataset are private until
-    ``revealed_at`` (the privacy window).
+    ``void`` with a reason. A round that would only repeat the last scored
+    round is ``skipped`` when it opens (``generation.skipped_unchanged``
+    names the scored round it carries forward): no dataset, no panel runs.
+    ``secret`` and the dataset are private until ``revealed_at`` (the
+    privacy window).
     """
 
     __tablename__ = "generator_rounds"
@@ -14396,11 +14694,16 @@ class GeneratorRound(Base):
     scored_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     void_reason: Mapped[str | None] = mapped_column(Text)
     revealed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # The frontier lifecycle of a scored round (generator_frontier): oracle
+    # results, attestations, sampled audits, and the pre-frontier column
+    # scores. Null when the round had no frontier candidates or frontier
+    # scoring was off when it scored.
+    frontier: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
 
     __table_args__ = (
         CheckConstraint(
             "status IN ('committed', 'generating', 'running', 'scoring', "
-            "'scored', 'void')",
+            "'scored', 'skipped', 'void')",
             name="generator_rounds_status_check",
         ),
         CheckConstraint(
@@ -14497,10 +14800,17 @@ class GeneratorRoundAttempt(Base):
         TIMESTAMP(timezone=True), nullable=False
     )
     finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # ``panel`` for a panel agent's run, ``oracle`` for the frontier oracle's
+    # run on a scored round's unsolved cases.
+    kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="panel")
 
     __table_args__ = (
         ForeignKeyConstraint(
             ["round_index"], ["generator_rounds.round_index"], ondelete="CASCADE"
+        ),
+        CheckConstraint(
+            "kind IN ('panel', 'oracle')",
+            name="generator_round_attempts_kind_check",
         ),
         CheckConstraint(
             "status IN ('leased', 'completed', 'failed')",
@@ -14583,7 +14893,7 @@ class GeneratorRoundCaseVerdict(Base):
         ),
         CheckConstraint(
             "status IN ('discriminating', 'trivial', 'unsolved', 'duplicate', "
-            "'insufficient_panel')",
+            "'insufficient_panel', 'frontier')",
             name="generator_round_case_verdicts_status_check",
         ),
         Index("generator_round_case_verdicts_fingerprint_idx", "fingerprint"),
@@ -14591,6 +14901,133 @@ class GeneratorRoundCaseVerdict(Base):
             "generator_round_case_verdicts_submission_idx",
             "submission_id",
             "round_index",
+        ),
+    )
+
+
+class GeneratorPrescreen(Base):
+    """One pre-screen batch (:mod:`ditto.api_server.generator_prescreens`).
+
+    Never-scored generators' packs on a fresh secret seed,
+    ``cases_per_column`` cases each, run by a small panel while no round needs
+    it. Indexes start at ``PRESCREEN_INDEX_BASE`` (2**40), far above any
+    chain-epoch round index, so the scorer and validator wire protocols, which
+    carry a round index, route a pre-screen apart from a round. A pre-screen
+    is never paid and never on the ledger. Lifecycle: ``generating`` ->
+    ``running`` -> ``scoring`` -> ``scored``, or ``void`` with a reason; a
+    batch not scored by ``expires_at`` is void.
+    """
+
+    __tablename__ = "generator_prescreens"
+
+    prescreen_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    seed: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    cases_per_column: Mapped[int] = mapped_column(Integer, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    columns: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    panel: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    lease_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    generation: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    dataset_sha256: Mapped[str | None] = mapped_column(Text)
+    dataset_bytes: Mapped[bytes | None] = mapped_column(LargeBinary)
+    column_cases: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    score: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    scorer_version: Mapped[str | None] = mapped_column(Text)
+    closed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    void_reason: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "prescreen_index >= 1099511627776",
+            name="generator_prescreens_index_check",
+        ),
+        CheckConstraint(
+            "status IN ('generating', 'running', 'scoring', 'scored', 'void')",
+            name="generator_prescreens_status_check",
+        ),
+        CheckConstraint(
+            "cases_per_column BETWEEN 8 AND 80",
+            name="generator_prescreens_cases_check",
+        ),
+        CheckConstraint(
+            "(status = 'void') = (void_reason IS NOT NULL)",
+            name="generator_prescreens_void_reason_check",
+        ),
+        Index("generator_prescreens_status_idx", "status"),
+    )
+
+
+class GeneratorPrescreenAttempt(Base):
+    """One validator lease of a pre-screen panel run, kept for diagnosis
+    (the pre-screen twin of :class:`GeneratorRoundAttempt`)."""
+
+    __tablename__ = "generator_prescreen_attempts"
+
+    prescreen_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    ticket_deadline: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), primary_key=True
+    )
+    slot_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["prescreen_index"],
+            ["generator_prescreens.prescreen_index"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "status IN ('leased', 'completed', 'failed')",
+            name="generator_prescreen_attempts_status_check",
+        ),
+    )
+
+
+class GeneratorPrescreenResult(Base):
+    """One panel agent's signed results on a pre-screen dataset (the
+    pre-screen twin of :class:`GeneratorRoundResult`)."""
+
+    __tablename__ = "generator_prescreen_results"
+
+    prescreen_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    ticket_deadline: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    results: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    answered: Mapped[int] = mapped_column(Integer, nullable=False)
+    faulted: Mapped[int] = mapped_column(Integer, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["prescreen_index"],
+            ["generator_prescreens.prescreen_index"],
+            ondelete="CASCADE",
         ),
     )
 
@@ -14643,6 +15080,21 @@ class DuelingSeason(Base):
     rotation_immediate: Mapped[bool | None] = mapped_column(Boolean)
     rotation_actor: Mapped[str | None] = mapped_column(Text)
     rotation_reason: Mapped[str | None] = mapped_column(Text)
+    # On-chain ``dds1:{season_index}:{commitment}`` publication by elected
+    # validators (``dueling_season_commitments``): ``pending`` while the season
+    # is committed and ``onchain_commitment`` is on, then ``published`` (at
+    # least one validator confirmed it), ``failed`` (none before the season
+    # left ``committed``) or ``disabled``. ``commitment_block`` and
+    # ``commitment_extrinsic_hash`` are the first confirmed publication's.
+    commitment_publication: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="disabled"
+    )
+    commitment_published_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    commitment_block: Mapped[int | None] = mapped_column(BigInteger)
+    commitment_extrinsic_hash: Mapped[str | None] = mapped_column(Text)
+    commitment_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -14650,6 +15102,10 @@ class DuelingSeason(Base):
     __table_args__ = (
         UniqueConstraint(
             "bench_version", "season_index", name="dueling_seasons_index_key"
+        ),
+        CheckConstraint(
+            "commitment_publication IN ('pending', 'published', 'failed', 'disabled')",
+            name="dueling_seasons_commitment_publication_check",
         ),
         # A floor, never an enumeration: every later bench version duels too.
         CheckConstraint("bench_version >= 16", name="dueling_seasons_bench_floor"),
@@ -14703,6 +15159,46 @@ class DuelingSeason(Base):
             postgresql_where=text("status = 'committed'"),
         ),
         Index("dueling_seasons_status_idx", "status", "season_index"),
+    )
+
+
+class DuelingSeasonCommitmentPublication(Base):
+    """One validator's publication of a committed dueling season's commitment.
+
+    The dueling twin of :class:`GeneratorRoundCommitmentPublication`: Platform
+    elects a few validators advertising ``season_commitments`` to publish
+    ``dds1:{season_index}:{commitment}`` with ``Commitments.set_commitment``.
+    A row is ``claimed`` when the job is handed out, then ``confirmed`` (read
+    back on chain at ``block_number``) or ``failed``.
+    """
+
+    __tablename__ = "dueling_season_commitment_publications"
+
+    season_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    commitment: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    claimed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    claim_expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    reported_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    block_number: Mapped[int | None] = mapped_column(BigInteger)
+    extrinsic_hash: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["season_id"], ["dueling_seasons.id"], ondelete="CASCADE"),
+        CheckConstraint(
+            "status IN ('claimed', 'confirmed', 'failed')",
+            name="season_publication_status_check",
+        ),
+        CheckConstraint(
+            "status <> 'confirmed' OR block_number IS NOT NULL",
+            name="season_publication_block_check",
+        ),
     )
 
 
@@ -14797,10 +15293,20 @@ class DuelingSlicePreparation(Base):
     ready_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     failed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     bytes_pruned_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    retries: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    """Operator re-queues of a failed preparation; each restarts the lease's
+    attempt cap while ``attempts`` keeps the whole history."""
+    last_retry_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    last_retry_actor: Mapped[str | None] = mapped_column(Text)
+    last_retry_reason: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         UniqueConstraint(
             "season_id", "run_seed", name="dueling_slice_preparations_seed_key"
+        ),
+        CheckConstraint(
+            "retries >= 0 AND (retries = 0) = (last_retry_at IS NULL)",
+            name="dueling_slice_preparations_retries_check",
         ),
         ForeignKeyConstraint(["season_id"], ["dueling_seasons.id"], ondelete="CASCADE"),
         CheckConstraint("run_seed >= 0", name="dueling_slice_preparations_seed_check"),
@@ -14832,6 +15338,74 @@ class DuelingSlicePreparation(Base):
             "attempts >= 0", name="dueling_slice_preparations_attempts_check"
         ),
         Index("dueling_slice_preparations_status_idx", "status", "created_at"),
+    )
+
+
+class GeneratorSourceRelease(Base):
+    """When one pinned generator's exact source becomes public (bench v16+).
+
+    Every generator that held a column in a dueling season must have its
+    pinned archive published, so anyone can reproduce a revealed slice
+    (``dueling-bench.md`` section 2, "Delayed reproducibility"). One row per
+    pinned submission, recomputed on every season tick:
+
+    ``release_at = max(revealed_at of the last season that pinned it,
+    closed_at of the first season that pinned it + embargo_hours)``
+
+    Null while either input is unknown (a pinning season still open or not
+    yet revealed). ``released_at`` is set once, the first tick at or after
+    ``release_at`` while the source release policy discloses; a released row
+    never un-releases. The public default generator is already public and
+    never gets a row.
+    """
+
+    __tablename__ = "generator_source_releases"
+
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_key: Mapped[str] = mapped_column(Text, nullable=False)
+    tree_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Bench version of the first season that pinned it."""
+    first_season_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    last_season_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    seasons: Mapped[int] = mapped_column(Integer, nullable=False)
+    """How many opened seasons pinned it."""
+    first_closed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    last_revealed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    embargo_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    disclosure: Mapped[str] = mapped_column(Text, nullable=False)
+    """The source release policy's disclosure when last computed."""
+    release_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    released_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    scorer_version: Mapped[str | None] = mapped_column(Text)
+    """The challenge-scorer revision that batteried (built) the pinned tree."""
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["submission_id"],
+            ["generator_submissions.submission_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "bench_version >= 16", name="generator_source_releases_bench_floor"
+        ),
+        CheckConstraint(
+            "seasons >= 1 AND embargo_hours >= 0",
+            name="generator_source_releases_counts_check",
+        ),
+        CheckConstraint(
+            "released_at IS NULL OR release_at IS NOT NULL",
+            name="generator_source_releases_released_check",
+        ),
+        Index("generator_source_releases_release_idx", "released_at", "release_at"),
     )
 
 
@@ -15053,4 +15627,867 @@ class UnreleasedCopySettingsRevision(Base):
             name="unreleased_copy_settings_actor_check",
         ),
         UniqueConstraint("parent_revision", name="unreleased_copy_settings_parent_key"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Ditto Edge shadow lane (SN-481). Opt-in Mac nodes hold public,
+# content-addressed objects that Platform assigns and challenges. Shadow only:
+# every ledger row is weight_eligible = false by constraint.
+# ---------------------------------------------------------------------------
+
+
+class EdgeLaneSettingsRevision(Base):
+    """Append-only operator policy for the Ditto Edge shadow lane."""
+
+    __tablename__ = "edge_lane_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="edge_lane_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="edge_lane_settings_checksum_check"
+        ),
+        CheckConstraint(
+            "parent_revision >= 0", name="edge_lane_settings_parent_revision_check"
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="edge_lane_settings_reason_check"
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="edge_lane_settings_actor_check",
+        ),
+        UniqueConstraint(
+            "scope", "parent_revision", name="edge_lane_settings_scope_parent_key"
+        ),
+    )
+
+
+class EdgeLaneState(Base):
+    """The lane's one row of secret state: the rendezvous placement salt.
+
+    The salt keeps nodes from grinding device keys to land on objects they
+    want. It is created once, never served, and changing it reshuffles every
+    placement.
+    """
+
+    __tablename__ = "edge_lane_state"
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    placement_salt: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("id = 1", name="edge_lane_state_singleton_check"),
+        CheckConstraint(
+            "length(placement_salt) = 32", name="edge_lane_state_salt_length_check"
+        ),
+    )
+
+
+class EdgeNode(Base):
+    """One enrolled device, identified by its Ed25519 device key."""
+
+    __tablename__ = "edge_nodes"
+
+    node_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    public_key_hex: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    operator: Mapped[str] = mapped_column(Text, nullable=False)
+    """The bound SN118 hotkey when its binding verified, else the node id."""
+    hotkey_ss58: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_name: Mapped[str] = mapped_column(Text, nullable=False)
+    client_version: Mapped[str] = mapped_column(Text, nullable=False)
+    platform: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    """Self-reported machine labels. Shown to operators, never scored."""
+    quota_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    strikes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    enrolled_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_poll_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint("node_id ~ '^edn_[0-9a-f]{32}$'", name="edge_nodes_id_check"),
+        CheckConstraint(
+            "public_key_hex ~ '^[0-9a-f]{64}$'", name="edge_nodes_public_key_check"
+        ),
+        CheckConstraint(
+            "status IN ('active', 'suspended', 'retired')",
+            name="edge_nodes_status_check",
+        ),
+        CheckConstraint("quota_bytes >= 0", name="edge_nodes_quota_check"),
+        Index("edge_nodes_last_poll_idx", "last_poll_at"),
+    )
+
+
+class EdgeRequestNonce(Base):
+    """Single-use request nonces, consumed by an atomic insert."""
+
+    __tablename__ = "edge_request_nonces"
+
+    node_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    nonce: Mapped[str] = mapped_column(Text, primary_key=True)
+    seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (Index("edge_request_nonces_seen_idx", "seen_at"),)
+
+
+class EdgeObject(Base):
+    """A public, content-addressed object an operator ingested for the lane."""
+
+    __tablename__ = "edge_objects"
+
+    digest: Mapped[str] = mapped_column(Text, primary_key=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    media_type: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    """Operator-side provenance (a share id, ``synthetic:N``). Never sent to nodes."""
+    storage_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    revoke_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("digest ~ '^[0-9a-f]{64}$'", name="edge_objects_digest_check"),
+        CheckConstraint("size_bytes > 0", name="edge_objects_size_check"),
+        CheckConstraint(
+            "(revoked_at IS NULL) = (revoke_reason IS NULL)",
+            name="edge_objects_revoke_reason_check",
+        ),
+    )
+
+
+class EdgeAssignment(Base):
+    """One node holding one object over one span of time.
+
+    A node may be assigned the same object again after a release, so history
+    is a row per span. At most one span per node and object is open.
+    """
+
+    __tablename__ = "edge_assignments"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    digest: Mapped[str] = mapped_column(Text, nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    lease_expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    fill_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    last_filled_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    acked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    released_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["node_id"], ["edge_nodes.node_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["digest"], ["edge_objects.digest"]),
+        CheckConstraint("fill_count >= 0", name="edge_assignments_fill_count_check"),
+        Index(
+            "edge_assignments_open_key",
+            "node_id",
+            "digest",
+            unique=True,
+            postgresql_where=text("released_at IS NULL"),
+        ),
+        Index("edge_assignments_digest_idx", "digest"),
+        Index("edge_assignments_node_idx", "node_id", "released_at"),
+    )
+
+
+class EdgeChallengeSlot(Base):
+    """One secret challenge slot in one node's ledger window.
+
+    A slot is drawn ``scheduled``. When it comes due it becomes ``issued``,
+    with the challenge filled in, or ``missed`` (the node was away) or
+    ``void`` (nothing to ask about). ``purpose`` is what was actually asked:
+    a revoked slot with nothing revoked to ask about is recorded as the
+    possession challenge it became.
+    """
+
+    __tablename__ = "edge_challenge_slots"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    window_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    due_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False, server_default="scheduled")
+    challenge_id: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    range_offset: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    range_length: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    nonce_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
+    issued_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    deadline_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    outcome: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    answered_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["node_id"], ["edge_nodes.node_id"], ondelete="CASCADE"),
+        CheckConstraint(
+            "purpose IN ('possession', 'retrieval', 'revoked')",
+            name="edge_challenge_slots_purpose_check",
+        ),
+        CheckConstraint(
+            "state IN ('scheduled', 'issued', 'missed', 'void')",
+            name="edge_challenge_slots_state_check",
+        ),
+        CheckConstraint(
+            "outcome IN ('pending', 'passed', 'failed', 'missed', 'refilled', "
+            "'refused', 'refused_ok', 'violation', 'void')",
+            name="edge_challenge_slots_outcome_check",
+        ),
+        CheckConstraint(
+            "(state = 'issued') = (challenge_id IS NOT NULL)",
+            name="edge_challenge_slots_issued_check",
+        ),
+        Index("edge_challenge_slots_node_window_idx", "node_id", "window_index"),
+        Index("edge_challenge_slots_window_idx", "window_index"),
+    )
+
+
+class EdgeWindowClosure(Base):
+    """Marks one ledger window scored. Insert-once, alongside its rows."""
+
+    __tablename__ = "edge_window_closures"
+
+    window_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    node_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    closed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class EdgeLedgerWindow(Base):
+    """One node's score for one closed window. Hypothetical, never paid."""
+
+    __tablename__ = "edge_ledger_windows"
+
+    window_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    node_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    operator: Mapped[str] = mapped_column(Text, nullable=False)
+    scheduled: Mapped[int] = mapped_column(Integer, nullable=False)
+    passed: Mapped[int] = mapped_column(Integer, nullable=False)
+    failed: Mapped[int] = mapped_column(Integer, nullable=False)
+    missed: Mapped[int] = mapped_column(Integer, nullable=False)
+    refilled: Mapped[int] = mapped_column(Integer, nullable=False)
+    refused: Mapped[int] = mapped_column(Integer, nullable=False)
+    revocation_checks: Mapped[int] = mapped_column(Integer, nullable=False)
+    revocation_violations: Mapped[int] = mapped_column(Integer, nullable=False)
+    held_gib_hours: Mapped[float] = mapped_column(Float, nullable=False)
+    availability: Mapped[float] = mapped_column(Float, nullable=False)
+    eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    verified_units: Mapped[float] = mapped_column(Float, nullable=False)
+    hypothetical_share: Mapped[float] = mapped_column(Float, nullable=False)
+    reasons: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false()
+    )
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["window_index"], ["edge_window_closures.window_index"]),
+        # The shadow pin. Paying from this lane takes a migration that drops it.
+        CheckConstraint(
+            "weight_eligible = false", name="edge_ledger_windows_shadow_only_check"
+        ),
+        Index("edge_ledger_windows_node_idx", "node_id", "window_index"),
+    )
+
+
+class AirdropRun(Base):
+    """One Backroom airdrop run (SN-490), named forever by its idempotency key.
+
+    Only ``completed_at`` may change after insert, once; a trigger refuses
+    every other update, delete and truncate. ``mode`` records whether the
+    run's executor could move anything: today only ``rehearsal`` executors
+    exist.
+    """
+
+    __tablename__ = "airdrop_runs"
+
+    run_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    asset: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    executor: Mapped[str] = mapped_column(Text, nullable=False)
+    digest: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    recipient_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_airdrop_runs_idempotency_key"),
+        CheckConstraint("asset IN ('alpha', 'ditto_credits')", name="asset"),
+        CheckConstraint("mode IN ('rehearsal', 'live')", name="mode"),
+        CheckConstraint("digest ~ '^[0-9a-f]{64}$'", name="digest"),
+        CheckConstraint("length(trim(reason)) >= 8", name="reason"),
+        CheckConstraint("length(trim(actor)) BETWEEN 1 AND 320", name="actor"),
+        CheckConstraint("recipient_count BETWEEN 1 AND 1000", name="recipient_count"),
+        CheckConstraint("total_amount > 0", name="total_amount"),
+        Index("airdrop_runs_created_idx", "created_at"),
+    )
+
+
+class AirdropRecipient(Base):
+    """One recipient of an airdrop run and its settlement state.
+
+    The recipient's terms never change. Its status only moves forward:
+    ``pending`` -> ``dispatching`` (committed before the executor is called)
+    -> ``settled`` / ``failed`` / ``uncertain``, and ``uncertain`` may later
+    reconcile to ``settled`` or ``failed``. A row that left ``pending`` is
+    never sent again, which is what keeps a retry from paying twice.
+    """
+
+    __tablename__ = "airdrop_recipients"
+
+    run_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    recipient_key: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    address: Mapped[str] = mapped_column(Text, nullable=False)
+    payee: Mapped[str] = mapped_column(Text, nullable=False)
+    amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'pending'")
+    )
+    receipt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    settled_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["run_id"], ["airdrop_runs.run_id"]),
+        UniqueConstraint("recipient_key", name="uq_airdrop_recipients_recipient_key"),
+        UniqueConstraint(
+            "run_id", "kind", "address", name="uq_airdrop_recipients_run_address"
+        ),
+        CheckConstraint("kind IN ('wallet', 'account')", name="kind"),
+        CheckConstraint("recipient_key ~ '^[0-9a-f]{64}$'", name="recipient_key"),
+        CheckConstraint("amount > 0", name="amount"),
+        CheckConstraint("position >= 0", name="position"),
+        CheckConstraint(
+            "status IN ('pending', 'dispatching', 'settled', 'failed', 'uncertain')",
+            name="status",
+        ),
+        CheckConstraint(
+            "(status = 'pending') = (attempted_at IS NULL)", name="attempted"
+        ),
+        Index("airdrop_recipients_payee_idx", "payee", "status"),
+    )
+
+
+class ModelContextSettingsRevision(Base):
+    """Append-only operator policy for the ``model_context`` (CPM) competition.
+
+    Each revision stores the whole policy; ``ditto.api_models.model_context``
+    has the bounds. An empty table resolves to ``mode=off``. The migration
+    ``2026_11_18_add_model_context_competition`` owns the constraints.
+    """
+
+    __tablename__ = "model_context_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "scope = '*'",
+            name="model_context_settings_scope_check",
+        ),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="model_context_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="model_context_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="model_context_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="model_context_settings_actor_check",
+        ),
+        UniqueConstraint(
+            "scope", "parent_revision", name="model_context_settings_scope_parent_key"
+        ),
+    )
+
+
+class ModelContextSubmission(Base):
+    """One model_context submission: a Hugging Face repo pinned at a revision.
+
+    ``manifest_sha256`` is the digest of the exact ``cpm-manifest.json``
+    bytes and matches the hotkey's on-chain ``dcpm1:`` commitment, whose
+    block (``commitment_block``) is the submission's priority.
+    ``weights_sha256`` is the canonical tensor-stream digest computed during
+    screening; the earlier commitment block owns a shared digest.
+    """
+
+    __tablename__ = "model_context_submissions"
+
+    submission_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    hf_repo: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    weights_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    base_id: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    commitment_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mirror_repo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    screening_detail: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    screening_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    screening_lease_until: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(hotkey) BETWEEN 1 AND 64",
+            name="model_context_submissions_hotkey",
+        ),
+        CheckConstraint(
+            "length(hf_repo) BETWEEN 3 AND 200",
+            name="model_context_submissions_hf_repo",
+        ),
+        CheckConstraint(
+            "revision ~ '^[0-9a-f]{40}$'",
+            name="model_context_submissions_revision",
+        ),
+        CheckConstraint(
+            "manifest_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "(weights_sha256 IS NULL OR weights_sha256 ~ '^[0-9a-f]{64}$')",
+            name="model_context_submissions_digests",
+        ),
+        CheckConstraint(
+            "length(base_id) BETWEEN 1 AND 64",
+            name="model_context_submissions_base",
+        ),
+        CheckConstraint(
+            "kind IN ('lora', 'full')",
+            name="model_context_submissions_kind",
+        ),
+        CheckConstraint(
+            "status IN ('screening', 'queued', 'scored', 'rejected', 'superseded')",
+            name="model_context_submissions_status",
+        ),
+        CheckConstraint(
+            "commitment_block >= 0 AND total_bytes > 0 AND screening_attempts >= 0",
+            name="model_context_submissions_counts",
+        ),
+        CheckConstraint(
+            "reject_reason IS NULL OR length(reject_reason) <= 1000",
+            name="model_context_submissions_reject_reason",
+        ),
+        CheckConstraint(
+            "mirror_repo IS NULL OR length(mirror_repo) <= 200",
+            name="model_context_submissions_mirror_repo",
+        ),
+        CheckConstraint(
+            "(status = 'rejected') = (reject_reason IS NOT NULL)",
+            name="model_context_submissions_rejected",
+        ),
+        CheckConstraint(
+            "status IN ('screening', 'rejected') OR weights_sha256 IS NOT NULL",
+            name="model_context_submissions_screened",
+        ),
+        Index(
+            "model_context_submissions_hotkey_idx",
+            "hotkey",
+            text("created_at DESC"),
+        ),
+        Index("model_context_submissions_status_idx", "status", "created_at"),
+        Index("model_context_submissions_weights_idx", "weights_sha256"),
+        Index("model_context_submissions_manifest_idx", "manifest_sha256"),
+    )
+
+
+class ModelContextSeason(Base):
+    """One scoring season: three public seeds from the open block's hash."""
+
+    __tablename__ = "model_context_seasons"
+
+    season: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    open_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    open_block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    seeds: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    cpm_score_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    base_floors: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    gpu_sku: Mapped[str | None] = mapped_column(Text, nullable=True)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    closes_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "season >= 1",
+            name="model_context_seasons_season",
+        ),
+        CheckConstraint(
+            "open_block_hash ~ '^0x[0-9a-f]{64}$'",
+            name="model_context_seasons_block_hash",
+        ),
+        CheckConstraint(
+            "open_block >= 0 AND bench_version >= 1 AND cpm_score_version >= 1",
+            name="model_context_seasons_versions",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(seeds) = 'array' AND jsonb_array_length(seeds) = 3",
+            name="model_context_seasons_seeds",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(base_floors) = 'object'",
+            name="model_context_seasons_base_floors",
+        ),
+        CheckConstraint(
+            "gpu_sku IS NULL OR length(gpu_sku) <= 64",
+            name="model_context_seasons_gpu_sku",
+        ),
+        CheckConstraint(
+            "closes_at > opened_at",
+            name="model_context_seasons_window",
+        ),
+        # At most one open season.
+        Index(
+            "model_context_seasons_open_key",
+            text("(closed_at IS NULL)"),
+            unique=True,
+            postgresql_where=text("closed_at IS NULL"),
+        ),
+    )
+
+
+class ModelContextRun(Base):
+    """One scoring run of a submission (or, ``kind=reference``, of an
+    unmodified base, whose score is that base's season floor)."""
+
+    __tablename__ = "model_context_runs"
+
+    run_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    submission_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    base_id: Mapped[str] = mapped_column(Text, nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    cpm_score_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    components: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    per_seed: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
+    scorer_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scorer_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gpu_sku: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    fault: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('submission', 'reference')",
+            name="model_context_runs_kind",
+        ),
+        CheckConstraint(
+            "(kind = 'submission') = (submission_id IS NOT NULL)",
+            name="model_context_runs_subject",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'leased', 'scored', 'failed', 'abandoned')",
+            name="model_context_runs_status",
+        ),
+        CheckConstraint(
+            "(status = 'scored') = (score IS NOT NULL) AND "
+            "(score IS NULL OR (score >= 0 AND score <= 1))",
+            name="model_context_runs_score",
+        ),
+        CheckConstraint(
+            "(status = 'leased') = (lease_id IS NOT NULL) AND "
+            "(lease_id IS NULL) = (lease_expires_at IS NULL)",
+            name="model_context_runs_lease",
+        ),
+        CheckConstraint(
+            "(status IN ('scored', 'failed', 'abandoned')) = (finished_at IS NOT NULL)",
+            name="model_context_runs_finished",
+        ),
+        CheckConstraint(
+            "attempts >= 0 AND cpm_score_version >= 1",
+            name="model_context_runs_counts",
+        ),
+        CheckConstraint(
+            "(fault IS NULL OR length(fault) <= 2000) AND "
+            "(scorer_id IS NULL OR length(scorer_id) <= 120) AND "
+            "(scorer_version IS NULL OR length(scorer_version) <= 64) AND "
+            "(gpu_sku IS NULL OR length(gpu_sku) <= 64) AND "
+            "length(base_id) BETWEEN 1 AND 64",
+            name="model_context_runs_text_bounds",
+        ),
+        ForeignKeyConstraint(
+            ["submission_id"],
+            ["model_context_submissions.submission_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(["season"], ["model_context_seasons.season"]),
+        Index("model_context_runs_submission_idx", "submission_id", "season"),
+        Index("model_context_runs_season_idx", "season", "status"),
+        Index(
+            "model_context_runs_pending_idx",
+            "created_at",
+            postgresql_where=text("status IN ('queued', 'leased')"),
+        ),
+        # One open run per submission and season, and per reference base and
+        # season: enqueue_*_run's ON CONFLICT targets these.
+        Index(
+            "model_context_runs_open_submission_key",
+            "submission_id",
+            "season",
+            unique=True,
+            postgresql_where=text(
+                "kind = 'submission' AND status IN ('queued', 'leased')"
+            ),
+        ),
+        Index(
+            "model_context_runs_open_reference_key",
+            "season",
+            "base_id",
+            unique=True,
+            postgresql_where=text(
+                "kind = 'reference' AND status IN ('queued', 'leased')"
+            ),
+        ),
+    )
+
+
+class ModelContextOperatorAction(Base):
+    """Append-only audit of operator writes on the model_context competition.
+
+    One row per write that is not itself a settings revision: a forced season
+    rotation (``subject`` ``season:{n}``), a rescore or a rejection
+    (``subject`` the submission id). The migration
+    ``2026_11_18_za_add_model_context_operator_actions`` owns the constraints.
+    """
+
+    __tablename__ = "model_context_operator_actions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('rotate_season', 'rescore', 'reject')",
+            name="model_context_operator_actions_action",
+        ),
+        CheckConstraint(
+            "length(subject) BETWEEN 1 AND 120",
+            name="model_context_operator_actions_subject",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="model_context_operator_actions_actor",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="model_context_operator_actions_reason",
+        ),
+        Index("model_context_operator_actions_subject_idx", "subject", "created_at"),
+    )
+
+
+class ModelContextScorerHeartbeat(Base):
+    """The latest poll from each CPM scorer."""
+
+    __tablename__ = "model_context_scorer_heartbeats"
+
+    scorer_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    scorer_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gpu_sku: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_poll: Mapped[str] = mapped_column(Text, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(scorer_id) BETWEEN 1 AND 120 AND "
+            "(scorer_version IS NULL OR length(scorer_version) <= 64) AND "
+            "(gpu_sku IS NULL OR length(gpu_sku) <= 64) AND length(last_poll) <= 32",
+            name="model_context_scorer_heartbeats_bounds",
+        ),
+    )
+
+
+class HarnessMemoryObservation(Base):
+    """One scored or failed run's harness memory, as the scorer measured it.
+
+    SN-500 step 1: operator observability only. ``peak_bytes`` is the
+    cgroup's ``memory.peak``; ``p50_bytes`` / ``p95_bytes`` are time-weighted
+    percentiles of ``memory.current``. Reported unsigned by the validator with
+    the score or the failed-ticket hand-back; one row per lease, upserted, so a
+    replayed report never double-counts. Drives no policy; each agent's runs are
+    published on its public pipeline without failure detail.
+    The migration ``2026_11_22_add_harness_memory_observations`` owns it.
+    """
+
+    __tablename__ = "harness_memory_observations"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    lease_issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    peak_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    p50_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    p95_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    samples: Mapped[int] = mapped_column(Integer, nullable=False)
+    sampled_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    limit_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="harness_memory_observations_agent_fkey",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "bench_version",
+            "validator_hotkey",
+            "lease_issued_at",
+            name="harness_memory_observations_lease_key",
+        ),
+        CheckConstraint(
+            "outcome IN ('scored', 'failed')",
+            name="outcome",
+        ),
+        CheckConstraint(
+            "peak_bytes >= 0 AND p50_bytes >= 0 AND p95_bytes >= 0 "
+            "AND samples >= 0 AND sampled_seconds >= 0",
+            name="nonnegative",
+        ),
+        Index("harness_memory_observations_agent_idx", "agent_id", "recorded_at"),
     )

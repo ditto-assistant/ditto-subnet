@@ -29,8 +29,14 @@ latency. The release workflow advances it after assembling and signing the
 complete descriptor, while the remaining release smoke tests continue. The
 prefetch timer resolves and authenticates the immutable descriptor digest, then
 pulls and validates every component image. It never drains, recreates, or
-resumes a service. Only the stable `compat-2` channel can start an update, and
-that channel advances only after all release gates pass.
+resumes a service. Image cleanup retains the prefetched candidate's descriptor
+and component digests until that candidate is installed or superseded, so the
+warm cache survives the stage-to-promote window. The digests are kept in
+`prefetched-release-images.env`, which names its own release, beside the
+two-key `prefetched-release.env` marker that validator status reporting reads.
+Only the stable `compat-2`
+channel can start an update, and that channel advances only after all release
+gates pass.
 
 The host-side launcher, systemd unit, Docker Engine, wallet directory, and
 `.env` are deliberately outside the signed bundle so a candidate workload can
@@ -100,7 +106,9 @@ drain and are bounded separately by `VALIDATOR_AUTO_UPDATE_PULL_TIMEOUT_SECONDS`
 validator left drained with no transaction journal is resumed on the next run
 tick, so drain it by hand only with the timers disabled. Crashes recover
 from the journal, and once `USR2` may have fired the updater refuses to
-recreate the validator without a new drained acknowledgement. Named volumes
+recreate the validator without a new drained acknowledgement. That includes an
+interrupted rollback: a restored previous stack that already resumed is kept,
+a drained one is resumed in place, and an ambiguous one keeps its journal. Named volumes
 and the wallet bind survive the transaction; unrelated containers are never
 touched; no managed update ever builds from source.
 

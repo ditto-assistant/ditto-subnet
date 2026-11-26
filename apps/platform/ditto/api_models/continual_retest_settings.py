@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 EMISSION_SET_SIZE = 5
 
 WaveMembership = Literal["strict", "participants", "per_agent"]
+RetestMode = Literal["continual", "season_duel"]
 
 DEFAULT_WAVE_MEMBERSHIP: WaveMembership = "participants"
 """The shipped fold policy -- single source of truth for every default.
@@ -46,6 +47,12 @@ MAX_WAVE_CADENCE_TEMPOS = 24
 MAX_WAVE_SEEDS_PER_WINDOW = 16
 DEFAULT_WAVE_SEEDS_PER_WINDOW = 3
 DEFAULT_RETEST_ELIGIBILITY_Z = 1.64
+# Season duels (``retest_mode = season_duel``, ``docs/title-duels.md``): each
+# dueling season draws this many shared seeds. Two is the paired statistic's
+# own floor; five keeps a season's duel at most 25 runs for the top five.
+MIN_SEASON_DUEL_SEEDS = 2
+MAX_SEASON_DUEL_SEEDS = 5
+DEFAULT_SEASON_DUEL_SEEDS = 3
 
 
 # The first validator heartbeat protocol whose fold reads ``crown_mode`` and
@@ -65,10 +72,23 @@ PROVISIONAL_INCUMBENT_PROTOCOL = 28
 # minimum shared-seed confirmations a challenger needs before the paired
 # comparison may move the crown, and the official standing the crown must keep.
 CROWN_GATE_PROTOCOL = 34
+# The first validator heartbeat protocol whose fold reads
+# ``crown_gate.duel_window_pairs`` and ``LedgerEntry.duel_history``: the
+# sequential cross-season title duel (``docs/title-duels.md``, phase B).
+CROWN_DUEL_PROTOCOL = 35
+# Dueling seasons whose confirmation records the ledger serves as title-duel
+# evidence: five 3-seed seasons fill the 15-pair window.
+CROWN_DUEL_SEASONS = 5
 DEFAULT_MIN_DETHRONE_CONFIRMATIONS = 3
 DEFAULT_CHAMPION_STANDING_RANK = 3
-# A challenger cannot hold more shared seeds than the continual lane retains.
-MAX_MIN_DETHRONE_CONFIRMATIONS = 15
+# A challenger cannot hold more shared seeds than the continual lane retains:
+# mirror ``ditto.api_server.koth.TOP5_MAX_CONFIRMATION_SEEDS`` (the work cap and
+# active fold window). New writes are bounded by it and the served crown gate is
+# clamped to it. Every stored revision so far uses 3.
+MAX_MIN_DETHRONE_CONFIRMATIONS = 10
+# Revisions written under the former 15-seed cap still parse faithfully (their
+# stored checksum covers the stored value), up to the validator's fold ceiling.
+MAX_STORED_MIN_DETHRONE_CONFIRMATIONS = 15
 
 
 class LedgerPinStatus(BaseModel):
@@ -122,11 +142,27 @@ class ContinualRetestSettings(BaseModel):
     official places. There is deliberately no unconditional override.
     """
 
+    crown_duel_mode: Literal["disabled", "fleet_ready"] = "disabled"
+    """Whether two bench >= 16 rows dethrone on the sequential title duel
+    (protocol 35, ``docs/title-duels.md``).
+
+    ``disabled`` is the protocol-34 gate and the exact rollback: a challenger
+    dethrones on one season's paired statistic with the capped fixed-z band.
+    ``fleet_ready`` adds ``duel_window_pairs`` to the served crown gate and
+    ``duel_history`` to the ledger once every recently-live weight setter
+    reports protocol 35, and only while the crown gate itself is served: the
+    newest 15 pair-masked ``(season, seed)`` pairs across dueling seasons
+    must clear ``max(margin x decay, c(n) x se)``. Close calls keep the king.
+    There is deliberately no unconditional override.
+    """
+
     min_dethrone_confirmations: Annotated[
-        int, Field(ge=2, le=MAX_MIN_DETHRONE_CONFIRMATIONS)
+        int, Field(ge=2, le=MAX_STORED_MIN_DETHRONE_CONFIRMATIONS)
     ] = DEFAULT_MIN_DETHRONE_CONFIRMATIONS
     """Shared-seed confirmations a challenger must hold against the champion
-    before it may dethrone. Two is the paired statistic's own floor."""
+    before it may dethrone. Two is the paired statistic's own floor. A new
+    write accepts at most :data:`MAX_MIN_DETHRONE_CONFIRMATIONS`; a stored
+    revision above it is served clamped (``crown_gate_for``)."""
 
     champion_standing_rank: Annotated[int, Field(ge=1, le=EMISSION_SET_SIZE)] = (
         DEFAULT_CHAMPION_STANDING_RANK
@@ -231,6 +267,52 @@ class ContinualRetestSettings(BaseModel):
 
     Three matches the crown gate's ``min_dethrone_confirmations`` default, so
     one window can carry a full dethrone case for a challenger."""
+
+    retest_mode: RetestMode = "continual"
+    """How the continual lane spends retests at a dueling bench version (v16+).
+
+    ``continual`` (the default, and the exact rollback) walks every cohort
+    member up to the elastic shared-seed target and re-walks on every crown
+    change. ``season_duel`` (``docs/title-duels.md``) replaces that walk with
+    one title duel per dueling season:
+
+    * the season's family is anchored on the champion that opened the season,
+      so a crown change mid-season draws no new seeds and re-walks nobody;
+    * the duel is the first :attr:`season_duel_seeds` seeds of that family,
+      all opened at once, and every member runs each exactly once;
+    * the cohort is the top five (folded and public-board views) only: the tie
+      band, :attr:`retest_cohort_size` above five and owner successors are
+      ignored, and :attr:`wave_cadence_tempos` does not apply (the season is
+      the window).
+
+    It changes only which confirmation seeds are leased, never how evidence
+    is folded, so it needs no fleet-protocol gate. Below the dueling floor it
+    is inert and the lane behaves exactly as ``continual``.
+    """
+
+    season_duel_seeds: Annotated[
+        int, Field(ge=MIN_SEASON_DUEL_SEEDS, le=MAX_SEASON_DUEL_SEEDS)
+    ] = DEFAULT_SEASON_DUEL_SEEDS
+    """Shared seeds per dueling season under ``season_duel`` (ignored
+    otherwise). Three matches :attr:`min_dethrone_confirmations`, so one season
+    carries a full dethrone case; the run budget is about this many runs per
+    top-five member per season."""
+
+    season_duel_rotation_seeds: bool = False
+    """Run season rotation re-scores on the season's duel seeds (phase B2).
+
+    Only under ``retest_mode = season_duel`` at a dueling version. Off (the
+    default, and the exact rollback) keeps every rotation re-score on its
+    validator's canonical seed, so a season costs rotation plus duel runs. On,
+    quorum validator ``i`` of a rotating member re-scores on duel seed
+    ``i mod season_duel_seeds`` and the accepted score is also recorded as that
+    seed's confirmation, so one run is level and duel evidence and the
+    continual lane owes nothing for a member whose rotation covers its seeds
+    (about half the runs of a season). Only protocol-35 validators, which
+    verify a season-scoped seed, are given one; anyone else, or a season whose
+    anchor has not pinned within a short grace, keeps the canonical seed. No
+    fleet gate: the fold reads ordinary seeds and records either way.
+    """
 
     rollout_standdown: Literal["off", "capable_validators", "all"] = (
         "capable_validators"
@@ -362,6 +444,9 @@ class EffectiveContinualRetestSettings(BaseModel):
     crown_gate_fleet_ready: bool = False
     crown_gate_active: bool = False
     crown_gate_required_protocol: int = CROWN_GATE_PROTOCOL
+    crown_duel_fleet_ready: bool = False
+    crown_duel_active: bool = False
+    crown_duel_required_protocol: int = CROWN_DUEL_PROTOCOL
     ledger_pin: LedgerPinStatus | None = None
     """The pin validators are folding right now, or ``None`` when no pin has
     ever been taken (bootstrap) or the mode is ``live``."""
@@ -398,6 +483,30 @@ class AdminContinualRetestSettingsRequest(BaseModel):
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
+
+    @model_validator(mode="after")
+    def _check_write_bounds(self) -> AdminContinualRetestSettingsRequest:
+        if self.settings.min_dethrone_confirmations > MAX_MIN_DETHRONE_CONFIRMATIONS:
+            raise ValueError(
+                "min_dethrone_confirmations "
+                f"({self.settings.min_dethrone_confirmations}) cannot exceed the "
+                f"{MAX_MIN_DETHRONE_CONFIRMATIONS}-seed continual-retest work cap: "
+                "a challenger never holds more shared seeds than that"
+            )
+        if (
+            self.settings.retest_mode == "season_duel"
+            and self.settings.season_duel_seeds
+            < self.settings.min_dethrone_confirmations
+        ):
+            # The fold pairs only same-season evidence, so a season holding
+            # fewer seeds than the crown gate asks for could never move it.
+            raise ValueError(
+                f"season_duel_seeds ({self.settings.season_duel_seeds}) cannot be "
+                "below min_dethrone_confirmations "
+                f"({self.settings.min_dethrone_confirmations}): a season duel "
+                "would then never carry a full dethrone case"
+            )
+        return self
 
 
 class AdminContinualRetestSettingsResponse(BaseModel):

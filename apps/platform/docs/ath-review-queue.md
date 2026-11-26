@@ -1,5 +1,13 @@
 # The ATH review queue
 
+> **Automatic source-review holds are retired (2026-11-07).** Score
+> finalization no longer opens a deferred source review, top-five integrity
+> double-check, outlier escalation or transform-audit hold. The queue now
+> holds copy holds (still automatic: they are copy protection), holds an
+> operator opens by hand with `open_ath_review` or a rulings batch, and rows
+> opened before the retirement. The double-check and outlier sections below
+> describe that historical machinery.
+
 The operator queue for SN118 is **`ath_reviews` rows with `status = 'pending'`**.
 Nothing else is. This document exists because two other surfaces look like the
 queue and are not, and because the queue's two status columns can disagree.
@@ -48,11 +56,35 @@ literal string would drop legacy rows while every row it returned still said
   row it would hold, especially rows with `cohort_mad: 0`. Only then set
   `DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE`.
 
-## The top-five integrity double-check
+## Holds left by the retired source review
 
-`queue_policy_settings.deferred_source_review.integrity_double_check_mode`
-(`off` / `observe` / `enforce`, independent of `mode`) gives every top-five
-row one stronger deep review. It covers rows that already passed the full
+No `deferred_source_review` hold opens any more, and the queue-policy block of
+that name is gone (#3438). Queue-policy revisions written before 2026-11-07
+still store it; reads drop it and a write that sends it stores nothing for it.
+It never gated copy holds, which stay armed.
+
+What is still real for the rows that remain:
+
+- **They stay in the queue.** A pending `deferred_source_review` row is an
+  ordinary ATH hold: it is listed by `get_screening_review_queue` (filter
+  `review_kind=deferred_source_review`), counted by the queue SLO reads, keeps
+  the agent `ath_pending_review` and off the emission-eligible ledger, and its
+  public and miner projections still render (`deferred_source_review.py`).
+- **Only an operator settles them.** No screener re-claims them for a deep
+  pass and nothing clears them in bulk. Resolve each one with
+  `resolve_ath_review` and a real reason, because the resolution lands on the
+  agent's public audit record.
+- **Stranded rows are owner decisions.** As of 2026-11-08 the queue held three
+  owner-intent holds and one rejected agent whose old `deferred_source_review`
+  hold was never closed (#3438). Do not clear them automatically; the owner
+  decides each one.
+
+## The top-five integrity double-check (retired)
+
+The rest of this section describes the retired machinery, for reading rows it
+left behind. `queue_policy_settings.deferred_source_review.integrity_double_check_mode`
+(`off` / `observe` / `enforce`, independent of `mode`) gave every top-five
+row one stronger deep review. It covered rows that had already passed the full
 pre-score screen:
 
 ```
@@ -85,14 +117,10 @@ eval -> top five -> integrity double-check -> clear or reject
   `l2_model`, `l2_always_escalate: true` (L2/L3 run even when L1 certifies a
   clear), and larger budgets there. With `enforce`, a mechanically admitted
   top-five row's deferred pass takes the same posture.
-- **Fail closed.** Platform refuses `integrity_double_check_mode=enforce` (409)
-  until that scope holds an `enforce` revision with `l2_always_escalate`,
-  `l3_enabled`, and the `l1_l2` manifest. Worker compatibility also requires
-  `timeout_seconds <= 900`, `max_steps <= 20`, and low or medium critic
-  reasoning. If the posture later becomes unusable, or the claimant
-  cannot bind one (a legacy worker or the platform-owned Targon lane), the
-  claim query leaves double-check holds unselected. They stay pending and
-  visible here and cannot starve other screening work.
+- **Fail closed.** Platform used to refuse `integrity_double_check_mode=enforce`
+  (409) until that scope held a usable `enforce` revision. That gate went
+  with the block. If the claimant could not bind a posture, the claim query
+  left double-check holds unselected, so they stayed pending and visible here.
 - **Exit.** This is the same deferred lifecycle: a clean pass restores
   `scored`/`live` and resolves the review as `clear`, an adjudicated reject on
   an enforcing posture rejects, and anything else stays a pending operator hold
@@ -325,6 +353,17 @@ JOIN agents a USING (agent_id)
 WHERE r.status = 'pending' AND a.status <> 'ath_pending_review';
 ```
 
+A stranded hold behind an agent that is already `rejected` or `banned` is
+terminal history, and an operator closes it with a `reject` ruling in the
+batched rulings court (SN-434). It previews `steps: ["close_terminal"]`, needs
+no `evidence_references` (a terminal agent has no source finding to cite),
+and under the agent and review row locks resolves the review as `reject` with
+one `reject` action whose evidence carries `terminal_close: true`. The agent,
+its scores and the board are untouched, so `would_change_crown` is always
+false. The close did not ban anyone, so it is never a reject that `open` can
+reconsider. A `clear` on such a row stays a conflict and names the reject as
+the way out.
+
 Reconciling them is deliberately not automated. Winner-take-all makes a
 false-positive hold expensive for an honest miner and a false clear expensive
 for the subnet, so the exit from a hold stays an operator decision. The
@@ -462,12 +501,45 @@ parameter.
   which are the stranded holds described above.
   `held_without_review_ghost_count` counts `ath_pending_review` agents that
   have no pending row.
-- **Thresholds.** All are unset by default, so `overdue_count` and
-  `p95_exceeds_threshold` are null. Set them with
-  `DITTO_ATH_REVIEW_QUEUE_{MAX_AGE,P95_AGE}_THRESHOLD_SECONDS` for the
-  aggregate and `DITTO_COPY_REVIEW_QUEUE_{MAX_AGE,P95_AGE}_THRESHOLD_SECONDS`
-  for copy review. The endpoint only reports: it raises no alerts and takes no
-  escalation action.
+- **Thresholds.** Every clock ships a threshold (SN-499). Until then all were
+  unset, so a ten-day copy hold and a 128-day overfit escalation both read
+  `overdue_count: null`. The shipped values are review-latency targets, not
+  ruling policy:
+
+  | Clock | Max age | p95 | Env stem |
+  |---|---|---|---|
+  | aggregate (`ath`) | 72h | 48h | `DITTO_ATH_REVIEW_QUEUE_` |
+  | `copy` | 48h | 24h | `DITTO_COPY_REVIEW_QUEUE_` |
+  | `benchmark_overfit` | 72h | 48h | `DITTO_ATH_REVIEW_QUEUE_BENCHMARK_OVERFIT_` |
+  | `deferred_source_review` | 48h | 24h | `DITTO_ATH_REVIEW_QUEUE_DEFERRED_SOURCE_REVIEW_` |
+  | `integrity_double_check` | 24h | 12h | `DITTO_ATH_REVIEW_QUEUE_INTEGRITY_DOUBLE_CHECK_` |
+  | `anomalous_score` | 48h | 24h | `DITTO_ATH_REVIEW_QUEUE_ANOMALOUS_SCORE_` |
+
+  Each stem takes `MAX_AGE_THRESHOLD_SECONDS` and `P95_AGE_THRESHOLD_SECONDS`.
+  A positive integer overrides the shipped value and `off` reports null again.
+  The ordinary source-review queue ships 24h / 12h under
+  `DITTO_SOURCE_REVIEW_QUEUE_{MAX_AGE,P95_AGE}_THRESHOLD_SECONDS`. The
+  endpoints only report: they raise no alert and take no escalation action.
+  Backroom's `get_source_review_queue_slo` lists each breached clock first in
+  `overdue_clocks`, and the operator-review page shows the same list above the
+  queue.
+
+## Forks of a public release come first
+
+A score-finalization copy hold records whether its matched agent was publicly
+released at or before the held upload, in
+`algorithm_provenance.reference_public_release` (SN-499). "Public" means what
+the copy gate means: `list_public_source_releases` under the release policy in
+force at that upload. Older holds derive the same fact at read time, and the
+queue row reports which one it used in `original.reference_public_release`
+(`recorded` or `derived`).
+
+`GET /admin/copy-reviews?status=pending&order=public_reference_first` lists
+those holds first, each tier oldest first. Backroom's queue tool always uses
+this order; the console list keeps `order=oldest`. The fact is priority
+evidence only. The copy gate already ran its alibi test against every public
+release, so a held fork of a public agent still matched something the release
+does not explain.
 
 The public pipeline (`/public/agent/{id}/pipeline`) carries `ath_review` for a
 held submission. It includes the reason, the hold age, and the subnet-wide

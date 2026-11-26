@@ -2,7 +2,7 @@
   "schema": "ditto.sn118.runtime_envelope.v1",
   "doc": "docs/RUNTIME-ENVELOPE.md",
   "harness": {
-    "memory_limit_mib": 8192,
+    "memory_limit_mib": 2048,
     "memory_limit_live_setting": "inference_concurrency_settings.benchmark_runtime.sandbox_memory_limit_mib",
     "swap_mib": 0,
     "cpus": 2,

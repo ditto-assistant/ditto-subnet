@@ -58,8 +58,10 @@ func TestPublishedAnswerPoolsRemainFrozen(t *testing.T) {
 			}
 		}
 	}
-	if protocol.SupportedBenchVersion(answerPoolFixBenchVersion) {
-		t.Fatal("answer-pool fix became runnable without a complete new-version rollout")
+	// v17 shipped with the answer-pool fix (answerPoolFixBenchVersion == 17).
+	// Confirm the rollout is complete: the fix version must be supported.
+	if !protocol.SupportedBenchVersion(answerPoolFixBenchVersion) {
+		t.Fatalf("answer-pool fix bench_version %d is not yet supported; promote it before activating", answerPoolFixBenchVersion)
 	}
 }
 

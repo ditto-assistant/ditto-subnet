@@ -46,6 +46,15 @@ class InferenceLaneCurrent(BaseModel):
     peak_global_concurrency_60m: int
 
 
+class DaniLabsBindingSnapshot(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    key_present: bool
+    router_competition: bool
+    scope: Literal["unset_or_invalid", "canary", "fleet"]
+    deadline: datetime | None = None
+
+
 class RelayRuntimeSnapshot(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -56,6 +65,7 @@ class RelayRuntimeSnapshot(BaseModel):
     revision_drift: bool | None = None
     process_started_at: datetime | None = None
     capacity_declines: dict[str, int] = Field(default_factory=dict)
+    danilabs_binding: DaniLabsBindingSnapshot | None = None
     error: str | None = None
 
 

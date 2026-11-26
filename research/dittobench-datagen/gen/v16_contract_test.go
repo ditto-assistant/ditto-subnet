@@ -21,9 +21,10 @@ import (
 // the README publish the same string.
 const v16KnownVectorWant = "30ab40c287fe7457859b4040e1334bcc5a0f8b50cc49f97e5bd98650753de34d"
 
-// V16 is the dueling contract, STAGED: generatable with its own epoch and seed
-// domain, not yet in the supported set. This module generates only the
-// datagen half; Platform delivers the generator slice.
+// V16 is the dueling contract: supported (promoted from staging by the
+// cross-layer PR, with the epoch and seed domain it was staged with, so this
+// vector did not move), not active. This module generates only the datagen
+// half; Platform delivers the generator slice.
 func TestV16KnownVector(t *testing.T) {
 	prof, ok := ProfileForVersion("full", protocol.BenchVersionV16)
 	if !ok {
@@ -43,8 +44,8 @@ func TestV16KnownVector(t *testing.T) {
 	if a.BenchVersion != 16 || a.GeneratedAt != "2027-08-01T00:00:00Z" {
 		t.Fatalf("v16 envelope: version=%d epoch=%s", a.BenchVersion, a.GeneratedAt)
 	}
-	if protocol.SupportedBenchVersion(protocol.BenchVersionV16) || !protocol.StagedBenchVersion(protocol.BenchVersionV16) {
-		t.Fatal("v16 must stay staged until the cross-layer PR raises the shared ceiling")
+	if !protocol.SupportedBenchVersion(protocol.BenchVersionV16) || protocol.StagedBenchVersion(protocol.BenchVersionV16) {
+		t.Fatal("v16 is supported once the cross-layer PR raises the shared ceiling")
 	}
 	if protocol.CurrentBenchVersion != protocol.BenchVersionV8 {
 		t.Fatal("preactivation default moved")

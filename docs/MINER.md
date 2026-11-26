@@ -19,6 +19,7 @@ improving the best artifact, not for serving live inference.
 - [Prepare for mainnet](#prepare-for-mainnet)
 - [Install the submission CLI](#install-the-submission-cli)
 - [Verify and submit](#verify-and-submit)
+- [Readmission](#readmission)
 - [Track your submission](#track-your-submission)
 - [Scoring and emissions](#scoring-and-emissions)
 - [Inference request contract](#inference-request-contract)
@@ -109,12 +110,18 @@ Coding remains shadow-only and score-ineligible today; see
 [`coding-unified-miner-capability-shadow.md`](coding-unified-miner-capability-shadow.md)
 for the planned compatibility boundary.
 
-Your harness runs inside a fixed resource envelope: memory cap, 2 CPUs, PID
-and `/tmp` limits, `/seed` and per-case deadlines, 8 overlapping `/run` calls,
-and the inference walls. [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md) lists every
-limit and the rule that decides whether an out-of-memory kill is charged to
-you. `ditto practice` runs at the same case concurrency and reports your peak
-memory against the cap.
+Your harness runs inside a fixed resource envelope: a 2048 MiB memory cap
+(including `/tmp`; the cap in force is `sandbox_memory_limit_mib` on
+`GET /api/v1/public/validators`), 2 CPUs, PID and `/tmp` limits, `/seed` and per-case
+deadlines, 8 overlapping `/run` calls, and the inference walls. From
+leases issued at Wed 2026-11-25 12:00 America/Toronto, an out-of-memory kill
+at your own cap is a failed run: it consumes the attempt and starts the
+cooldown. Keep the harness lightweight.
+[RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md) lists every limit and the exact OOM
+rule. `ditto practice` runs at the same case concurrency and reports your peak
+memory against the cap. Once validators score your agent, the peak and P95
+they measured appear under `harness_memory` on your agent's public pipeline and
+in the dashboard's **Harness memory** section.
 
 ## Prepare for mainnet
 
@@ -123,8 +130,8 @@ To submit, you need:
 - Python 3.12+ and [`uv`](https://docs.astral.sh/uv/)
 - a funded Bittensor coldkey
 - a hotkey registered on Finney netuid 118
-- enough TAO for the platform-controlled evaluation fee (0.1 TAO, or
-  100,000,000 rao, as of 2026-09-14; `ditto upload` shows the live amount)
+- enough TAO for the platform-controlled evaluation fee (0.075 TAO, or
+  75,000,000 rao, as of 2026-11-12; `ditto upload` shows the live amount)
 
 If the hotkey is not registered yet, you do not have to leave the CLI to fix
 it. `ditto upload` runs its pre-check before any TAO moves, and when the only
@@ -133,7 +140,7 @@ live registration cost from chain, shows it next to your coldkey balance, and
 offers to register:
 
 ```
-  pre-check rejection 1101: hotkey is not registered on netuid 118
+  pre-check rejection 1101: hotkey is not registered on netuid 118 as of finalized block 9485693 (read from chain storage; Platform's metagraph cache is at block 9485650, 43 blocks behind)
 
 Registration preview
   Netuid:   118
@@ -150,16 +157,22 @@ the ordinary payment confirmation. The registration cost is never cached or
 assumed: it is read at the prompt and read again immediately before the
 extrinsic, and the CLI aborts rather than paying more if it rose in between.
 
-The platform resolves registration from a cached metagraph snapshot rather
-than from the chain directly, so a registration that is already final on chain
-is not visible to `/upload/check` immediately. The CLI waits it out, re-checking
-for about four minutes:
+A 1101 names its evidence. The platform keeps a cached metagraph snapshot that
+can trail the chain, so before it reports a signed request's hotkey as
+unregistered it re-reads chain storage at a finalized block. The message gives
+that block and how far the cache is behind. If you registered after that block,
+the registration is not finalized yet: wait and retry. If you registered
+before it, the hotkey is not registered on the netuid the platform reads.
+
+The platform reads a finalized block, which trails the chain head by a few
+blocks, so a registration may not be visible to `/upload/check` the instant
+it lands. The CLI waits it out, re-checking for about four minutes:
 
 ```
 registered on netuid 118: uid 37
 continuing upload...
-waiting for the platform to observe the registration (it reads a cached
-metagraph snapshot, so this lags the chain)...
+waiting for the platform to observe the registration (it checks a finalized
+block, which trails the chain head)...
   still not visible; re-checking (1/8)
 platform observed the registration after 2/8 checks
 ```
@@ -237,9 +250,9 @@ implementation, not a submission requirement.
 
 Each source file (`.py`, `.rs`, `.go`, `.c`/`.cpp`/`.h`, `.ts`/`.js` and
 similar) must stay within **10,000 lines**, **1 MiB**, and **4,000 characters
-on any one line**. A reviewer reads source 400 lines at a time, so larger files
-cannot be reviewed and leave screening unable to clear the submission. Split
-large files. The one exception is an **unmodified** upstream release file whose
+on any one line**. Platform enforces these limits at upload so every source
+file stays readable when an operator reads a top agent's code. Split large
+files. The one exception is an **unmodified** upstream release file whose
 SHA-256 is on the vendored allowlist
 (`packages/ditto-screening-protocol/ditto_screening_protocol/data/vendored_upstream_allowlist.json`,
 currently QuickJS-ng 0.16.2 `quickjs.c`, SQLite 3.46.1 amalgamation files and
@@ -310,9 +323,15 @@ unused receipt tied to a reservation that was active at the fee-change cutover
 can qualify, and it must have finalized before that cutover. This is a
 receipt-scoped exception, not a coldkey-wide fee waiver.
 
-If a saved receipt is instead definitively rejected for an amount mismatch or
-because its 24-hour recovery window expired, the CLI prints the rejected proof
-and sends nothing. In an interactive terminal it asks whether to pay the
+If a saved receipt is instead definitively rejected for an amount mismatch,
+because its 24-hour recovery window expired, or because it cannot fund this
+upload (`3207`: it already funded another upload, typically an earlier one
+whose response was lost before a retry with a different archive, or it belongs
+to another hotkey or owner), the CLI prints the rejected proof and sends
+nothing. Platform gives the same `3207` answer for each of these causes, so the
+CLI cannot say which applies. Only a proof that funded an earlier upload of
+this hotkey returns that agent when you rerun its exact archive, without paying
+again. In an interactive terminal it asks whether to pay the
 currently reserved TAO fee. For non-interactive recovery, opt in explicitly:
 
 ```sh
@@ -324,9 +343,11 @@ uv run ditto --network finney upload \
   --pay-again
 ```
 
-`--pay-again` is narrowly limited to those two definitive receipt failures.
+`--pay-again` is narrowly limited to those three definitive receipt failures.
 The CLI runs a fresh pre-check before retiring the rejected local proof or
-submitting a replacement transfer. It never overrides a signer, destination,
+submitting a replacement transfer. A rejected proof named with the
+`--payment-block-*` flags is retired from the saved list too, so a hotkey with
+several saved receipts is not asked for proof flags again. It never overrides a signer, destination,
 cooldown, archive, transport, or other validation failure, and `-y` alone does
 not authorize abandoning a finalized receipt.
 
@@ -347,6 +368,99 @@ after updating.` Update and repackage the harness before submitting again.
 The existing explicit `--allow-identical-rescore` option still permits buying
 another seeded evaluation after the owner cooldown. Exact recovery of a
 previously paid upload continues to return its original submission identity.
+Once the readmission fee is live, such a re-run is a readmission (see below):
+same fee, same cooldown.
+
+## Readmission
+
+A readmission is the owner of an agent asking Ditto to score it again. Ditto
+identifies an agent by its lineage and the owner coldkey that paid for it, not
+by hotkey or upload id. Nothing is charged or readmitted automatically.
+
+**When it applies.** The readmission rules apply from benchmark v19. They go
+live no earlier than seven days after Ditto announces them, so nothing you
+submitted before then is ever charged as a readmission. Until then, uploads
+and `--allow-identical-rescore` behave exactly as described above.
+`ditto upload` and `ditto readmit` print the current state from the submission
+terms: whether readmission is active, the reason it is not, and the earliest
+time it can be charged.
+
+**What counts.**
+
+- Opting an agent you already uploaded into a new benchmark era with
+  `ditto readmit <agent_id>`.
+- Re-running an unchanged agent with `ditto upload --allow-identical-rescore`
+  after one of its evaluations completed.
+- A byte-identical or near-identical (same normalized source) re-upload of
+  your own agent. It is labelled a readmission. The price and cooldown are the
+  same as any upload.
+
+**Price and cooldown.** A readmission costs exactly the upload fee, never more,
+and is paid the same way. It counts toward, and starts, your coldkey's upload
+cooldown. The submission terms also publish the measured cost of evaluating one
+agent on the active benchmark, which is the basis for the fee.
+
+**`ditto readmit`.** Use it when an era changed and your scored agent was not
+carried into the new one (it was not in the frozen rescore cohort):
+
+```sh
+uv run ditto --network finney readmit <agent_id> \
+  --coldkey default \
+  --hotkey default
+```
+
+It checks eligibility before anything is paid and refuses with the reason. Your
+agent must:
+
+- be yours, with the hotkey still owned by the coldkey that paid for it;
+- have finished scoring on the previous era (a partial 2-of-3 row is not
+  eligible: resubmit instead);
+- not be withdrawn, retired, below the screening-policy floor, or missing its
+  screened image;
+- not already be admitted or readmitted to this era.
+
+A rollout must not be open, and your cooldown must be clear. Any of your
+stranded agents is eligible, but payouts count only your best agent; the check
+says when this is not your best, or when another of your agents is already on
+the era. Each agent can be readmitted at most once per era.
+
+The CLI pays the reserved amount after you confirm. It keeps one local record
+per agent, and saves it before the transfer and again with the proof once the
+transfer lands. If the response is lost, rerun the same command, even after
+the era changes: it reuses the proof and sends no new transfer. If the
+transfer's outcome is unknown (the CLI timed out before finalization), the
+rerun refuses to pay again. Find the transfer in your coldkey history and pass
+it with `--payment-block-hash`, `--payment-block-number` and
+`--payment-extrinsic-index`. The CLI reads it on chain and accepts it only if
+it is that transfer: from your coldkey, to the recorded address, for the
+recorded amount. Only if no transfer was made, pass
+`--discard-unconfirmed-payment` to start over. The record is removed only once
+Platform admits the agent, credits the payment, or rejects that proof. Only
+one `ditto readmit` per agent runs at a time; a second one refuses before
+anything is paid. If the CLI config file is damaged, `ditto readmit` refuses
+and leaves the file untouched until you repair it.
+
+**Refusals after payment.** If Platform can only discover a refusal after you
+paid (a rollout opened, the agent was withdrawn), it keeps your payment as an
+upload credit for your hotkey, valid for 30 days, and `ditto readmit` prints how
+to spend it. Ditto does not refund TAO on chain.
+
+**Free retries.** A retry caused by Ditto, its queue, validators or data is
+always free. That covers stalls, stranded evaluations, issuance gaps,
+validator crashes, provider outages, expired leases the agent did not cause,
+and Ditto's own re-tests such as season rotation and catch-up. Eligibility
+comes only from the error codes validators and the queue record, never from a
+request. Free re-leases are capped per agent: once validators fail an agent
+on six distinct leases in one era without a scoring quorum, it is withdrawn
+from that era. A failure your agent caused is not retried for free; the remedy
+is a paid re-run or a new upload.
+
+A rescore is a re-run, not a lottery ticket. Once the new run of the same bytes
+finalizes with a ranked score, it represents that artifact on the leaderboard,
+the crown, and the weight ledger, even when it scored lower than the earlier
+run. The earlier run stays on the public record but no longer ranks or earns.
+A run that finalizes unranked (0.000, a partial profile, or shadow mode) does
+not replace a ranked run of the same bytes.
 
 ## Track your submission
 
@@ -357,10 +471,30 @@ uv run ditto --network finney status <agent-id>
 You can also follow the public submission pipeline and leaderboard at
 [`platform-api.heyditto.ai`](https://platform-api.heyditto.ai/).
 
-The normal pipeline is upload, automated build and health screening, evaluation
+The normal pipeline is upload, automated build and safety screening, evaluation
 by up to three independent validators, and median-score finalization. Failed or
 expired validator leases are retried, so one validator does not control the
 result.
+
+Screening is build and safety checks only. There is no source review, no
+review-policy version to wait for and no review hold before or after scoring
+(retired 2026-11-07). The one hold left is copy protection, below. Every
+submission still gets:
+
+- archive, size and container-contract validation;
+- a deterministic static malicious-source check before anything executes. A
+  decisive, reachable match is rejected as `static-malicious-source` with the
+  file and line it matched;
+- the isolated image build, health check and screened-image export that
+  validators load (they never build your Dockerfile);
+- exact-copy and copy-signal protection against other miners' work. An exact
+  copy is rejected; a near-duplicate is held for copy review when its scores
+  finalize;
+- banned-hotkey enforcement.
+
+Operators read the top agents' code after scoring and can void scores, reject
+or ban after the fact. Bench difficulty, with fresh private per-seed data and
+frequent harder versions, is the main defence against overfitting.
 
 ## Scoring and emissions
 
@@ -375,6 +509,31 @@ result.
   your prompting and reasoning budget for the active benchmark model; `GET
   /api/v1/public/bench/config` reports the authoritative contract. Your local
   practice key and model are not included in the submitted build context.
+- **Bench v16 (the dueling bench) is shipped and shadow-only.** A v16 run adds
+  a generator slice (5 columns x 35 cases from the top generator-competition
+  miners) to a smaller datagen half and scores one composite:
+  `gate x (0.5 x datagen + 0.1 x each column)`, your own coldkey's columns
+  masked. It sets no weights until the operator activates it
+  ([`benchmark-v16-rollout.md`](benchmark-v16-rollout.md)). Bench v19 is
+  staged, not active, and changes the split: each column weighs 0.15, so the
+  datagen half (and with it the tool half) shrinks to 25%, and a datagen
+  qualifier `min(1, datagen / 0.8)` scales the whole composite
+  ([dueling-bench.md](../research/dittobench-datagen/docs/dueling-bench.md)
+  section 9). `GET /api/v1/public/bench/config` says which version scores. Rehearse it with
+  `uv run ditto practice --bench-version 16`, which builds a local slice from
+  the public default generator only; live miner columns stay private until
+  their source is released.
+- **On the dueling bench, a score counts for two seasons.** Scores count in
+  the season they were taken in and the next one (roughly 9.6 hours in all),
+  then expire, because scores from different generator sets are not
+  comparable. An expired agent stays on the board, labelled, but does not
+  rank or earn until it has new scores. Ditto re-tests it for free on the open
+  season in these cases: it is in the paid set or the public top five at a
+  season boundary; it is past those but fits that season's catch-up budget;
+  it is off the board but could still place (once per bench version); or a
+  review hold on it was cleared after its scores expired. The board row and
+  `GET /api/v1/public/agent/{id}/summary` show `season_expiry.retest`: whether
+  a re-test is queued and, if not, why.
 - The validator self-checks its `tool_endpoint` before scoring. A platform
   listener failure aborts and retries the run; if the listener is healthy and
   your harness never calls it, the run completes with the corresponding
@@ -385,7 +544,9 @@ result.
 - Grading is deterministic and judge-free. Tool and memory means contribute
   equally to the composite; bounded efficiency, consistency, and integrity
   checks can reduce it.
-- Each miner competes with its highest eligible score. A challenger dethrones
+- Each miner competes with its highest eligible score across distinct
+  versions. Repeated runs of byte-identical source count only the latest
+  ranked run. A challenger dethrones
   the incumbent only after clearing the greater of a fixed 0.007 composite-point
   hysteresis and the statistical error band. Shared-seed uncertainty may raise
   that bar, but not above twice the 0.007 gate — a 3-seed outlier cannot demand
@@ -411,7 +572,10 @@ result.
   strictly below the ceiling — a perfect run always takes the crown. The cap
   only ever lowers the bar, never raises it, and the leaderboard's "beat this
   to contend" figure already includes it. A near-miss is settled by re-scoring
-  both agents on shared seeds rather than dataset luck.
+  both agents on shared seeds rather than dataset luck. Each top agent is
+  re-scored on at least 8 and at most 10 shared seeds (more than 8 only while
+  the measured spread still asks for it); the official score folds at most
+  those 10.
 - Competitive weight is distributed to the champion and next four distinct
   miners by the payout curve the public leaderboard reports as `rank_shares`
   (default 65% / 14% / 10% / 7% / 4%; operators can set another curve, which
@@ -490,11 +654,14 @@ model/provider path, and instructions intended to manipulate screening.
 Forking, replacing, or heavily optimizing the public starter harness is
 allowed; copying another miner's work is not. Lexical and structural
 fingerprints detect renamed, reformatted, or padded near-duplicates across
-miners, and suspicious or matching submissions are quarantined for human review
-rather than automatically banned. Confirmed plagiarism can result in a
-hotkey-level ban. Coding agents using `/mine` apply the operator review bar
-to the local served path before packaging. A local pass is not a production
-clearance.
+miners, and matching submissions are held for copy review rather than
+automatically banned. Confirmed plagiarism can result in a hotkey-level ban.
+
+There is no automated source review before scoring. Operators read the top
+agents' code after scoring, and a submission that breaks these rules can have
+its scores voided, be rejected, or have its hotkey banned after the fact. Coding
+agents using `/mine` check the local served path against that bar before
+packaging; a local pass is not a clearance.
 
 ## Link a rotated hotkey
 
@@ -892,13 +1059,14 @@ own last output. A `stale` flag means the tail is from a prior lease —
 reissue keeps the last failure on the row while starting a new attempt.
 
 **How much does evaluation cost?** The Backroom-controlled fee is denominated in
-TAO and was **0.1 TAO (100,000,000 rao)** as of 2026-09-14. Operators can change
-it in Backroom, so treat that as an example. The CLI fetches and shows
-the authoritative TAO amount before confirmation. TAO/USD pricing is used only
+TAO and was **0.075 TAO (75,000,000 rao)** as of 2026-11-12. Operators can change
+it in Backroom, so treat that as an example. `/api/v1/upload/check` returns the
+live fee terms, and the CLI shows the authoritative TAO amount before
+confirmation. TAO/USD pricing is used only
 for internal revenue reporting and cannot change whether a payment is accepted.
 
-**How long does scoring take?** Screening and a full benchmark both involve
-container work. Expect minutes to hours depending on queue and build time.
+**How long does scoring take?** Screening (the image build and safety checks)
+and a full benchmark both involve container work. Expect minutes to hours depending on queue and build time.
 
 **When will I see incentive on chain?** Budget **two to three tempos — roughly
 2.5 to 4.5 hours** — from your first score. It is not one tempo, and the delay
@@ -940,7 +1108,9 @@ few seconds, not a deadline.
 to version an agent (`v1`, `v2`, and so on); a different name starts a new
 series. Every upload pays its own fee, and your highest eligible version
 represents your hotkey, so a lower-scoring or failed update never replaces your
-current best. The CLI saves the name after a successful upload and reuses it as
+current best. Byte-identical reruns (`--allow-identical-rescore`) are the
+exception: the latest ranked run of those bytes stands for them, whatever it
+scored. The CLI saves the name after a successful upload and reuses it as
 that hotkey's default.
 
 **What earns emissions?** A material, reproducible improvement over the current

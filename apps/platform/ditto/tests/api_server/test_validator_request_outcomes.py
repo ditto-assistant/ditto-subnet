@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
 
 from ditto.api_server import validator_request_outcomes
-from ditto.api_server.validator_request_outcomes import RequestOutcomeTally
+from ditto.api_server.validator_request_outcomes import (
+    RequestOutcomeTally,
+    track_request_outcomes,
+)
 
 
 def test_tally_windows_recent_counts_and_evicts_the_quietest_validator(
@@ -32,7 +39,71 @@ def test_tally_windows_recent_counts_and_evicts_the_quietest_validator(
         1,
     )
     assert old["allocator_busy"]["last_slot_id"] == "slot-1"
+    # Only the in-window poll is split by slot.
+    assert old["allocator_busy"]["recent_15m_by_slot"] == {"slot-1": 1}
     assert (
         len(old["http_428"]["last_detail"])
         == validator_request_outcomes.MAX_DETAIL_CHARS
     )
+
+
+async def test_lease_lane_503_with_retry_after_tallies_as_retry_later(
+    monkeypatch,
+) -> None:
+    tally = RequestOutcomeTally()
+    monkeypatch.setattr(validator_request_outcomes, "REQUEST_OUTCOMES", tally)
+
+    def endpoint(lane, headers):
+        @track_request_outcomes(lane)
+        async def handler(*, payload):  # noqa: ARG001 - the tally reads it
+            raise HTTPException(
+                503, "dueling slice preparation pending", headers=headers
+            )
+
+        return handler
+
+    payload = SimpleNamespace(validator_hotkey="5Val", slot_id="slot-2")
+    for lane, headers in (
+        ("job", {"Retry-After": "15"}),
+        ("top5_confirmation", {"Retry-After": "15"}),
+        ("scoring_ledger", {"Retry-After": "5"}),
+        ("job", None),
+    ):
+        with pytest.raises(HTTPException):
+            await endpoint(lane, headers)(payload=payload)
+
+    rows = {row["lane"]: row for row in tally.snapshot()["validators"]}
+    job = {entry["outcome"]: entry for entry in rows["job"]["outcomes"]}
+    assert set(job) == {"retry_later", "http_503"}
+    assert job["retry_later"]["last_detail"] == "dueling slice preparation pending"
+    assert job["retry_later"]["last_slot_id"] == "slot-2"
+    assert rows["top5_confirmation"]["last_outcome"] == "retry_later"
+    # The ledger lane is not a lease: its 503 keeps meaning "ledger unavailable".
+    assert rows["scoring_ledger"]["last_outcome"] == "http_503"
+
+
+async def test_lease_lane_204_carries_its_decline_reason_header(monkeypatch) -> None:
+    from fastapi import Response
+
+    tally = RequestOutcomeTally()
+    monkeypatch.setattr(validator_request_outcomes, "REQUEST_OUTCOMES", tally)
+
+    def endpoint(lane, reason):
+        @track_request_outcomes(lane)
+        async def handler(*, payload):  # noqa: ARG001 - the tally reads it
+            if reason is not None:
+                validator_request_outcomes.note_decline_reason(reason)
+            return Response(status_code=204)
+
+        return handler
+
+    payload = SimpleNamespace(validator_hotkey="5Val", slot_id="slot-3")
+    busy = await endpoint("job", "allocator_busy")(payload=payload)
+    assert busy.headers[validator_request_outcomes.DECLINE_REASON_HEADER] == (
+        "allocator_busy"
+    )
+    unattributed = await endpoint("job", None)(payload=payload)
+    assert validator_request_outcomes.DECLINE_REASON_HEADER not in unattributed.headers
+    # The ledger lane never leases, so it never names a dispatch gate.
+    ledger = await endpoint("scoring_ledger", "allocator_busy")(payload=payload)
+    assert validator_request_outcomes.DECLINE_REASON_HEADER not in ledger.headers

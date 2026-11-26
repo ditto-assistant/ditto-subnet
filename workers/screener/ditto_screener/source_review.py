@@ -92,8 +92,11 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
-    if policy_version == 13:
-        return "source-review-v41-policy-v13"
+    if policy_version in {13, 14}:
+        # Policy 14 reviews with the policy-13 text (_POLICY_TAILS[14]), so it
+        # shares the counter. The suffix still names the policy: Platform
+        # accepts a fan-out final review only when it matches the report's.
+        return f"source-review-v42-policy-v{policy_version}"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -118,6 +121,10 @@ _COVERAGE_AREAS = frozenset(
 )
 # Ask for a note again when this many inspection calls pass without one.
 _NOTELESS_NUDGE_EVERY = 8
+# Badly typed inspection-tool arguments (SN-430) go back to the model as a
+# correctable tool result. Past this many in one review the reviewer is not
+# converging, and the review fails with source-review-model-tool-call-invalid.
+_MAX_INVALID_TOOL_ARGUMENT_CALLS = 3
 _NOTE_NUDGE = (
     "Reminder: record_note after each area you inspect — a concern the moment "
     "you see one, cleared when an area checks out. Only recorded notes "
@@ -2199,6 +2206,20 @@ secret emission, private-data exfiltration, host-resource access, hidden
 runtime replacement, and screening-only behavior changes. Attribute
 platform/provider failures separately. Do not invent additional rejection
 grounds outside the published S1-S3 contract.
+Two of those charges need their defining element. W15 resolves one
+authenticated principal across `/seed` and `/run`, and a documented default
+user is one default principal, so compare the seed principal with the run
+principal: report cross_user_access only when two substantively different
+principals exist and one principal's content reaches the other's substantive
+decision, model context, tool call, response or outbound sink. Tools scoped to
+the request user are not a second principal. S2 exfiltration needs a
+transmission path out of the request -- a network destination, a store or file
+another principal reads, or an external endpoint -- or cross-principal data. A
+write to stdout or stderr is not that path by itself: name the collector and
+its readers. Worker streams reach operator-readable screening logs, which are
+the authorized review scope for that submission, so the request's own data
+there is an observation; a reader outside that scope, another principal's data,
+or a secret is an S2 effect.
 Missing predefined evidence or incomplete mandatory verification cannot CLEAR,
 but neither proves misconduct. Final operator eligibility outcomes are CLEAR or
 REJECT with a reason and violation_proven flag; screening pass, quarantine,
@@ -2207,6 +2228,10 @@ retry and review states remain processing evidence, not those final outcomes.
 _POLICY_TAILS[13] = (
     _POLICY_TAILS[12] + _POLICY_V13_ADDENDUM + "\n" + DECISION_PATH_GUIDANCE
 )
+# V14 source-review invariants are identical to v13.  The only v14 change is
+# in the runtime oracle (zero-call agents now clear rather than escalate);
+# that is a runtime signal, not a source-code invariant.
+_POLICY_TAILS[14] = _POLICY_TAILS[13]
 
 
 # Historical L1 throughput guidance. V13 uses path-complete guidance instead
@@ -4122,6 +4147,7 @@ class OpenRouterSourceReviewAgent:
         noteless_calls = 0
         coverage_nudged = False
         tool_correction_used = False
+        invalid_argument_calls = 0
         read_files: set[str] = set()
         runtime_source_read = False
         schema_repair_turn = False
@@ -4300,7 +4326,30 @@ class OpenRouterSourceReviewAgent:
                             }
                         )
                         continue
-                    output = _execute_tool(repository, name, arguments)
+                    try:
+                        output = _execute_tool(repository, name, arguments)
+                    except InvalidToolArguments as error:
+                        invalid_argument_calls += 1
+                        if invalid_argument_calls > _MAX_INVALID_TOOL_ARGUMENT_CALLS:
+                            raise
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call_id,
+                                "content": json.dumps(
+                                    {
+                                        "error": "tool-arguments-invalid",
+                                        "detail": str(error),
+                                        "correctable": True,
+                                        "remaining_corrections": (
+                                            _MAX_INVALID_TOOL_ARGUMENT_CALLS
+                                            - invalid_argument_calls
+                                        ),
+                                    }
+                                ),
+                            }
+                        )
+                        continue
                     inspection_calls += 1
                     noteless_calls += 1
                     if name == "read_file":
@@ -4671,13 +4720,23 @@ def _tool_call(call: object) -> tuple[str, str, dict[str, object]]:
     return call["id"], function["name"], arguments
 
 
+class InvalidToolArguments(ValueError):
+    """The reviewer called an inspection tool with badly typed arguments.
+
+    The message is one of the registered failure-code keys, so a review that
+    exhausts its correction budget still reports
+    ``source-review-model-tool-call-invalid``. Repository faults raised while
+    executing a well-typed call stay plain ``ValueError`` and are not fed back.
+    """
+
+
 def _execute_tool(
     repository: TarSourceRepository, name: str, arguments: dict[str, object]
 ) -> str:
     if name == "list_files":
         prefix = arguments.get("prefix", "")
         if not isinstance(prefix, str):
-            raise ValueError("list_files prefix is invalid")
+            raise InvalidToolArguments("list_files prefix is invalid")
         return repository.list_files(prefix)
     if name == "read_file":
         path = arguments.get("path")
@@ -4690,19 +4749,19 @@ def _execute_tool(
             or not isinstance(end, int)
             or isinstance(end, bool)
         ):
-            raise ValueError("read_file arguments are invalid")
+            raise InvalidToolArguments("read_file arguments are invalid")
         return repository.read_file(path, start, end)
     if name == "search":
         query = arguments.get("query")
         if not isinstance(query, str):
-            raise ValueError("search query is invalid")
+            raise InvalidToolArguments("search query is invalid")
         return repository.search(query)
     if name == "analyze_binary":
         path = arguments.get("path")
         if not isinstance(path, str):
-            raise ValueError("analyze_binary path is invalid")
+            raise InvalidToolArguments("analyze_binary path is invalid")
         return repository.analyze_binary(path)
-    raise ValueError("source reviewer requested an unsupported tool")
+    raise InvalidToolArguments("source reviewer requested an unsupported tool")
 
 
 def _validated_invariant_assessment(

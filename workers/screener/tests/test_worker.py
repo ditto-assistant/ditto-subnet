@@ -1270,6 +1270,32 @@ async def test_local_build_failure_forwards_signed_private_miner_feedback(
     _signed_request(verdict)
 
 
+async def test_tool_catalog_rejection_forwards_private_miner_feedback(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    gate = _FakeGate(
+        core_decision(
+            ScreeningOutcome.DETERMINISTIC_REJECT,
+            code="tool-catalog-context-overflow",
+            summary="harness request exceeds the scoring model context",
+            detail=(
+                "the harness forwarded 2000 tool definitions, at least 140035 "
+                "tokens; the scoring model accepts 131072"
+            ),
+        )
+    )
+    worker = _worker(make_config(), platform, gate)
+
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+
+    verdict = platform.verdicts[0]
+    assert verdict["reason_code"] == "tool-catalog-context-overflow"
+    assert verdict["private_failure_detail"] is not None
+    assert "2000 tool definitions" in verdict["private_failure_detail"]
+    _signed_request(verdict)
+
+
 async def test_seed_probe_rejection_forwards_private_miner_feedback(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -1346,6 +1372,39 @@ def test_legacy_reason_ignores_shadow_seed_for_every_non_rejection(
         PolicyEvidence("stable-core", "seed-envelope-usage", "sandbox headroom"),
     )
     assert _verdict_reason_code(outcome, evidence) == reason
+
+
+@pytest.mark.parametrize(
+    ("outcome", "reason"),
+    [
+        (ScreenResultOutcome.PASS, "health-ok"),
+        (ScreenResultOutcome.QUARANTINE, "source-finding-held"),
+    ],
+)
+def test_legacy_reason_ignores_shadow_tool_catalog_records(
+    outcome: ScreenResultOutcome, reason: str
+) -> None:
+    evidence = (
+        PolicyEvidence("review", reason, "deciding result"),
+        PolicyEvidence(
+            "stable-core", "tool-catalog-context-overflow", "shadow overflow"
+        ),
+        PolicyEvidence("stable-core", "tool-catalog-request-size", "2000 tools"),
+    )
+    assert _verdict_reason_code(outcome, evidence) == reason
+    # The size record is never a reason, even on a rejection.
+    assert (
+        _verdict_reason_code(
+            ScreenResultOutcome.DETERMINISTIC_REJECT,
+            (
+                PolicyEvidence(
+                    "stable-core", "tool-catalog-context-overflow", "overflow"
+                ),
+                PolicyEvidence("stable-core", "tool-catalog-request-size", "size"),
+            ),
+        )
+        == "tool-catalog-context-overflow"
+    )
 
 
 @pytest.mark.parametrize(
@@ -2303,6 +2362,70 @@ async def test_run_forever_exits_immediately_when_stopped(
     stop = asyncio.Event()
     stop.set()
     await asyncio.wait_for(worker.run_forever(stop), timeout=2.0)
+
+
+async def test_idle_worker_exits_after_its_idle_bound(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(
+        make_config(idle_exit_seconds=0.05, poll_seconds=0.01), platform, gate
+    )
+
+    idle = await asyncio.wait_for(worker.run_forever(asyncio.Event()), timeout=2.0)
+
+    assert idle is True
+    assert platform.claim_calls >= 1
+
+
+async def test_screening_work_resets_the_idle_bound(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    agent = uuid4()
+    platform = _FakePlatform([[_item(agent)], []])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(
+        make_config(idle_exit_seconds=0.05, poll_seconds=0.01), platform, gate
+    )
+
+    idle = await asyncio.wait_for(worker.run_forever(asyncio.Event()), timeout=2.0)
+
+    # The claimed attempt finished with its signed verdict before the exit.
+    assert idle is True
+    assert gate.calls == [agent]
+    assert [verdict["agent_id"] for verdict in platform.verdicts] == [agent]
+
+
+async def test_requested_stop_wins_over_an_elapsed_idle_bound(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([[]])
+    stop = asyncio.Event()
+    # The stop lands during a zero-work sweep after the idle bound elapsed.
+    platform.stop_after_queue = stop
+    worker = _worker(
+        make_config(idle_exit_seconds=0.000001, poll_seconds=0.01),
+        platform,
+        _FakeGate(_decision(ScreeningOutcome.PASS)),
+    )
+
+    assert await asyncio.wait_for(worker.run_forever(stop), timeout=2.0) is False
+
+
+async def test_worker_without_idle_bound_reports_a_plain_stop(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([[], []])
+    stop = asyncio.Event()
+    platform.stop_after_queue = stop
+    worker = _worker(
+        make_config(poll_seconds=0.01),
+        platform,
+        _FakeGate(_decision(ScreeningOutcome.PASS)),
+    )
+
+    assert await asyncio.wait_for(worker.run_forever(stop), timeout=2.0) is False
 
 
 async def test_policy_below_floor_does_not_claim(

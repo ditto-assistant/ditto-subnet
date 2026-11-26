@@ -167,6 +167,12 @@ MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
 DEFAULT_SANDBOX_MEMORY_LIMIT_MIB = 6_144
 MIN_SANDBOX_MEMORY_LIMIT_MIB = 512
 MAX_SANDBOX_MEMORY_LIMIT_MIB = 32_768
+# SN-500 step 2: the P95 harness-memory factor. Below the free allowance a run
+# keeps its full composite; above it the factor falls linearly to the floor at
+# the run's own cap. Shadow by default: recorded, never applied.
+DEFAULT_MEMORY_FACTOR_FREE_MIB = 512
+DEFAULT_MEMORY_FACTOR_FLOOR_BPS = 9_000
+MIN_MEMORY_FACTOR_FLOOR_BPS = 5_000
 
 
 class BenchmarkRuntimeSettings(BaseModel):
@@ -194,6 +200,18 @@ class BenchmarkRuntimeSettings(BaseModel):
         int,
         Field(ge=MIN_SANDBOX_MEMORY_LIMIT_MIB, le=MAX_SANDBOX_MEMORY_LIMIT_MIB),
     ] = DEFAULT_SANDBOX_MEMORY_LIMIT_MIB
+    # SN-500 step 2. ``shadow`` records details.memory_factor on every v16+
+    # score without touching the composite; ``enforce`` multiplies the factor
+    # into the composite gate; ``off`` records nothing. Flip only at a season
+    # boundary, and only once the fleet runs a release that reads it: a lease
+    # stamps the posture, so one quorum never mixes postures.
+    memory_factor_posture: Literal["off", "shadow", "enforce"] = "shadow"
+    memory_factor_free_mib: Annotated[
+        int, Field(ge=0, le=MAX_SANDBOX_MEMORY_LIMIT_MIB)
+    ] = DEFAULT_MEMORY_FACTOR_FREE_MIB
+    memory_factor_floor_bps: Annotated[
+        int, Field(ge=MIN_MEMORY_FACTOR_FLOOR_BPS, le=10_000)
+    ] = DEFAULT_MEMORY_FACTOR_FLOOR_BPS
 
     @model_validator(mode="after")
     def _delay_range_is_ordered(self) -> BenchmarkRuntimeSettings:
@@ -463,6 +481,13 @@ class InferenceConcurrencySettings(BaseModel):
     within the relay's five-second refresh; set ``throughput`` to revert.
     """
 
+    danilabs_percent: Annotated[int, Field(ge=0, le=100, strict=True)] = 0
+    """Percentage of eligible GPT-OSS chat requests selected for the DaniLabs trial.
+
+    Zero disables selection. The relay also requires a server-side credential and
+    an unexpired free-trial deadline; ineligible requests use OpenRouter.
+    """
+
     @model_validator(mode="after")
     def _hierarchy_holds(self) -> InferenceConcurrencySettings:
         if self.chat_per_ticket_concurrency > self.chat_per_validator_concurrency:
@@ -593,7 +618,12 @@ class AdminInferenceConcurrencySettingsRequest(BaseModel):
         # their current values instead of resetting them.
         missing = sorted(
             set(InferenceConcurrencySettings.model_fields)
-            - {"benchmark_runtime", "decision_lane", "scored_provider_routing"}
+            - {
+                "benchmark_runtime",
+                "decision_lane",
+                "scored_provider_routing",
+                "danilabs_percent",
+            }
             - self.settings.model_fields_set
         )
         if missing:

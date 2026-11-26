@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from ditto_screening_protocol import SCREENING_ACTIVATION_CEILING_POLICY_VERSION
 from ditto_screening_protocol.v13_replay_process_identity import (
     ReplayPurpose,
     V13ReplayProcessProof,
@@ -118,7 +119,7 @@ async def verify_replay_process_proof(
             heartbeat.node_id != registration.node_id
             or heartbeat.instance_id != registration.instance_id
             or heartbeat.key_sha256 != registration.key_sha256
-            or heartbeat.policy_version != 13
+            or heartbeat.policy_version < SCREENING_ACTIVATION_CEILING_POLICY_VERSION
             or heartbeat.release < minimum_release
             or not now - _HEARTBEAT_MAX_AGE_SECONDS <= heartbeat.seen_at <= now + 5
         ):

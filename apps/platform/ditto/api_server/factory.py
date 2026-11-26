@@ -49,6 +49,8 @@ from ditto.api_server.dashboard_seo import (
 )
 from ditto.api_server.datapipeline import create_generator
 from ditto.api_server.ditto_link import DittoLinkClient
+from ditto.api_server.edge_lane import ObjectBytesCache
+from ditto.api_server.edge_lane_settings import EdgeLaneSettingsResolver
 from ditto.api_server.efficiency import EfficiencyStateMaterializer
 from ditto.api_server.efficiency_settings import (
     DEFAULT_SETTINGS_TTL_SECONDS,
@@ -58,6 +60,7 @@ from ditto.api_server.embedding import create_embedder
 from ditto.api_server.emission_allocation import EmissionAllocationResolver
 from ditto.api_server.emission_eligibility import EmissionEligibilityResolver
 from ditto.api_server.endpoints import (
+    admin_airdrops_router,
     admin_artifact_release_settings_router,
     admin_ath_review_queue_slo_router,
     admin_ath_rulings_router,
@@ -74,11 +77,13 @@ from ditto.api_server.endpoints import (
     admin_copy_review_router,
     admin_database_backup_router,
     admin_dueling_router,
+    admin_edge_lane_settings_router,
     admin_efficiency_bonus_settings_router,
     admin_emission_allocation_router,
     admin_emission_eligibility_router,
     admin_generator_competition_router,
     admin_generator_rounds_router,
+    admin_harness_memory_router,
     admin_hotkey_bans_router,
     admin_inference_admission_router,
     admin_inference_concurrency_settings_router,
@@ -88,11 +93,13 @@ from ditto.api_server.endpoints import (
     admin_leaderboard_router,
     admin_lease_revocations_router,
     admin_miner_fees_router,
+    admin_model_context_router,
     admin_outlier_escalation_router,
     admin_owner_router,
     admin_provider_outages_router,
     admin_quarantine_router,
     admin_queue_policy_settings_router,
+    admin_registration_freshness_router,
     admin_retirement_router,
     admin_scoring_lease_settings_router,
     admin_scoring_readiness_router,
@@ -112,6 +119,7 @@ from ditto.api_server.endpoints import (
     admin_treasury_receipts_router,
     admin_treasury_settings_router,
     admin_unreleased_copy_router,
+    admin_upload_payments_router,
     admin_v13_private_generation_router,
     admin_v13_scorer_cohort_router,
     admin_validation_retry_router,
@@ -137,7 +145,10 @@ from ditto.api_server.endpoints import (
     miner_github_link_router,
     miner_mcp_router,
     miner_me_router,
+    model_context_router,
+    model_context_scorer_router,
     name_claims_router,
+    public_dueling_router,
     public_router,
     retrieval_router,
     scoring_router,
@@ -149,6 +160,12 @@ from ditto.api_server.endpoints import (
     validator_private_dataset,
     validator_router,
 )
+from ditto.api_server.endpoints import admin_edge_lane as admin_edge_lane_endpoints
+from ditto.api_server.endpoints import (
+    admin_readmissions as admin_readmissions_endpoints,
+)
+from ditto.api_server.endpoints import edge as edge_endpoints
+from ditto.api_server.endpoints import readmission as readmission_endpoints
 from ditto.api_server.endpoints import screener as screener_endpoints
 from ditto.api_server.endpoints import upload as upload_endpoints
 from ditto.api_server.endpoints import validator as validator_endpoints
@@ -158,9 +175,11 @@ from ditto.api_server.endpoints.admin_benchmark_canary import (
 from ditto.api_server.endpoints.admin_conversation import (
     router as admin_conversation_router,
 )
+from ditto.api_server.endpoints.admin_edge_lane import router as admin_edge_lane_router
 from ditto.api_server.endpoints.admin_operator_diagnostic import (
     router as admin_operator_diagnostic_router,
 )
+from ditto.api_server.endpoints.edge import router as edge_router
 from ditto.api_server.endpoints.screener_conversation import (
     router as screener_conversation_router,
 )
@@ -174,6 +193,7 @@ from ditto.api_server.endpoints.verification_replay import (
     screener_router as screener_verification_replay_router,
 )
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
+from ditto.api_server.gc_tuning import apply_gc_tuning, parse_gc_tuning_from_env
 from ditto.api_server.generator_round_reservation import (
     GeneratorRoundReservationResolver,
 )
@@ -194,6 +214,7 @@ from ditto.api_server.middleware import (
 )
 from ditto.api_server.middleware.public_cache import compute_etag, if_none_match
 from ditto.api_server.miner_avatar import MAX_AVATAR_BYTES
+from ditto.api_server.model_context_competition import ModelContextLoop
 from ditto.api_server.no_store import NoStoreMiddleware
 from ditto.api_server.outage_sweep import OutageVoidSweeper
 from ditto.api_server.payment_verifier import create_payment_verifier
@@ -209,6 +230,7 @@ from ditto.api_server.screener_policy_activation import (
 )
 from ditto.api_server.source_emission_collector import SourceEmissionCollector
 from ditto.api_server.storage import create_storage_client
+from ditto.api_server.terminal_failure_sweep import TerminalFailureSweeper
 from ditto.api_server.track_share_settings import TrackShareSettingsResolver
 from ditto.api_server.unreleased_copy_sentinel import UnreleasedCopySentinel
 from ditto.api_server.validator_names import create_validator_names
@@ -306,6 +328,14 @@ def _request_body_route_limits() -> tuple[tuple[str, int], ...]:
             validator_endpoints.WEIGHT_RECEIPT_MAX_BYTES,
         ),
         (r"/api/v1/screener/heartbeat", screener_endpoints.HEARTBEAT_MAX_BYTES),
+        # Ditto Edge node protocol (SN-481): small signed control documents,
+        # and challenge answers of at most one 256 KiB range.
+        (r"/api/v1/edge/challenges/[^/]+", edge_endpoints.ANSWER_MAX_BYTES),
+        (
+            r"/api/v1/edge/(?:nodes|nodes/me/leave|poll|ack)",
+            edge_endpoints.CONTROL_MAX_BYTES,
+        ),
+        (r"/api/v1/admin/edge/objects", admin_edge_lane_endpoints.INGEST_MAX_BYTES),
     )
 
 
@@ -510,6 +540,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await capacity_event_janitor.start()
             app.state.screener_capacity_event_janitor = capacity_event_janitor
 
+            # Catch-up for terminal artifact failure close-outs the
+            # /validator/job/fail hook dropped, and rows stranded before it.
+            terminal_failure_sweeper = TerminalFailureSweeper(
+                session_maker=app.state.session_maker
+            )
+            stack.push_async_callback(terminal_failure_sweeper.aclose)
+            if run_background_tasks:
+                await terminal_failure_sweeper.start()
+            app.state.terminal_failure_sweeper = terminal_failure_sweeper
+
             # Copy-hold triage court. Settings-gated: with no revision (or
             # mode off) each tick is a cheap no-op, so the loop runs on the
             # platform role unconditionally like the nonce janitor.
@@ -564,6 +604,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if run_background_tasks:
                 await generator_round_loop.start()
                 app.state.generator_round_loop = generator_round_loop
+            # model_context (CPM) seasons and submission screening. Settings-
+            # gated like the generator loop: with mode off a tick is one
+            # settings read.
+            model_context_loop = ModelContextLoop(
+                app_state=app.state, session_maker=app.state.session_maker
+            )
+            stack.push_async_callback(model_context_loop.aclose)
+            if run_background_tasks:
+                await model_context_loop.start()
+                app.state.model_context_loop = model_context_loop
             emission_collector = SourceEmissionCollector(
                 app_state=app.state,
                 session_maker=app.state.session_maker,
@@ -608,6 +658,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 f"failed to open dependencies during startup: {e}"
             ) from e
 
+        # Last, so the frozen generation holds the whole warmed-up startup heap.
+        apply_gc_tuning(parse_gc_tuning_from_env())
         logger.info(
             f"api server ready on {config.host}:{config.port} "
             f"commit={config.commit_hash}"
@@ -653,6 +705,10 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Served on the scoring ledger, so a change reaches the fleet on its next
     # poll instead of on a validator release.
     app.state.burn_settings = BurnSettingsResolver()
+    # Ditto Edge shadow lane policy (SN-481). Off by default; no mode reaches
+    # weights or emissions.
+    app.state.edge_lane_settings = EdgeLaneSettingsResolver()
+    app.state.edge_object_cache = ObjectBytesCache()
     # Operator-owned per-track emission split (memory / generator). Unset by
     # default, so the ledger omits it and validators keep their compiled split.
     app.state.track_share_settings = TrackShareSettingsResolver()
@@ -793,8 +849,12 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Root path (no /api/v1): Ditto fetches the challenge at the origin root.
     app.include_router(ditto_callback_challenge_router)
     app.include_router(upload_router, prefix="/api/v1")
+    app.include_router(readmission_endpoints.router, prefix="/api/v1")
+    app.include_router(admin_readmissions_endpoints.router, prefix="/api/v1")
     app.include_router(generator_router, prefix="/api/v1")
     app.include_router(generator_scorer_router, prefix="/api/v1")
+    app.include_router(model_context_router, prefix="/api/v1")
+    app.include_router(model_context_scorer_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")
     app.include_router(validator_private_dataset.router, prefix="/api/v1")
@@ -820,8 +880,10 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")
     app.include_router(admin_scoring_lease_settings_router, prefix="/api/v1")
     app.include_router(admin_generator_competition_router, prefix="/api/v1")
+    app.include_router(admin_model_context_router, prefix="/api/v1")
     app.include_router(admin_generator_rounds_router, prefix="/api/v1")
     app.include_router(admin_dueling_router, prefix="/api/v1")
+    app.include_router(public_dueling_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
     app.include_router(admin_traces_router, prefix="/api/v1")
     app.include_router(admin_efficiency_bonus_settings_router, prefix="/api/v1")
@@ -837,6 +899,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_provider_outages_router, prefix="/api/v1")
     app.include_router(admin_retirement_router, prefix="/api/v1")
     app.include_router(admin_validator_slot_settings_router, prefix="/api/v1")
+    app.include_router(admin_harness_memory_router, prefix="/api/v1")
     app.include_router(admin_validator_capacity_router, prefix="/api/v1")
     app.include_router(admin_validator_request_outcomes_router, prefix="/api/v1")
     app.include_router(admin_scoring_readiness_router, prefix="/api/v1")
@@ -845,6 +908,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_l2_report_canary_router, prefix="/api/v1")
     app.include_router(admin_screener_capacity_router, prefix="/api/v1")
     app.include_router(admin_database_backup_router, prefix="/api/v1")
+    app.include_router(admin_registration_freshness_router, prefix="/api/v1")
     app.include_router(admin_screening_infra_retry_router, prefix="/api/v1")
     app.include_router(admin_source_review_queue_slo_router, prefix="/api/v1")
     app.include_router(admin_ath_review_queue_slo_router, prefix="/api/v1")
@@ -853,8 +917,10 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_submission_deposit_address_router, prefix="/api/v1")
     app.include_router(admin_copy_review_router, prefix="/api/v1")
     app.include_router(admin_ath_rulings_router, prefix="/api/v1")
+    app.include_router(admin_airdrops_router, prefix="/api/v1")
     app.include_router(admin_copy_court_router, prefix="/api/v1")
     app.include_router(admin_unreleased_copy_router, prefix="/api/v1")
+    app.include_router(admin_upload_payments_router, prefix="/api/v1")
     app.include_router(admin_competition_improvement_router, prefix="/api/v1")
     app.include_router(admin_screening_review_cost_router, prefix="/api/v1")
     app.include_router(admin_confirmation_seed_anchors_router, prefix="/api/v1")
@@ -862,6 +928,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
     app.include_router(admin_claim_provenance_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
+    app.include_router(admin_edge_lane_settings_router, prefix="/api/v1")
+    app.include_router(admin_edge_lane_router, prefix="/api/v1")
+    app.include_router(edge_router, prefix="/api/v1")
     app.include_router(admin_track_share_settings_router, prefix="/api/v1")
     app.include_router(admin_emission_allocation_router, prefix="/api/v1")
     app.include_router(admin_emission_eligibility_router, prefix="/api/v1")

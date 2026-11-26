@@ -30,6 +30,7 @@ import type {
   AcceptedScore,
   ActivityEntry,
   BenchmarkProgress,
+  HarnessMemory,
   InferenceRun,
   PipelinePayload,
   ScreeningAttempt,
@@ -60,6 +61,7 @@ import { CasesSection } from "./Cases";
 import { ScreeningDispute } from "./DisputeForm";
 import { ScreeningReview } from "./ScreeningReview";
 import { TelemetryLoader } from "./Telemetry";
+import { DuelingBreakdownPanel } from "./DuelingBreakdown";
 import { GateEvidencePanel } from "./GateEvidence";
 import { V9GateEvidence } from "./V9GateEvidence";
 import {
@@ -477,6 +479,7 @@ function AcceptedScoreView(props: {
         </Show>
         <Show when={score().v9_base}>{(evidence) => <V9GateEvidence evidence={evidence()} />}</Show>
         <GateEvidencePanel evidence={score().gate_evidence} />
+        <DuelingBreakdownPanel breakdown={score().dueling_breakdown} />
       </div>
       <CasesSection caseResults={score().case_results} glossary={props.glossary} />
     </div>
@@ -884,6 +887,67 @@ function InferenceRuns(props: { runs: InferenceRun[] }): JSX.Element {
   );
 }
 
+function formatMib(bytes: number | null | undefined): string {
+  const value = Number(bytes);
+  // Missing is "—"; a reported zero is a reading and shows as 0 MiB.
+  if (bytes == null || !Number.isFinite(value) || value < 0) return "—";
+  return Math.round(value / 1048576).toLocaleString() + " MiB";
+}
+
+// SN-500: the harness's own measured memory, published per agent so a miner
+// can see the P95 and peak its validators observed against the sandbox cap.
+function HarnessMemorySection(props: { memory: HarnessMemory | null | undefined }): JSX.Element {
+  return (
+    <Show when={props.memory}>
+      {(memory) => (
+        <section class="pipeline-section" aria-labelledby="pipeline-harness-memory">
+          <div class="pipeline-section-heading inference-spend-heading">
+            <div>
+              <h4 id="pipeline-harness-memory">Harness memory</h4>
+              <p>Measured in the sandbox on each validator run: time-weighted P95 and peak.</p>
+            </div>
+            <div class="inference-spend-totals">
+              <strong>P95 {formatMib(memory().p95_bytes_median)} median</strong>
+              <span>
+                peak {formatMib(memory().peak_bytes_max)} · cap{" "}
+                {formatMib(memory().limit_bytes_max)} · {memory().runs || 0}{" "}
+                {memory().runs === 1 ? "run" : "runs"}
+              </span>
+            </div>
+          </div>
+          <div class="inference-run-list" aria-label="Recent harness memory runs">
+            <For each={memory().recent_runs || []}>
+              {(run) => (
+                <div class="inference-run">
+                  <div class="inference-run-main">
+                    <div class="inference-run-title">
+                      <b>Validator {shortKey(run.validator_hotkey)}</b>
+                      <span class="bench-version-badge">
+                        {run.bench_version == null
+                          ? "Bench unknown"
+                          : "Bench v" + run.bench_version}
+                      </span>
+                      <span class={"stage" + (run.outcome === "failed" ? " bad" : "")}>
+                        {run.outcome === "failed" ? "Failed" : "Scored"}
+                      </span>
+                      <span class="attempt-time">{relTime(run.lease_issued_at)}</span>
+                    </div>
+                    <div class="inference-run-meta" aria-label="Harness memory for this run">
+                      <span>P50 {formatMib(run.p50_bytes)}</span>
+                      <span>Peak {formatMib(run.peak_bytes)}</span>
+                    </div>
+                  </div>
+                  <div class="inference-run-cost">P95 {formatMib(run.p95_bytes)}</div>
+                </div>
+              )}
+            </For>
+          </div>
+        </section>
+      )}
+    </Show>
+  );
+}
+
 // ── The drawer body ──────────────────────────────────────────────────────────
 //
 export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
@@ -1258,6 +1322,7 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
                   </div>
                 </section>
                 <InferenceRuns runs={detail().inference_runs || []} />
+                <HarnessMemorySection memory={detail().harness_memory} />
                 <AcceptedScores pipeline={detail()} config={config} glossary={glossaryData} />
                 <ConfirmationScores pipeline={detail()} entries={entries} />
                 <section class="pipeline-section" aria-labelledby="pipeline-validator-history">

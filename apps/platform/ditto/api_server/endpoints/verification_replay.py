@@ -69,6 +69,7 @@ from ditto.db.models import (
     ScreeningVerificationReplaySignedObservation,
 )
 from ditto.db.queries.benchmark_rollout import arrival_bench_version
+from ditto_screening_protocol import SCREENING_ACTIVATION_CEILING_POLICY_VERSION
 from ditto_screening_protocol.models import (
     ScreenReviewAudit,
     SourceReviewNote,
@@ -204,7 +205,7 @@ async def get_replay_process_readiness(
         and heartbeat is not None
         and seen_at is not None
         and marker_sha == key.key_sha256
-        and heartbeat.policy_version == 13
+        and heartbeat.policy_version >= SCREENING_ACTIVATION_CEILING_POLICY_VERSION
         and now - timedelta(seconds=300) <= seen_at <= now + timedelta(seconds=5)
     )
     minimum = admin_screener_capacity._MIN_VERIFICATION_REPLAY_RUNNER_RELEASE

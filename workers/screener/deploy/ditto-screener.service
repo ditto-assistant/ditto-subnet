@@ -15,6 +15,10 @@ Environment=HOME=/opt/ditto/screener
 ExecStart=/opt/ditto/screener/src/workers/screener/.venv/bin/ditto-screener
 Restart=always
 RestartSec=15
+# Status 85 is an opt-in idle exit (SCREENER_IDLE_EXIT_SECONDS): a clean,
+# deliberate stop that systemd must not undo. Every other exit still restarts.
+SuccessExitStatus=85
+RestartPreventExitStatus=85
 KillMode=mixed
 TimeoutStopSec=15min
 StandardOutput=append:/opt/ditto/logs/ditto-screener.log

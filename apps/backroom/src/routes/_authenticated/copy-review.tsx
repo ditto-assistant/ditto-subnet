@@ -2,12 +2,20 @@ import { createFileRoute } from '@tanstack/react-router'
 import { AlertTriangle, Copy } from 'lucide-react'
 import { PageHeader } from '../../components/PageHeader'
 import { CopyReviewPanel } from '../../components/CopyReviewPanel'
-import { listCopyReviews } from '../../server/admin.functions'
+import { ReviewQueueOverdue } from '../../components/ReviewQueueOverdue'
+import { getReviewQueueOverdue, listCopyReviews } from '../../server/admin.functions'
 
 export const Route = createFileRoute('/_authenticated/copy-review')({
   loader: async () => {
-    const reviews = await listCopyReviews({ data: { generation: 'active' } })
-    return { reviews }
+    const [reviews, overdue] = await Promise.all([
+      listCopyReviews({ data: { generation: 'active' } }),
+      // Never let the SLO read take the review queue down with it.
+      getReviewQueueOverdue().catch((error: unknown) => ({
+        clocks: [],
+        error: error instanceof Error ? error.message : String(error),
+      })),
+    ])
+    return { reviews, overdue }
   },
   pendingComponent: CopyReviewPending,
   errorComponent: CopyReviewError,
@@ -15,7 +23,7 @@ export const Route = createFileRoute('/_authenticated/copy-review')({
 })
 
 function CopyReviewPage() {
-  const { reviews } = Route.useLoaderData()
+  const { reviews, overdue } = Route.useLoaderData()
   const { user } = Route.useRouteContext()
 
   return (
@@ -31,6 +39,7 @@ function CopyReviewPage() {
           </div>
         }
       />
+      <ReviewQueueOverdue clocks={overdue.clocks} error={overdue.error} />
       <CopyReviewPanel
         initialItems={reviews.items}
         initialBulkEligibleCount={reviews.bulk_eligible_count}
@@ -52,12 +61,12 @@ function CopyReviewPending() {
   )
 }
 
-function CopyReviewError({ error }: { error: Error }) {
+function CopyReviewError({ error }: { error: unknown }) {
   return (
     <div className="mx-auto max-w-2xl rounded-xl border border-[var(--red)]/25 bg-[var(--red-dim)] p-6">
       <AlertTriangle className="h-6 w-6 text-[var(--red)]" />
       <h2 className="mt-4 text-lg font-semibold">Operator reviews are unavailable</h2>
-      <p className="mt-2 text-sm leading-6 text-[var(--muted-strong)]">{error.message}</p>
+      <p className="mt-2 text-sm leading-6 text-[var(--muted-strong)]">{error instanceof Error ? error.message : 'An unexpected error occurred'}</p>
       <p className="mt-3 text-xs text-[var(--muted)]">
         The copy-review endpoints require a platform deploy that includes the
         admin copy-review API and the shared admin token.

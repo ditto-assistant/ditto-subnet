@@ -538,17 +538,39 @@ async def confirmation_efficiency_costs_by_agent(
     }
 
 
+async def _dueling_scope(
+    session: AsyncSession, *, bench_version: int, planning: bool
+) -> ColumnElement[bool]:
+    """Bench v16+: only rows of the version's season window (or, for seed
+    planning, of its current season); ``true()`` below the floor."""
+    from ditto.db.queries.dueling_season_window import season_scope_predicate
+
+    return await season_scope_predicate(
+        session,
+        version_column=ConfirmationScore.bench_version,
+        season_column=ConfirmationScore.dueling_season_id,
+        bench_versions=(bench_version,),
+        planning=planning,
+    )
+
+
 async def confirmation_composites_by_seed(
     session: AsyncSession,
     *,
     agent_ids: Iterable[UUID],
     bench_version: int,
+    planning: bool = False,
 ) -> dict[UUID, dict[int, float]]:
     """Per agent, ``{seed: median composite across validators}`` for one version.
 
     The median across validators mirrors the k=3 composite selection (no single
     validator decides a seed), and pairs the fold uses shared seeds against the
     champion. Absent agents / versions map to an empty dict.
+
+    From the dueling floor only seeds scored inside the version's season
+    window count (:mod:`ditto.db.queries.dueling_season_window`);
+    ``planning=True`` narrows that to the current season, so a rotation plans
+    a fresh family rather than catching up on the last season's seeds.
     """
     ids = list(dict.fromkeys(agent_ids))
     if not ids:
@@ -562,6 +584,9 @@ async def confirmation_composites_by_seed(
             ConfirmationScore.agent_id.in_(ids),
             ConfirmationScore.bench_version == bench_version,
             not_voided(),
+            await _dueling_scope(
+                session, bench_version=bench_version, planning=planning
+            ),
         )
     )
     grouped: dict[UUID, dict[int, list[float]]] = {}
@@ -585,7 +610,8 @@ async def confirmation_history_by_agent(
 
     Ordered ``(seed, validator_hotkey)`` for a deterministic wire order. Raw
     per-``(validator, seed)`` records so the fold does its own group-by-seed
-    median; the platform does not pre-aggregate the exposed history.
+    median; the platform does not pre-aggregate the exposed history. From the
+    dueling floor only rows inside the version's season window are served.
     """
     ids = list(dict.fromkeys(agent_ids))
     if not ids:
@@ -604,6 +630,7 @@ async def confirmation_history_by_agent(
             ConfirmationScore.agent_id.in_(ids),
             ConfirmationScore.bench_version == bench_version,
             not_voided(),
+            await _dueling_scope(session, bench_version=bench_version, planning=False),
         )
         .order_by(ConfirmationScore.seed, ConfirmationScore.validator_hotkey)
     )
@@ -658,3 +685,91 @@ async def confirmation_depths(
         .group_by(ConfirmationScore.agent_id)
     )
     return {agent_id: int(depth) for agent_id, depth in rows}
+
+
+async def duel_history_by_agent(
+    session: AsyncSession,
+    *,
+    agent_ids: Iterable[UUID],
+    bench_version: int,
+    seasons: int,
+) -> dict[UUID, list[ConfirmationHistoryRow]]:
+    """Protocol-35 title-duel evidence: rows of the newest ``seasons`` seasons.
+
+    Unlike :func:`confirmation_history_by_agent` (the current and provisional
+    season only, which score levels read), the title duel accumulates paired
+    differences across dueling seasons, so this serves every not-voided row
+    with signed ``details.dueling`` from the ``seasons`` most recent seasons of
+    ``bench_version`` that hold any not-voided confirmation row. Seasons that
+    ran no duel (idle skip) are passed over, so evidence carries forward.
+    Empty below the dueling floor. Same row shape and deterministic
+    ``(seed, validator_hotkey)`` order.
+    """
+    from ditto.db.models import DuelingSeason
+    from ditto_screening_protocol.dueling import is_dueling_bench_version
+
+    ids = list(dict.fromkeys(agent_ids))
+    if not ids or seasons <= 0 or not is_dueling_bench_version(bench_version):
+        return {}
+    season_ids = list(
+        await session.scalars(
+            select(DuelingSeason.id)
+            .where(
+                DuelingSeason.bench_version == bench_version,
+                DuelingSeason.status.in_(("open", "closed", "revealed")),
+                # Seasons holding evidence, not merely opened ones: an idle
+                # season that skipped its duel must not push a real one out.
+                exists(
+                    select(ConfirmationScore.agent_id).where(
+                        ConfirmationScore.dueling_season_id == DuelingSeason.id,
+                        ConfirmationScore.bench_version == bench_version,
+                        not_voided(),
+                    )
+                ),
+            )
+            .order_by(DuelingSeason.season_index.desc())
+            .limit(int(seasons))
+        )
+    )
+    if not season_ids:
+        return {}
+    rows = await session.execute(
+        select(
+            ConfirmationScore.agent_id,
+            ConfirmationScore.seed,
+            ConfirmationScore.composite,
+            ConfirmationScore.validator_hotkey,
+            ConfirmationScore.bench_version,
+            ConfirmationScore.signature,
+            ConfirmationScore.dueling,
+        )
+        .where(
+            ConfirmationScore.agent_id.in_(ids),
+            ConfirmationScore.bench_version == bench_version,
+            ConfirmationScore.dueling_season_id.in_(season_ids),
+            not_voided(),
+        )
+        .order_by(ConfirmationScore.seed, ConfirmationScore.validator_hotkey)
+    )
+    history: dict[UUID, list[ConfirmationHistoryRow]] = {}
+    for (
+        agent_id,
+        seed,
+        composite,
+        validator_hotkey,
+        version,
+        signature,
+        dueling,
+    ) in rows:
+        history.setdefault(agent_id, []).append(
+            ConfirmationHistoryRow(
+                agent_id=agent_id,
+                seed=seed,
+                composite=composite,
+                validator_hotkey=validator_hotkey,
+                bench_version=version,
+                signature=signature,
+                dueling=dueling,
+            )
+        )
+    return history

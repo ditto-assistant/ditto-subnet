@@ -25,6 +25,7 @@ const SETTINGS: ContinualRetestSettingsControl['effective']['settings'] = {
   ledger_pin_mode: 'epoch',
   crown_incumbent_mode: 'disabled',
   crown_gate_mode: 'disabled',
+  crown_duel_mode: 'disabled',
   min_dethrone_confirmations: 3,
   champion_standing_rank: 3,
   idle_retests_enabled: false,
@@ -36,6 +37,9 @@ const SETTINGS: ContinualRetestSettingsControl['effective']['settings'] = {
   retest_cohort_max_size: 25,
   wave_cadence_tempos: 0,
   wave_seeds_per_window: 3,
+  retest_mode: 'continual' as const,
+  season_duel_seeds: 3,
+  season_duel_rotation_seeds: false,
 }
 
 function control(
@@ -64,6 +68,9 @@ function control(
       crown_gate_fleet_ready: false,
       crown_gate_active: false,
       crown_gate_required_protocol: 34,
+      crown_duel_fleet_ready: false,
+      crown_duel_active: false,
+      crown_duel_required_protocol: 35,
       ledger_pin: null,
       max_age_seconds: 5,
       open_rollout_desired_version: null,
@@ -81,6 +88,7 @@ function control(
       ledger_pin_mode: true,
       crown_incumbent_mode: true,
       crown_gate_mode: true,
+      crown_duel_mode: true,
       min_dethrone_confirmations: true,
       champion_standing_rank: true,
       retest_cohort_size: true,
@@ -90,6 +98,9 @@ function control(
       retest_cohort_max_size: true,
       wave_cadence_tempos: true,
       wave_seeds_per_window: true,
+      retest_mode: true,
+      season_duel_seeds: true,
+      season_duel_rotation_seeds: true,
     },
     cohort_sizing_supported: true,
   }
@@ -320,6 +331,7 @@ describe('ContinualRetestControlPanel', () => {
       ledger_pin_mode: 'live',
       crown_incumbent_mode: 'disabled',
       crown_gate_mode: 'disabled',
+      crown_duel_mode: 'disabled',
       min_dethrone_confirmations: 3,
       champion_standing_rank: 3,
       idle_retests_enabled: false,
@@ -331,6 +343,9 @@ describe('ContinualRetestControlPanel', () => {
       retest_cohort_max_size: 25,
       wave_cadence_tempos: 0,
       wave_seeds_per_window: 3,
+      retest_mode: 'continual' as const,
+      season_duel_seeds: 3,
+      season_duel_rotation_seeds: false,
     })
   })
 

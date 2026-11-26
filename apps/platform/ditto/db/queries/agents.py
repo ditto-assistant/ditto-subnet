@@ -8,13 +8,25 @@ two surfaces share their dispatch on the ORM model.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Text, case, cast, false, func, literal, or_, select, text, true
+from sqlalchemy import (
+    ColumnElement,
+    Text,
+    case,
+    cast,
+    false,
+    func,
+    literal,
+    or_,
+    select,
+    text,
+    true,
+)
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
-from sqlalchemy.orm import undefer_group
+from sqlalchemy.orm import aliased, undefer_group
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.db.errors import IntegrityError as DbIntegrityError
@@ -25,19 +37,25 @@ from ditto.db.models import (
     Score,
     ScreeningAttempt,
     SubmissionRetirement,
+    ValidatorQueueWithdrawal,
 )
 from ditto.db.queries.benchmark_admission import (
     admission_rollout_for_active_version,
     benchmark_admission_predicate,
+    previous_era_scored_agent_ids,
+    previous_era_scored_predicate,
     validator_queue_admission_predicate,
 )
 from ditto.db.queries.owner_submission_cooldown import (
     OwnerCooldownNotice,
+    latest_readmission_at,
     lock_owner_cooldown_hotkey,
     owner_override_retry_at,
 )
 from ditto.db.queries.screening_retry import failed_screening_retry_authorized
-from ditto.screener_policy_state import effective_screening_policy_version
+from ditto.screener_policy_state import (
+    lease_screening_policy_floor,
+)
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -77,9 +95,54 @@ class SubmissionCooldownDecision:
         )
 
 
+def _as_aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
 # Avoid importing ``queries.scores`` back into the agents module it already
 # imports. The public projection is the same fixed k=3 contract as the API.
 _PUBLIC_SCORE_QUORUM = 3
+
+
+async def latest_coldkey_submission_at(
+    session: AsyncSession, *, miner_coldkey: str
+) -> datetime | None:
+    """The coldkey's newest paid upload or admitted readmission (UTC)."""
+    latest = await session.scalar(
+        select(func.max(Agent.created_at))
+        .join(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
+        .where(EvaluationPayment.miner_coldkey == miner_coldkey)
+    )
+    readmitted = await latest_readmission_at(session, miner_coldkey=miner_coldkey)
+    if latest is not None:
+        latest = _as_aware(latest)
+    if readmitted is not None and (latest is None or readmitted > latest):
+        latest = readmitted
+    return latest
+
+
+async def submission_since_reservation_error(
+    session: AsyncSession,
+    *,
+    miner_coldkey: str,
+    reserved_at: datetime,
+    cooldown: timedelta,
+    now: datetime | None = None,
+) -> SubmissionCooldownError | None:
+    """The cooldown a reservation no longer covers, if any.
+
+    A live reservation was granted while the cooldown was clear, so consuming
+    it normally skips the check. But another submission by the same coldkey
+    that landed *after* the reservation was issued (an upload, or a
+    readmission through the other lane) starts a new cooldown the reservation
+    cannot have accounted for. Returns that cooldown's error, or ``None``.
+    """
+    latest = await latest_coldkey_submission_at(session, miner_coldkey=miner_coldkey)
+    if latest is None or latest <= _as_aware(reserved_at):
+        return None
+    current = _as_aware(now or datetime.now(UTC))
+    retry_at = latest + cooldown
+    return SubmissionCooldownError(retry_at) if retry_at > current else None
 
 
 async def get_submission_retry_at(
@@ -89,12 +152,12 @@ async def get_submission_retry_at(
     cooldown: timedelta,
     now: datetime | None = None,
 ) -> datetime | None:
-    """Return the next allowed submission time, or ``None`` when eligible."""
-    latest = await session.scalar(
-        select(func.max(Agent.created_at))
-        .join(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
-        .where(EvaluationPayment.miner_coldkey == miner_coldkey)
-    )
+    """Return the next allowed submission time, or ``None`` when eligible.
+
+    Measured from the coldkey's newest paid upload or admitted readmission:
+    a readmission counts toward, and starts, the same cooldown (SN-485).
+    """
+    latest = await latest_coldkey_submission_at(session, miner_coldkey=miner_coldkey)
     if latest is None:
         return None
 
@@ -458,6 +521,42 @@ class PublicActivityPage:
     admission_rollout: BenchmarkRollout | None
 
 
+# Status filters whose result changes when a finalized previous-era row reads
+# ``era_changed`` rather than its stored ``scored``/``live``.
+_PREVIOUS_ERA_SCORED_FILTER_STATUSES = frozenset({"era_changed", "scored", "live"})
+
+
+async def _relabel_previous_era_scored(
+    session: AsyncSession,
+    *,
+    rows: list[PublicActivityRow],
+    rollout: BenchmarkRollout | None,
+    bench_version: int,
+) -> list[PublicActivityRow]:
+    """Relabel the page's finalized previous-era rows ``era_changed``.
+
+    One query, keyed by the page's own ``scored``/``live`` rows that hold no
+    active-version score, through the same predicate as the stranded listing.
+    A page with no such row, or an era with no previous version, costs nothing.
+    """
+    candidates = [
+        row.agent.agent_id
+        for row in rows
+        if row.public_status in ("scored", "live") and row.score_count == 0
+    ]
+    stranded = await previous_era_scored_agent_ids(
+        session, agent_ids=candidates, bench_version=bench_version, rollout=rollout
+    )
+    if not stranded:
+        return rows
+    return [
+        replace(row, public_status="era_changed")
+        if row.agent.agent_id in stranded
+        else row
+        for row in rows
+    ]
+
+
 async def query_public_activity_page(
     session: AsyncSession,
     *,
@@ -515,10 +614,44 @@ async def query_public_activity_page(
         .correlate(Agent)
         .exists()
     )
-    admitted = validator_queue_admission_predicate(bench_version=bench_version)
-    if rollout is not None:
-        admitted &= benchmark_admission_predicate(
-            rollout=rollout, bench_version=bench_version
+    # An in-force withdrawal that names the agent's own terminal failure. The
+    # submission cannot finish scoring on this version, which is a more
+    # specific answer than the neutral ``not_queued`` the withdrawal would
+    # otherwise project as.
+    terminal_failure = (
+        select(ValidatorQueueWithdrawal.agent_id)
+        .where(
+            ValidatorQueueWithdrawal.agent_id == Agent.agent_id,
+            ValidatorQueueWithdrawal.bench_version == bench_version,
+            ValidatorQueueWithdrawal.terminal_failure_code.is_not(None),
+            ValidatorQueueWithdrawal.reinstated_at.is_(None),
+        )
+        .correlate(Agent)
+        .exists()
+    )
+    queue_open = validator_queue_admission_predicate(bench_version=bench_version)
+    era_admitted: ColumnElement[bool] = (
+        benchmark_admission_predicate(rollout=rollout, bench_version=bench_version)
+        if rollout is not None
+        else true()
+    )
+    admitted = queue_open & era_admitted
+    # A finalized previous-era row the active era never admits (the stranded
+    # listing's population) reads ``era_changed`` (SN-485). Activity polls every
+    # eight seconds, so the projection does not test every scored row for it:
+    # the returned page is relabelled after pagination with one bounded lookup
+    # (below). Only a status filter that can include or exclude such a row
+    # needs the SQL form, so that the filtered page and its total are exact.
+    previous_era_scored: ColumnElement[bool] = false()
+    era_filtered = bool(requested_statuses & _PREVIOUS_ERA_SCORED_FILTER_STATUSES)
+    if era_filtered and rollout is not None and rollout.from_version < bench_version:
+        stranded = aliased(Agent)
+        previous_era_scored = (score_count == 0) & Agent.agent_id.in_(
+            select(stranded.agent_id).where(
+                previous_era_scored_predicate(
+                    rollout=rollout, bench_version=bench_version, agent=stranded
+                )
+            )
         )
     active_validation = (
         Agent.agent_id.in_(active_validation_agent_ids)
@@ -537,7 +670,7 @@ async def query_public_activity_page(
     # submission on the public board.
     needs_rescreen = (
         (Agent.status == AgentStatus.EVALUATING)
-        & (Agent.screening_policy_version < effective_screening_policy_version())
+        & (Agent.screening_policy_version < lease_screening_policy_floor())
         & admitted
     )
     failed_retry_authorized = failed_screening_retry_authorized()
@@ -571,13 +704,22 @@ async def query_public_activity_page(
             literal("screening_failed"),
         ),
         (waiting_state & retired, literal("retired")),
+        (waiting_state & terminal_failure, literal("scoring_failed")),
+        # An operator withdrawal is named first, as before: it is the reason
+        # an otherwise admitted row is out of the queue. Every other refusal
+        # is the era boundary, and that reads ``era_changed`` (SN-485).
         (
-            waiting_state & ~admitted & ~active_validation & ~live_assignment,
+            waiting_state & ~queue_open & ~active_validation & ~live_assignment,
             literal("not_queued"),
+        ),
+        (
+            waiting_state & ~era_admitted & ~active_validation & ~live_assignment,
+            literal("era_changed"),
         ),
         (waiting_state & below_floor, literal("below_score_floor")),
         (waiting_state & active_validation, literal("evaluating")),
         (waiting_state, literal("waiting_validator")),
+        (previous_era_scored, literal("era_changed")),
         (
             Agent.status.in_((AgentStatus.ATH_PENDING_REVIEW, AgentStatus.QUARANTINED)),
             literal("under_review"),
@@ -644,6 +786,8 @@ async def query_public_activity_page(
             .order_by(base.c.public_status)
         )
     ).all()
+    # Unfiltered, a finalized previous-era row still counts under its stored
+    # ``scored``/``live``: only the returned page is relabelled ``era_changed``.
     status_counts = {str(status): int(count) for status, count in status_rows}
 
     filtered_statement = select(base)
@@ -789,6 +933,10 @@ async def query_public_activity_page(
             _board_group,
         ) in detail_rows
     ]
+    if not era_filtered:
+        rows = await _relabel_previous_era_scored(
+            session, rows=rows, rollout=rollout, bench_version=bench_version
+        )
     waiting_agent_ids = list(
         await session.scalars(
             select(projected.c.agent_id)

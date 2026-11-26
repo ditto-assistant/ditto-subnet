@@ -56,6 +56,7 @@ function item(overrides: Partial<CopyReviewConsoleItem> = {}): CopyReviewConsole
       duplicate_of_hotkey: '5G9QoBvJLtAsE9WRnz8cPknYu6D6WfHmfbfGxiWpyvs5JSP4',
       duplicate_of_submitted_at: '2026-07-15T04:52:56Z',
       deferred_review: null,
+      reference_public_release: null,
     },
     current_comparison: {
       availability: 'available',

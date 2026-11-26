@@ -334,10 +334,10 @@ func validateCase(v *validator, c Case, gradingVersion, nWaves int, pairs map[st
 		if kind == protocol.AnswerMoney {
 			forms = moneySurfaceForms(forms)
 		}
-		if !anyHit(forms, evidenceText) {
+		if !anyHit(forms, evidenceText, gradingVersion) {
 			v.add(id, "grounding", "answer item %d (%q) does not appear in the evidence pairs", gi, forms[0])
 		}
-		if anyHit(forms, c.Question) {
+		if anyHit(forms, c.Question, gradingVersion) {
 			v.add(id, "answer_leak", "the question contains answer item %d (%q)", gi, forms[0])
 		}
 	}
@@ -487,9 +487,15 @@ func groupThousands(digits string) string {
 	return b.String()
 }
 
-func anyHit(forms []string, text string) bool {
+// anyHit reads numbers by the boundary of the pack's grading version, so the
+// grounding and leak checks agree with the grader the pack is scored by.
+func anyHit(forms []string, text string, gradingVersion int) bool {
+	hit := grade.Hit
+	if gradingVersion >= GradingBenchVersionV14 {
+		hit = grade.HitV14
+	}
 	for _, f := range forms {
-		if grade.Hit(f, text) {
+		if hit(f, text) {
 			return true
 		}
 	}

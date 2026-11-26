@@ -19,22 +19,26 @@ from __future__ import annotations
 
 import argparse
 import io
+import re
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, MagicMock, call, patch
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from ditto.api_models import (
     EvalPricingResponse,
     UploadAgentResponse,
+    UploadCheckRequest,
     UploadCheckResponse,
 )
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.contributor_identity import ClaStatus, ClaVersionView
 from ditto.miner_cli import preferences
+from ditto.miner_cli.api_client import ApiClient
 from ditto.miner_cli.commands.upload import (
     _offer_owner_link,
     _post_upload_with_retries,
@@ -46,6 +50,7 @@ from ditto.miner_cli.errors import (
     PaymentCancelledError,
     PaymentFinalizationTimeoutError,
     PaymentRecoveryExpiredError,
+    PaymentReplayedError,
     PaymentSubmissionError,
     PreCheckRejectedError,
     RegistrationCancelledError,
@@ -224,6 +229,46 @@ def _payment_receipt() -> PaymentReceipt:
         block_number=42,
         extrinsic_index=3,
     )
+
+
+# Platform's 3207 handler (apps/platform/ditto/api_server/middleware/
+# error_envelope.py) answers every refused proof with this one message.
+PLATFORM_ENVELOPE = (
+    Path(__file__).resolve().parents[4]
+    / "apps/platform/ditto/api_server/middleware/error_envelope.py"
+)
+WIRE_3207_MESSAGE = "payment proof already used"
+
+
+def _wire_replay_rejection() -> PaymentReplayedError:
+    """The error ``post_upload_check`` raises for Platform's real 3207 body."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            402,
+            json={
+                "error_code": 3207,
+                "message": WIRE_3207_MESSAGE,
+                "request_id": "req-3207",
+            },
+        )
+
+    client = ApiClient(base_url="http://test")
+    client._client.close()
+    client._client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="http://test"
+    )
+    request = UploadCheckRequest(
+        hotkey=HOTKEY,
+        sha256="ef" * 32,
+        file_size_bytes=1024,
+        signature="cd" * 64,
+        signature_timestamp=1_798_000_000,
+        signature_nonce=uuid4(),
+    )
+    with client, pytest.raises(PaymentReplayedError) as raised:
+        client.post_upload_check(request)
+    return raised.value
 
 
 def _upload_response() -> UploadAgentResponse:
@@ -1161,6 +1206,324 @@ class TestUploadFailurePaths:
         clear.assert_not_called()
         pay.assert_not_called()
 
+    # #2964: an upload whose response was lost may have committed, so its saved
+    # proof already funded that agent. Reassigned to a new archive, the proof
+    # drew 402/3207 on every later upload and nothing retired it.
+    def _replayed_run(
+        self,
+        good_tar: Path,
+        *,
+        saved: tuple[PendingUploadPayment, ...],
+        checks: list[object],
+        **flags: object,
+    ) -> tuple[int, MagicMock, MagicMock, MagicMock]:
+        client = MagicMock()
+        client.post_upload_check.side_effect = checks
+        client.post_upload_agent.return_value = _upload_response()
+        replacement = PaymentReceipt(
+            block_hash="0x" + "ef" * 32, block_number=43, extrinsic_index=1
+        )
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(MagicMock(hotkey_ss58=HOTKEY), MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.load_pending_payment",
+                return_value=None,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.load_pending_payments_for_hotkey",
+                return_value=saved,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.clear_pending_payment",
+                return_value=True,
+            ) as clear,
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=replacement,
+            ) as pay,
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient",
+                _patch_api_client(client),
+            ),
+        ):
+            rc = run(make_args(good_tar, **flags))
+        return rc, client, clear, pay
+
+    @staticmethod
+    def _bound_check() -> UploadCheckResponse:
+        return _ok_check().model_copy(
+            update={"payment_amount_rao": 40_000_000, "payment_send_address": DEST}
+        )
+
+    def test_spent_reassigned_proof_is_retired_once_a_new_payment_is_authorized(
+        self, good_tar: Path
+    ) -> None:
+        spent = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256="ef" * 32,
+            payment=_payment_receipt(),
+        )
+
+        rc, client, clear, pay = self._replayed_run(
+            good_tar,
+            saved=(spent,),
+            checks=[
+                PaymentReplayedError("payment proof already used"),
+                self._bound_check(),
+            ],
+            pay_again=True,
+        )
+
+        assert rc == 0
+        first, second = (
+            call.args[0] for call in client.post_upload_check.call_args_list
+        )
+        assert first.payment_block_hash == spent.payment.block_hash
+        assert second.payment_block_hash is None
+        # The saved credit is retired under its own key, not the new archive's,
+        # before the replacement is paid (and later consumed by the upload).
+        assert clear.call_args_list[0] == call(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256="ef" * 32,
+            payment=spent.payment,
+        )
+        pay.assert_called_once()
+        assert client.post_upload_agent.call_args.kwargs["payment"].block_number == 43
+
+    def test_spent_proof_is_kept_and_nothing_is_sent_without_consent(
+        self,
+        good_tar: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        spent = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256="ef" * 32,
+            payment=_payment_receipt(),
+        )
+
+        rc, client, clear, pay = self._replayed_run(
+            good_tar,
+            saved=(spent,),
+            checks=[PaymentReplayedError("payment proof already used")],
+        )
+
+        assert rc == 1
+        assert client.post_upload_check.call_count == 1
+        clear.assert_not_called()
+        pay.assert_not_called()
+        err = capsys.readouterr().err
+        assert "cannot fund this upload" in err
+        assert "exact archive" in err
+        assert "No second transfer has been sent" in err
+        assert "--pay-again" in err
+
+    def test_spent_proof_named_by_flags_retires_its_saved_copy(
+        self, good_tar: Path
+    ) -> None:
+        # With several saved credits the CLI asks for proof flags; a spent one
+        # named that way must leave the saved list too, or the next upload
+        # stops at "multiple unconsumed payments" again.
+        spent = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256="ef" * 32,
+            payment=_payment_receipt(),
+        )
+        other = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="beta",
+            sha256="12" * 32,
+            payment=PaymentReceipt(
+                block_hash="0x" + "34" * 32, block_number=44, extrinsic_index=2
+            ),
+        )
+
+        rc, _client, clear, pay = self._replayed_run(
+            good_tar,
+            saved=(spent, other),
+            checks=[
+                PaymentReplayedError("payment proof already used"),
+                self._bound_check(),
+            ],
+            pay_again=True,
+            payment_block_hash=spent.payment.block_hash,
+            payment_block_number=spent.payment.block_number,
+            payment_extrinsic_index=spent.payment.extrinsic_index,
+        )
+
+        assert rc == 0
+        assert clear.call_args_list[0] == call(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256="ef" * 32,
+            payment=spent.payment,
+        )
+        assert other.payment not in [
+            each.kwargs["payment"] for each in clear.call_args_list
+        ]
+        pay.assert_called_once()
+
+    def test_spent_proof_flags_match_its_saved_copy_in_any_hex_case(
+        self, good_tar: Path
+    ) -> None:
+        # The hash flag accepts either hex case, so a proof typed in capitals
+        # still names the saved credit and retires it.
+        spent = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256="ef" * 32,
+            payment=_payment_receipt(),
+        )
+        other = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="beta",
+            sha256="12" * 32,
+            payment=PaymentReceipt(
+                block_hash="0x" + "34" * 32, block_number=44, extrinsic_index=2
+            ),
+        )
+
+        rc, _client, clear, pay = self._replayed_run(
+            good_tar,
+            saved=(spent, other),
+            checks=[
+                PaymentReplayedError("payment proof already used"),
+                self._bound_check(),
+            ],
+            pay_again=True,
+            payment_block_hash="0x" + spent.payment.block_hash[2:].upper(),
+            payment_block_number=spent.payment.block_number,
+            payment_extrinsic_index=spent.payment.extrinsic_index,
+        )
+
+        assert rc == 0
+        assert clear.call_args_list[0] == call(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256="ef" * 32,
+            payment=spent.payment,
+        )
+        assert other.payment not in [
+            each.kwargs["payment"] for each in clear.call_args_list
+        ]
+        pay.assert_called_once()
+
+    def test_platform_sends_one_message_for_every_replay_cause(self) -> None:
+        # Another hotkey's credit, a generator upload and a changed owner all
+        # raise 3207 too, yet the handler never forwards the reason.
+        source = PLATFORM_ENVELOPE.read_text(encoding="utf-8")
+        handler = source[source.index("@app.exception_handler(PaymentReplayedError)") :]
+        handler = handler[: handler.index("@app.exception_handler", 1)]
+        response = re.search(r"return envelope_response\(([^)]*)\)", handler)
+        assert response is not None
+        assert re.fullmatch(
+            rf'\s*402,\s*ERROR_CODE_PAYMENT_REPLAYED,\s*"{WIRE_3207_MESSAGE}"\s*',
+            response.group(1),
+        )
+
+    def test_wire_replay_names_every_cause_and_offers_the_rerun_only_conditionally(
+        self,
+        good_tar: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # The CLI sees the same 3207 for a recoverable earlier upload and for a
+        # proof no rerun can recover, so it must not promise either.
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        spent = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256="ef" * 32,
+            payment=_payment_receipt(),
+        )
+        rejection = _wire_replay_rejection()
+        assert "code=3207" in str(rejection)
+
+        rc, _client, clear, pay = self._replayed_run(
+            good_tar, saved=(spent,), checks=[rejection]
+        )
+
+        assert rc == 1
+        clear.assert_not_called()
+        pay.assert_not_called()
+        err = " ".join(capsys.readouterr().err.split())
+        assert f"code=3207 {WIRE_3207_MESSAGE}" in err
+        assert "cannot fund this upload" in err
+        assert "Platform does not say why" in err
+        for cause in (
+            "funded an earlier upload",
+            "belong to another hotkey",
+            "funded a generator upload",
+            "no longer match this reservation",
+        ):
+            assert cause in err
+        assert (
+            "Only if it funded an earlier upload of this hotkey whose response "
+            "was lost does rerunning that upload's exact archive return it"
+        ) in err
+
+    def test_spent_proof_flags_without_a_saved_copy_retire_nothing(
+        self, good_tar: Path
+    ) -> None:
+        # Proof flags may name a payment this machine never saved. Nothing is
+        # retired, the other saved credit stays, and the replacement still
+        # needs consent.
+        other = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="beta",
+            sha256="12" * 32,
+            payment=PaymentReceipt(
+                block_hash="0x" + "34" * 32, block_number=44, extrinsic_index=2
+            ),
+        )
+        named = _payment_receipt()
+
+        rc, _client, clear, pay = self._replayed_run(
+            good_tar,
+            saved=(other,),
+            checks=[
+                PaymentReplayedError("payment proof already used"),
+                self._bound_check(),
+            ],
+            pay_again=True,
+            payment_block_hash=named.block_hash.upper().replace("0X", "0x"),
+            payment_block_number=named.block_number,
+            payment_extrinsic_index=named.extrinsic_index,
+        )
+
+        assert rc == 0
+        assert other.payment not in [
+            each.kwargs["payment"] for each in clear.call_args_list
+        ]
+        pay.assert_called_once()
+
     def test_pay_again_does_not_override_other_precheck_failures(
         self, good_tar: Path
     ) -> None:
@@ -1617,8 +1980,11 @@ class TestUploadFailurePaths:
         assert receipt.block_hash in err
         assert str(receipt.block_number) in err
         assert str(receipt.extrinsic_index) in err
-        assert "using either the same archive or a replacement" in err
+        # The same archive is the safe retry: if the lost upload committed, a
+        # replacement archive finds the proof already used (#2964).
+        assert "with this hotkey and the same archive first" in err
         assert "will not send another transfer" in err
+        assert "asks before paying again" in err
         assert "--payment-block-hash" in err
 
 
@@ -2315,11 +2681,11 @@ class TestInlineRegistration:
 class TestRegistrationVisibilityLag:
     """The chain and the platform do not agree the instant TAO is recycled.
 
-    `/upload/check` resolves 1101 from Pylon's cached recent-neurons
-    snapshot, so a registration that is already final on chain keeps
-    answering 1101 for a while. Giving up on the first re-check sends the
-    miner away from a submission that is seconds from working, after the
-    recycle amount is already spent.
+    `/upload/check` confirms a 1101 at a finalized block through a read it
+    shares for one block, so a registration that just finalized can still
+    answer 1101 briefly. Giving up on the first re-check sends the miner away
+    from a submission that is seconds from working, after the recycle amount
+    is already spent.
     """
 
     def _run(

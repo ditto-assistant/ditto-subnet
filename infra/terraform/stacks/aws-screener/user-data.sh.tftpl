@@ -1,0 +1,186 @@
+#!/bin/bash
+# First boot only (rendered by Terraform; cloud-init runs user data once per
+# instance). Converges this host into an on-demand screener node with no
+# operator SSH or Ansible run:
+#   1. install one exact SSM agent release (operator break-glass access);
+#   2. install one exact ansible-core in a private venv;
+#   3. check out the exact release commit of ditto-subnet;
+#   4. write the Terraform-rendered vars plus this instance's ID, root-only;
+#   5. run infra/ansible/playbooks/aws-screener-node.yml against localhost.
+# On failure the host is left running for up to two hours (step 0) so an
+# operator can inspect it over SSM; the capacity controller's wake grace routes
+# work to GCE meanwhile. To retry after a fix, rerun this script as root over SSM:
+#   sudo bash /var/lib/cloud/instance/scripts/part-001
+
+# The whole first boot runs under one deadline: every step below (downloads,
+# apt, pip, git, Ansible) ends within 4 h, so the cost guard can never be
+# deferred longer than that. timeout signals the script's whole process group.
+if [ -z "$${DITTO_SCREENER_BOOTSTRAP_DEADLINE:-}" ]; then
+  export DITTO_SCREENER_BOOTSTRAP_DEADLINE=4h
+  exec timeout --kill-after=5m "$DITTO_SCREENER_BOOTSTRAP_DEADLINE" /bin/bash "$0" "$@"
+fi
+set -Eeuo pipefail
+
+log=/var/log/ditto-screener-bootstrap.log
+touch "$log"
+chmod 0600 "$log"
+exec > >(tee -a "$log") 2>&1
+trap 'echo "ditto-screener-bootstrap: FAILED (exit $?) near line $LINENO; host left running for SSM inspection" >&2' ERR
+echo "ditto-screener-bootstrap: start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+export DEBIAN_FRONTEND=noninteractive
+export HOME=/root
+
+region='${region}'
+ssm_version='${ssm_agent_version}'
+ssm_sha256='${ssm_agent_sha256}'
+ansible_core_version='${ansible_core_version}'
+release_sha='${release_sha}'
+repository_url='https://github.com/ditto-assistant/ditto-subnet.git'
+
+boot=/opt/ditto-bootstrap
+repo="$boot/ditto-subnet"
+config_dir=/etc/ditto-screener-fleet
+vars_file="$config_dir/bootstrap-vars.json"
+
+[[ "$release_sha" =~ ^[0-9a-f]{40}$ ]]
+
+workdir="$(mktemp -d)"
+bootstrap_pid_file=/run/ditto-screener-bootstrap.pid
+trap 'rm -rf "$workdir"; rm -f "$bootstrap_pid_file"' EXIT
+
+# --- 0. cost guard -----------------------------------------------------------
+# Installed first, so it covers a failure anywhere below. On every boot, a host
+# that has still not enrolled (no node credential) two hours after booting
+# powers itself off instead of billing until someone notices, rechecking every
+# 15 minutes. It defers only while this exact first-boot process is alive: the
+# pid file on /run (cleared by a reboot) records the pid and its kernel start
+# time, so a later process that reuses the pid after a SIGKILL never defers it.
+# The first boot is bounded by the deadline above, so a hung converge still ends
+# in a poweroff (about 4.5 h at worst). A converged node has node.json, so the
+# guard never fires for it; its idle shutdown takes over.
+install -m 0755 -o root -g root /dev/stdin /usr/local/sbin/ditto-screener-unenrolled-poweroff <<'GUARD'
+#!/bin/sh
+pid_file=/run/ditto-screener-bootstrap.pid
+# start_time PID: field 22 of /proc/PID/stat, read after the last ") " so a
+# command name containing spaces or parentheses cannot shift the fields.
+start_time() {
+  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  rest=$${stat##*) }
+  # shellcheck disable=SC2086
+  set -- $rest
+  [ "$#" -ge 20 ] || return 1
+  shift 19
+  printf '%s' "$1"
+}
+if [ -s "$pid_file" ] && read -r pid recorded <"$pid_file" \
+  && [ -n "$pid" ] && [ -n "$recorded" ] \
+  && [ "$(start_time "$pid")" = "$recorded" ]; then
+  echo "ditto-screener-unenrolled-poweroff: first converge still running; deferring"
+  exit 0
+fi
+echo "ditto-screener-unenrolled-poweroff: not enrolled; powering off"
+exec /usr/bin/systemctl poweroff
+GUARD
+cat >/etc/systemd/system/ditto-screener-unenrolled-poweroff.service <<'UNIT'
+[Unit]
+Description=Power off an on-demand screener host that never enrolled
+ConditionPathExists=!/etc/ditto-screener-fleet/node.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ditto-screener-unenrolled-poweroff
+UNIT
+cat >/etc/systemd/system/ditto-screener-unenrolled-poweroff.timer <<'UNIT'
+[Unit]
+Description=Bound the uptime of an unenrolled on-demand screener host
+
+[Timer]
+OnBootSec=2h
+OnUnitActiveSec=15min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now ditto-screener-unenrolled-poweroff.timer
+# Record this process's pid and kernel start time (field 22 of /proc/PID/stat,
+# parsed after the last ") ") as one identity the guard can verify.
+read -r bootstrap_stat <"/proc/$$/stat"
+read -r -a bootstrap_fields <<<"$${bootstrap_stat##*) }"
+printf '%s %s\n' "$$" "$${bootstrap_fields[19]}" >"$bootstrap_pid_file"
+
+# --- 1. SSM agent (same exact-bytes install as the generator scorer) ---------
+if ! command -v curl >/dev/null; then
+  apt-get update
+  apt-get install -y --no-install-recommends curl ca-certificates
+fi
+ssm_url="https://s3.$region.amazonaws.com/amazon-ssm-$region/$ssm_version/debian_amd64/amazon-ssm-agent.deb"
+curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 5 -o "$workdir/amazon-ssm-agent.deb" "$ssm_url"
+echo "$ssm_sha256  $workdir/amazon-ssm-agent.deb" | sha256sum --check --strict
+dpkg -i "$workdir/amazon-ssm-agent.deb"
+systemctl enable --now amazon-ssm-agent
+
+# --- 2. ansible-core ------------------------------------------------------------
+apt-get update
+apt-get install -y --no-install-recommends git python3-venv ca-certificates curl
+install -d -m 0700 -o root -g root "$boot"
+python3 -m venv "$boot/venv"
+"$boot/venv/bin/pip" install --disable-pip-version-check --no-cache-dir \
+  --only-binary=:all: "ansible-core==$ansible_core_version"
+
+# --- 3. exact release checkout ---------------------------------------------
+rm -rf "$repo"
+git clone --filter=blob:none --no-checkout "$repository_url" "$repo"
+if ! git -C "$repo" cat-file -e "$release_sha^{commit}" 2>/dev/null; then
+  git -C "$repo" fetch --filter=blob:none origin "$release_sha"
+fi
+git -C "$repo" -c advice.detachedHead=false checkout --detach "$release_sha"
+head="$(git -C "$repo" rev-parse HEAD)"
+if [ "$head" != "$release_sha" ]; then
+  echo "checked out $head, expected $release_sha" >&2
+  exit 1
+fi
+
+# --- 4. root-only vars file -----------------------------------------------
+imds=http://169.254.169.254
+imds_token="$(curl -fsS --retry 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 300' "$imds/latest/api/token")"
+instance_id="$(curl -fsS --retry 5 -H "X-aws-ec2-metadata-token: $imds_token" "$imds/latest/meta-data/instance-id")"
+[[ "$instance_id" =~ ^i-[0-9a-f]{8,17}$ ]]
+
+install -d -m 0750 -o root -g root "$config_dir"
+printf '%s' '${bootstrap_vars_b64}' | base64 -d >"$workdir/rendered.json"
+# umask only for this write; the converge below must keep the default umask.
+(umask 077 && python3 - "$workdir/rendered.json" "$instance_id" "$vars_file.tmp") <<'PY'
+import json
+import sys
+
+rendered, instance_id, target = sys.argv[1:]
+with open(rendered, encoding="utf-8") as handle:
+    data = json.load(handle)
+if "screener_fleet_provider_resource_id" in data:
+    raise SystemExit("the rendered vars must not carry the instance id")
+data["screener_fleet_provider_resource_id"] = instance_id
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
+chown root:root "$vars_file.tmp"
+chmod 0600 "$vars_file.tmp"
+mv -f "$vars_file.tmp" "$vars_file"
+
+# --- 5. converge ----------------------------------------------------------
+# Run from infra/ansible so its ansible.cfg (roles_path, callbacks) applies,
+# exactly as an operator converge does.
+export ANSIBLE_CONFIG="$repo/infra/ansible/ansible.cfg"
+export ANSIBLE_COLLECTIONS_PATH="$boot/collections"
+cd "$repo/infra/ansible"
+# Bounded, so a hung converge ends and the cost guard can power the host off.
+timeout --kill-after=5m 30m \
+  "$boot/venv/bin/ansible-galaxy" collection install -r requirements.yml -p "$boot/collections"
+timeout --kill-after=5m 3h \
+  "$boot/venv/bin/ansible-playbook" -i localhost, -c local \
+  playbooks/aws-screener-node.yml -e "@$vars_file"
+
+echo "ditto-screener-bootstrap: converged $release_sha as $instance_id at $(date -u +%Y-%m-%dT%H:%M:%SZ)"

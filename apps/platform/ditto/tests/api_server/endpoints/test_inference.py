@@ -16,6 +16,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import HTTPException
 
+from ditto.api_models.generator import FRONTIER_ORACLE_MODEL
 from ditto.api_models.inference import (
     InferenceExchangeRequest,
     InferenceExchangeResponse,
@@ -48,6 +49,7 @@ from ditto.api_server.endpoints.inference import (
     _perplexity_embedding_response,
     _post_embedding_provider,
     _post_provider_with_retry,
+    _provider_context_length_exceeded,
     _provider_is_backpressure,
     _provider_preferences,
     _provider_rejection_is_route_observable,
@@ -875,6 +877,126 @@ async def test_invalid_fast_response_parks_without_recovery_dispatch() -> None:
     assert raised.value.terminal_error_code == "provider_identity_mismatch"
     assert raised.value.fallback_phase == 0
     assert raised.value.upstream_attempts == 1
+
+
+_CONTEXT_OVERFLOW_RAW = (
+    "Input length (145769) exceeds model's maximum context length (131072)."
+)
+
+
+def _context_overflow_error(raw: str) -> dict[str, Any]:
+    return {
+        "error": {
+            "message": "Provider returned error",
+            "code": 400,
+            "metadata": {"raw": raw, "provider_name": "Amazon Bedrock"},
+        }
+    }
+
+
+def test_context_length_overflow_requires_an_input_only_provider_rejection() -> None:
+    assert _provider_context_length_exceeded(
+        400, _context_overflow_error(_CONTEXT_OVERFLOW_RAW)
+    )
+    assert _provider_context_length_exceeded(
+        200, {"error": {"code": 400, "message": _CONTEXT_OVERFLOW_RAW}}
+    )
+    assert _provider_context_length_exceeded(
+        400,
+        _context_overflow_error(
+            "This model's maximum context length is 32768 tokens. However, you "
+            "requested 38000 tokens (33000 in the messages, 5000 in the "
+            "completion)."
+        ),
+    )
+    for message in (
+        "This endpoint's maximum context length is 32768 tokens. However, you "
+        "requested about 38000 tokens (33000 in the messages, 5000 in the output).",
+        "This endpoint's maximum context length is 131072 tokens. However, you "
+        "requested about 160000 tokens (100000 of text input, 40000 of tool "
+        "input, 20000 in the output).",
+    ):
+        assert _provider_context_length_exceeded(
+            400, {"error": {"code": 400, "message": message}}
+        )
+    for status_code, decoded in (
+        (502, _context_overflow_error(_CONTEXT_OVERFLOW_RAW)),
+        (400, _context_overflow_error("'tools' : maximum number of items is 128")),
+        (
+            400,
+            _context_overflow_error(
+                "This model's maximum context length is 8192 tokens. However, you "
+                "requested 20000 tokens (2000 in the messages, 18000 in the "
+                "completion)."
+            ),
+        ),
+        (400, {"error": {"code": "400", "message": _CONTEXT_OVERFLOW_RAW}}),
+        (400, {"message": _CONTEXT_OVERFLOW_RAW}),
+        (200, {"error": {"code": 502, "message": _CONTEXT_OVERFLOW_RAW}}),
+        (200, {"id": "", "error": {"code": 400, "message": _CONTEXT_OVERFLOW_RAW}}),
+        (
+            200,
+            {
+                "error": {
+                    "code": 400,
+                    "message": _CONTEXT_OVERFLOW_RAW,
+                    "metadata": "raw",
+                }
+            },
+        ),
+        (
+            400,
+            {
+                "error": {
+                    "code": 400,
+                    "message": "This endpoint's maximum context length is 131072 "
+                    "tokens. However, you requested about 140000 tokens (120000 "
+                    "of text input, 20000 in the output).",
+                }
+            },
+        ),
+        (
+            200,
+            {
+                "model": "openai/gpt-oss-20b",
+                "error": {"code": 400, "message": _CONTEXT_OVERFLOW_RAW},
+            },
+        ),
+    ):
+        assert not _provider_context_length_exceeded(status_code, decoded)
+
+
+@pytest.mark.asyncio
+async def test_context_length_overflow_is_single_shot_with_its_own_code() -> None:
+    requests: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            400, request=request, json=_context_overflow_error(_CONTEXT_OVERFLOW_RAW)
+        )
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(_ChatProviderExhausted) as raised:
+            await _complete_chat_with_recovery(
+                client,
+                _recovery_config(),
+                payload={"model": "openai/gpt-oss-20b", "messages": []},
+                model="openai/gpt-oss-20b",
+                expected_provider="openrouter",
+                expected_quantization=None,
+                expected_prompt_price=None,
+                expected_completion_price=None,
+                sleep=no_sleep,
+            )
+
+    assert len(requests) == 1
+    assert raised.value.terminal_error_code == "provider_context_length_exceeded"
+    assert not raised.value.timed_out
+    assert not raised.value.route_observable
 
 
 def test_openrouter_headers_attribute_chat_and_embedding_traffic() -> None:
@@ -2202,6 +2324,48 @@ def test_v7_model_mismatch_is_recorded_as_an_evasion_signal(monkeypatch) -> None
     assert "model mismatch" in rendered
     assert "qwen/qwen3-32b" in rendered
     assert "openai/gpt-oss-20b" in rendered
+
+
+def test_an_oracle_grant_serves_the_oracle_model_whatever_the_harness_asks() -> None:
+    """SN-496: an oracle lease's grant is minted on FRONTIER_ORACLE_MODEL, and
+    the proxy serves that model, with the pinned reasoning contract, even when
+    the harness names the bench contract's model."""
+    grant = _FakeGrant(bench_version=18, allowed_models=[FRONTIER_ORACLE_MODEL])
+    served = _locked_grant_model(
+        grant, requested="openai/gpt-oss-20b", config=_FakeConfig()
+    )
+    assert served == FRONTIER_ORACLE_MODEL
+    upstream = _locked_upstream_payload(
+        {
+            "model": "openai/gpt-oss-20b",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+        model=served,
+        max_tokens=256,
+        bench_version=18,
+    )
+    assert upstream["model"] == FRONTIER_ORACLE_MODEL
+    assert upstream["reasoning"] == {"effort": "medium", "exclude": True}
+
+
+def test_every_go_pin_of_the_oracle_model_names_the_platform_one() -> None:
+    """The oracle model is pinned in three places: Platform (grants and
+    reasoning), dittobench-api (the scorer's oracle route) and model-relay
+    (the inference plane's reasoning contract). They must name one model, or
+    an oracle grant is refused by the scorer or loses its reasoning pin."""
+    root = Path(__file__).parents[6]
+    pins = {
+        "services/dittobench-api/internal/llm/llm.go": (
+            r'FrontierOracleModel\s*=\s*"([^"]+)"'
+        ),
+        "services/model-relay/internal/inference/schema.go": (
+            r'frontierOracleModel\s*=\s*"([^"]+)"'
+        ),
+    }
+    for path, pattern in pins.items():
+        match = re.search(pattern, (root / path).read_text())
+        assert match is not None, path
+        assert match.group(1) == FRONTIER_ORACLE_MODEL, path
 
 
 def test_v7_grant_without_a_pinned_model_fails_closed() -> None:

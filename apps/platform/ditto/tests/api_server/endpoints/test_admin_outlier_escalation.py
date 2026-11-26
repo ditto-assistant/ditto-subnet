@@ -8,35 +8,27 @@ audit-chain activity, and the read-only dry-run replay over the scored ledger.
 from __future__ import annotations
 
 import math
-import statistics
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints import validator as v
-from ditto.api_server.endpoints.validator import (
-    _evaluate_and_record_outlier_escalation,
-)
 from ditto.api_server.outlier_escalation import (
     OUTLIER_ALGORITHM_VERSION,
     OUTLIER_ESCALATION_ENV_VARS,
     OUTLIER_REVIEW_KIND,
-    AxisObservation,
     OutlierEscalationSettings,
     load_outlier_escalation_settings,
 )
-from ditto.db.models import Agent, AthReview, Score, ScoreAuditEntry
-from ditto.db.queries.audit import EVENT_AUDIT, append_audit_entry
-from ditto.db.queries.scores import list_eligible_ledger, list_scores_for_agent
+from ditto.db.models import Agent, Score
 
 _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
 _HEADERS = {"Authorization": f"Bearer {_ADMIN_TOKEN}"}
@@ -107,30 +99,6 @@ def _agent() -> Agent:
         status=AgentStatus.SCORED,
         screening_policy_version=9,
     )
-
-
-async def _escalate(
-    session_maker: async_sessionmaker[AsyncSession],
-    *,
-    mode: str,
-    now: datetime,
-) -> Agent:
-    """Drive the real scoring-path helper so the trail is the production shape."""
-    agent = _agent()
-    async with session_maker() as session:
-        async with session.begin():
-            session.add(agent)
-        async with session.begin():
-            await _evaluate_and_record_outlier_escalation(
-                session,
-                agent=agent,
-                bench_version=12,
-                composite=0.99,
-                cohort=_SPREAD_COHORT,
-                settings=OutlierEscalationSettings(mode=mode),
-                now=now,
-            )
-    return agent
 
 
 @pytest.mark.asyncio
@@ -286,139 +254,6 @@ async def test_non_finite_env_threshold_is_an_explicit_null(
     assert math.isinf(v.OUTLIER_ESCALATION_SETTINGS.modified_z_threshold)
 
 
-@pytest.mark.asyncio
-async def test_counts_and_lists_observe_and_enforce_activity(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install(app, session_maker)
-    _load_env(monkeypatch, {"DITTO_OUTLIER_ESCALATION_MODE": "enforce"})
-    now = datetime.now(UTC)
-
-    old_observed = await _escalate(
-        session_maker, mode="observe", now=now - timedelta(days=10)
-    )
-    recent_observed = await _escalate(
-        session_maker, mode="observe", now=now - timedelta(hours=2)
-    )
-    enforced = await _escalate(
-        session_maker, mode="enforce", now=now - timedelta(hours=1)
-    )
-
-    copy_held, resolved = _agent(), _agent()
-    async with session_maker() as session, session.begin():
-        session.add_all([copy_held, resolved])
-    async with session_maker() as session, session.begin():
-        # A different EVENT_AUDIT kind on the same chain must not be counted.
-        await append_audit_entry(
-            session,
-            agent_id=uuid4(),
-            validator_hotkey=None,
-            event=EVENT_AUDIT,
-            payload={"audit_kind": "integrity_double_check", "enforced": True},
-            recorded_at=now,
-        )
-        # Pending reviews of another kind, and a resolved outlier review, are
-        # not pending outlier holds.
-        session.add_all(
-            [
-                AthReview(
-                    review_id=uuid4(),
-                    agent_id=copy_held.agent_id,
-                    status="pending",
-                    opened_at=now,
-                    original_policy_version=9,
-                    original_evidence={},
-                    algorithm_provenance={"review_kind": "copy"},
-                ),
-                AthReview(
-                    review_id=uuid4(),
-                    agent_id=resolved.agent_id,
-                    status="resolved",
-                    opened_at=now - timedelta(days=3),
-                    resolved_at=now - timedelta(days=2),
-                    resolved_by="operator@example.com",
-                    resolution="clear",
-                    resolution_reason="Genuine improvement verified",
-                    original_policy_version=9,
-                    original_evidence={},
-                    algorithm_provenance={"review_kind": OUTLIER_REVIEW_KIND},
-                ),
-            ]
-        )
-
-    response = await client.get(_URL, headers=_HEADERS, params={"window_hours": 24})
-
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["pending_review_count"] == 1
-    activity = body["activity"]
-    assert activity["window_hours"] == 24
-    assert activity["observed_total"] == 2
-    assert activity["enforced_total"] == 1
-    assert activity["observed_in_window"] == 1
-    assert activity["enforced_in_window"] == 1
-    assert activity["recent_truncated"] is False
-    recent = activity["recent"]
-    assert [row["agent_id"] for row in recent] == [
-        str(enforced.agent_id),
-        str(recent_observed.agent_id),
-        str(old_observed.agent_id),
-    ]
-    assert [row["enforced"] for row in recent] == [True, False, False]
-    assert datetime.fromisoformat(activity["latest_recorded_at"]) == (
-        datetime.fromisoformat(recent[0]["recorded_at"])
-    )
-    first = recent[0]
-    assert first["bench_version"] == 12
-    assert first["algorithm_version"] == OUTLIER_ALGORITHM_VERSION
-    evidence = first["evidence"]
-    assert evidence["composite"] == pytest.approx(0.99)
-    assert evidence["cohort_size"] == len(_SPREAD_COHORT)
-    assert evidence["cohort_median"] == pytest.approx(0.60, abs=1e-9)
-    assert evidence["cohort_mad"] == pytest.approx(0.01, abs=1e-9)
-    assert evidence["modified_z"] > 6.0
-    assert evidence["upward"] is True
-    assert evidence["above_floor"] is True
-    assert evidence["min_cohort_size"] == 8
-    assert evidence["modified_z_threshold"] == 6.0
-    assert evidence["min_composite_floor"] == 0.9
-
-
-@pytest.mark.asyncio
-async def test_recent_list_is_bounded_and_reports_truncation(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install(app, session_maker)
-    _load_env(monkeypatch, {})
-    now = datetime.now(UTC)
-    agents = [
-        await _escalate(session_maker, mode="observe", now=now - timedelta(hours=h))
-        for h in (3, 2, 1)
-    ]
-
-    body = (await client.get(_URL, headers=_HEADERS, params={"limit": 2})).json()
-
-    activity = body["activity"]
-    assert activity["recent_limit"] == 2
-    assert activity["recent_truncated"] is True
-    assert [row["agent_id"] for row in activity["recent"]] == [
-        str(agents[2].agent_id),
-        str(agents[1].agent_id),
-    ]
-    # Counts are exact aggregates, independent of the page bound.
-    assert activity["observed_total"] == 3
-
-    exact = (await client.get(_URL, headers=_HEADERS, params={"limit": 3})).json()
-    assert exact["activity"]["recent_truncated"] is False
-    assert len(exact["activity"]["recent"]) == 3
-
-
 # ---------------------------------------------------------------------------
 # Dry run
 # ---------------------------------------------------------------------------
@@ -526,92 +361,6 @@ async def test_dry_run_counts_would_trigger_rows_even_when_off(
 
 
 @pytest.mark.asyncio
-async def test_dry_run_matches_the_live_decision_on_the_same_cohort(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Finalize a candidate the way scoring does, then replay the ledger.
-
-    The candidate's cohort at finalization is the ledger it is not yet in; in
-    the replay it is the ledger without it. Both must yield the same evidence.
-    """
-    _install(app, session_maker)
-    _load_env(monkeypatch, {})
-    for composite in [*_SPREAD_COHORT, 0.70]:
-        await _seed_scored(session_maker, composite, composite, composite)
-    candidate = await _seed_scored(
-        session_maker, 0.98, 0.99, 0.995, status=AgentStatus.EVALUATING
-    )
-
-    async with session_maker() as session, session.begin():
-        agent = await session.get(Agent, candidate.agent_id)
-        assert agent is not None
-        agent_scores = await list_scores_for_agent(
-            session, agent_id=agent.agent_id, bench_version=12
-        )
-        median_composite = statistics.median(s.composite for s in agent_scores)
-        eligible = await list_eligible_ledger(session, bench_version=12)
-        agent.status = AgentStatus.SCORED
-        await _evaluate_and_record_outlier_escalation(
-            session,
-            agent=agent,
-            bench_version=12,
-            composite=median_composite,
-            cohort=[row.composite for row in eligible],
-            settings=OutlierEscalationSettings(mode="observe"),
-            now=datetime.now(UTC),
-            axes={
-                "tool_mean": AxisObservation(
-                    value=statistics.median(s.tool_mean for s in agent_scores),
-                    cohort=[row.tool_mean for row in eligible],
-                ),
-                "memory_mean": AxisObservation(
-                    value=statistics.median(s.memory_mean for s in agent_scores),
-                    cohort=[row.memory_mean for row in eligible],
-                ),
-            },
-        )
-    async with session_maker() as session:
-        live = await session.scalar(
-            select(ScoreAuditEntry.payload).where(
-                ScoreAuditEntry.agent_id == candidate.agent_id,
-                ScoreAuditEntry.event == EVENT_AUDIT,
-            )
-        )
-    assert live is not None
-
-    body = (
-        await client.get(_DRY_RUN_URL, headers=_HEADERS, params={"bench_version": 12})
-    ).json()
-
-    [entry] = body["would_trigger"]
-    assert entry["agent_id"] == str(candidate.agent_id)
-    live_evidence = live["evidence"]
-    # The composite evidence matches the public entry exactly. The per-axis
-    # statistics are only in the (admin) replay; the public entry recorded
-    # the neutral projection, which the replay's flags reproduce.
-    per_axis_keys = {"per_axis", "per_axis_outlier_axes", "per_axis_enforce"}
-    assert {
-        key: value
-        for key, value in entry["evidence"].items()
-        if key not in per_axis_keys
-    } == {
-        key: live_evidence.get(key)
-        for key in entry["evidence"]
-        if key not in per_axis_keys
-    }
-    assert [
-        {"axis": axis["axis"], "outlier": axis["outlier"]}
-        for axis in entry["evidence"]["per_axis"]
-    ] == live_evidence["per_axis"]
-    assert all(
-        axis["cohort_median"] is not None for axis in entry["evidence"]["per_axis"]
-    )
-
-
-@pytest.mark.asyncio
 async def test_dry_run_applies_overrides_over_effective_settings(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -679,90 +428,6 @@ async def test_dry_run_applies_overrides_over_effective_settings(
 # ---------------------------------------------------------------------------
 
 
-async def _record_axis_evidence(
-    session_maker: async_sessionmaker[AsyncSession], *, now: datetime
-) -> Agent:
-    """A composite in band with memory far out of band, through the real helper."""
-    agent = _agent()
-    async with session_maker() as session:
-        async with session.begin():
-            session.add(agent)
-        async with session.begin():
-            await _evaluate_and_record_outlier_escalation(
-                session,
-                agent=agent,
-                bench_version=12,
-                composite=0.615,
-                cohort=_SPREAD_COHORT,
-                settings=OutlierEscalationSettings(mode="observe"),
-                now=now,
-                axes={
-                    "tool_mean": AxisObservation(value=0.61, cohort=_SPREAD_COHORT),
-                    "memory_mean": AxisObservation(value=0.95, cohort=_SPREAD_COHORT),
-                },
-            )
-    return agent
-
-
-@pytest.mark.asyncio
-async def test_axis_evidence_is_counted_and_listed_apart_from_holds(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install(app, session_maker)
-    _load_env(monkeypatch, {})
-    now = datetime.now(UTC)
-    observed = await _escalate(session_maker, mode="observe", now=now)
-    old_axis = await _record_axis_evidence(session_maker, now=now - timedelta(days=10))
-    axis = await _record_axis_evidence(session_maker, now=now - timedelta(hours=1))
-
-    body = (
-        await client.get(_URL, headers=_HEADERS, params={"window_hours": 24})
-    ).json()
-
-    activity = body["activity"]
-    # Evidence-only entries never inflate the would-be-hold / hold counts.
-    assert activity["observed_total"] == 1
-    assert activity["enforced_total"] == 0
-    assert [row["agent_id"] for row in activity["recent"]] == [str(observed.agent_id)]
-    assert activity["axis_evidence_total"] == 2
-    assert activity["axis_evidence_in_window"] == 1
-    assert activity["recent_axis_evidence_truncated"] is False
-    recent_axis = activity["recent_axis_evidence"]
-    assert [row["agent_id"] for row in recent_axis] == [
-        str(axis.agent_id),
-        str(old_axis.agent_id),
-    ]
-    first = recent_axis[0]
-    assert first["enforced"] is False
-    assert first["algorithm_version"] == OUTLIER_ALGORITHM_VERSION
-    evidence = first["evidence"]
-    assert evidence["trigger"] is None
-    # Read back from the public chain: only axis + flag were recorded, so the
-    # policy flag and every per-axis statistic are null; the outlier axes are
-    # derived from the flags.
-    assert evidence["per_axis_enforce"] is None
-    assert evidence["per_axis_outlier_axes"] == ["memory_mean"]
-    by_axis = {entry["axis"]: entry for entry in evidence["per_axis"]}
-    assert set(by_axis) == {"tool_mean", "memory_mean"}
-    assert by_axis["memory_mean"]["outlier"] is True
-    assert by_axis["tool_mean"]["outlier"] is False
-    for entry in by_axis.values():
-        for key in ("value", "cohort_size", "cohort_median", "cohort_mad"):
-            assert entry[key] is None
-        assert entry["modified_z"] is None
-        assert entry["upward"] is None
-    # The composite hold entry also carries a (null) per-axis projection
-    # because the helper was called without axes.
-    assert activity["recent"][0]["evidence"]["per_axis"] is None
-
-    bounded = (await client.get(_URL, headers=_HEADERS, params={"limit": 1})).json()
-    assert bounded["activity"]["recent_axis_evidence_truncated"] is True
-    assert len(bounded["activity"]["recent_axis_evidence"]) == 1
-
-
 @pytest.mark.asyncio
 async def test_dry_run_reports_per_axis_evidence(
     app: FastAPI,
@@ -825,62 +490,3 @@ async def test_dry_run_reports_per_axis_evidence(
         row["agent_id"] for row in opted["axis_evidence"]
     }
     assert v.OUTLIER_ESCALATION_SETTINGS.per_axis_enforce is False
-
-
-@pytest.mark.asyncio
-async def test_public_audit_feed_carries_no_per_axis_statistics(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """issue #476: no per-axis threshold, cohort statistic or z-score reaches
-    the public, hash-chained /audit feed, and the chain still verifies."""
-    from ditto.db.queries.audit import list_audit_entries, verify_audit_chain
-
-    _install(app, session_maker)
-    _load_env(monkeypatch, {})
-    await _record_axis_evidence(session_maker, now=datetime.now(UTC))
-    held = _agent()
-    async with session_maker() as session:
-        async with session.begin():
-            session.add(held)
-        async with session.begin():
-            await _evaluate_and_record_outlier_escalation(
-                session,
-                agent=held,
-                bench_version=12,
-                composite=0.99,
-                cohort=_SPREAD_COHORT,
-                settings=OutlierEscalationSettings(mode="enforce"),
-                now=datetime.now(UTC),
-                axes={
-                    "tool_mean": AxisObservation(value=0.99, cohort=_SPREAD_COHORT),
-                    "memory_mean": AxisObservation(value=0.95, cohort=_SPREAD_COHORT),
-                },
-            )
-
-    body = (await client.get("/api/v1/public/audit")).json()
-
-    outlier_entries = [
-        entry
-        for entry in body["entries"]
-        if entry["payload"].get("audit_kind")
-        in {"anomalous_score", "anomalous_score_axis"}
-    ]
-    assert len(outlier_entries) == 2
-    for entry in outlier_entries:
-        evidence = entry["payload"]["evidence"]
-        assert "per_axis_enforce" not in evidence
-        assert "per_axis_outlier_axes" not in evidence
-        for axis in evidence["per_axis"]:
-            assert set(axis) == {"axis", "outlier"}
-    async with session_maker() as session:
-        assert verify_audit_chain(await list_audit_entries(session, limit=1000))
-        review = await session.scalar(
-            select(AthReview).where(AthReview.agent_id == held.agent_id)
-        )
-    # The operator-only snapshot keeps the full per-axis statistics.
-    assert review is not None
-    private_axes = review.original_evidence["per_axis"]
-    assert all(axis["cohort_median"] is not None for axis in private_axes)

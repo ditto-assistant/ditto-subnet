@@ -11,6 +11,7 @@ scheduling change and is out of scope here.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
@@ -21,14 +22,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models.public import PublicBenchmarkProgress, PublicValidatorHeartbeat
 from ditto.api_models.validator_capacity import (
     RelayLaneSaturation,
+    SlotUnusableReason,
     ValidatorCapacityAssignment,
     ValidatorCapacityEntry,
+    ValidatorCapacitySlot,
     ValidatorCapacitySummary,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.public import load_validator_fleet
 from ditto.api_server.inference_concurrency_settings import settings_from_row
+from ditto.api_server.validator_memory_admission import host_memory_admission
 from ditto.db.queries.benchmark_admission import admission_rollout_for_active_version
 from ditto.db.queries.inference_concurrency_settings import (
     latest_inference_concurrency_settings_revision,
@@ -99,11 +103,90 @@ def _assignment(
     )
 
 
+def _slot_index(slot_id: str) -> tuple[int, str]:
+    """Order ``slot-N`` numerically, anything else after it by name."""
+    prefix, _, number = slot_id.rpartition("-")
+    if prefix == "slot" and number.isdigit():
+        return int(number), ""
+    return 1 << 30, slot_id
+
+
+def _slot_breakdown(
+    validator: PublicValidatorHeartbeat,
+    *,
+    claimed: set[str],
+    memory_admitted: int | None,
+) -> list[ValidatorCapacitySlot]:
+    """Label every configured slot, mirroring the validator's and dispatch's gates.
+
+    The validator offers ``healthy_slots``: none unless it is ``accepting``, and
+    at most the memory-admitted count, taken from the lowest slot index up. A
+    slot it does not offer is unusable for the validator's reason. Platform
+    then funds at most ``allowed_slots`` of the offered slots, holding the last
+    ``reserved_round_slots`` of those for generator rounds, and none at all when
+    the validator cannot serve the active benchmark or issuance is paused.
+    """
+    healthy = set(validator.healthy_slots)
+    slot_ids = sorted(
+        {f"slot-{index}" for index in range(validator.configured_slots)}
+        | healthy
+        | claimed,
+        key=_slot_index,
+    )
+    offered = [slot for slot in slot_ids if slot in healthy]
+    platform_reason: SlotUnusableReason | None = None
+    if validator.bench_serviceability == "scorer_unverified":
+        platform_reason = "bench_scorer_unverified"
+    elif validator.bench_serviceability == "software_obsolete":
+        platform_reason = "bench_software_obsolete"
+    elif validator.issuance_paused:
+        platform_reason = "issuance_paused"
+    funded = [] if platform_reason else offered[: validator.allowed_slots]
+    reserved = (
+        set(funded[len(funded) - validator.reserved_round_slots :])
+        if validator.reserved_round_slots
+        else set()
+    )
+    breakdown = []
+    for slot_id in slot_ids:
+        reason: SlotUnusableReason | None = None
+        if slot_id in claimed:
+            state = "claimed"
+        elif slot_id in reserved:
+            state = "reserved_round"
+        elif slot_id in funded:
+            state = "free"
+        else:
+            state = "unusable"
+            if slot_id in healthy:
+                reason = platform_reason or "platform_slot_cap"
+            elif validator.admission != "accepting":
+                reason = cast(SlotUnusableReason, f"admission_{validator.admission}")
+            elif (
+                memory_admitted is not None
+                and _slot_index(slot_id)[0] >= memory_admitted
+            ):
+                reason = "host_memory_admission"
+            else:
+                reason = "validator_unhealthy"
+        breakdown.append(
+            ValidatorCapacitySlot(
+                slot_id=slot_id,
+                state=cast(
+                    Literal["claimed", "free", "reserved_round", "unusable"], state
+                ),
+                reason=reason,
+            )
+        )
+    return breakdown
+
+
 def _entry(
     validator: PublicValidatorHeartbeat,
     *,
     now: datetime,
     activity: Mapping[LeaseSlotKey, LeaseInferenceActivity] | None = None,
+    sandbox_memory_limit_mib: int | None = None,
 ) -> ValidatorCapacityEntry:
     # ``assigned_benchmarks`` is every live lease with its synchronized progress
     # merged in, so a lease the validator has not reported yet still appears
@@ -118,6 +201,17 @@ def _entry(
         )
         for slot in slots
     }
+    admission = host_memory_admission(
+        memory_total_mib=(
+            validator.host_specs.memory_total_mib
+            if validator.host_specs is not None
+            else None
+        ),
+        configured_slots=validator.configured_slots,
+        sandbox_memory_limit_mib=sandbox_memory_limit_mib,
+    )
+    memory_admitted = admission.admitted_slots if admission is not None else None
+    slots = _slot_breakdown(validator, claimed=claimed, memory_admitted=memory_admitted)
     return ValidatorCapacityEntry(
         validator_hotkey=validator.validator_hotkey,
         seen_at=validator.seen_at,
@@ -143,6 +237,11 @@ def _entry(
             )
             for progress in validator.assigned_benchmarks
         ],
+        memory_admitted_slots=memory_admitted,
+        memory_required_mib=admission.required_mib if admission is not None else None,
+        memory_note=admission.note() if admission is not None else None,
+        unusable_slots=sum(slot.state == "unusable" for slot in slots),
+        slots=slots,
     )
 
 
@@ -163,9 +262,18 @@ async def get_validator_capacity(
     fleet = await load_validator_fleet(
         session, request.app.state, now=now, lease_inference_activity=activity
     )
+    settings = settings_from_row(
+        await latest_inference_concurrency_settings_revision(session)
+    )
+    sandbox_memory_limit_mib = settings.benchmark_runtime.sandbox_memory_limit_mib
     entries = sorted(
         (
-            _entry(validator, now=now, activity=activity)
+            _entry(
+                validator,
+                now=now,
+                activity=activity,
+                sandbox_memory_limit_mib=sandbox_memory_limit_mib,
+            )
             for validator in fleet.validators
             if validator.online
         ),
@@ -179,9 +287,6 @@ async def get_validator_capacity(
         rollout=await admission_rollout_for_active_version(
             session, bench_version=fleet.active_bench_version
         ),
-    )
-    settings = settings_from_row(
-        await latest_inference_concurrency_settings_revision(session)
     )
     global_limits = {
         "chat": settings.chat_global_concurrency,
@@ -210,7 +315,26 @@ async def get_validator_capacity(
         serviceable_validator_count=sum(
             entry.serviceable_slots > 0 for entry in entries
         ),
+        configured_slots=sum(entry.configured_slots for entry in entries),
+        # Capped at each host's configured slots: spare memory on one host
+        # runs nothing for another.
+        memory_admitted_slots=sum(
+            min(entry.memory_admitted_slots, entry.configured_slots)
+            for entry in entries
+            if entry.memory_admitted_slots is not None
+        ),
         serviceable_slots=sum(entry.serviceable_slots for entry in entries),
+        unusable_slots_by_reason=dict(
+            sorted(
+                Counter(
+                    slot.reason
+                    for entry in entries
+                    for slot in entry.slots
+                    if slot.reason is not None
+                ).items()
+            )
+        ),
+        sandbox_memory_limit_mib=sandbox_memory_limit_mib,
         claimed_slots=sum(entry.claimed_slots for entry in entries),
         active_assignment_count=len(assignments),
         estimated_remaining_slot_minutes=round(

@@ -20,6 +20,7 @@ release_dir="$release_root/$source_commit"
 # owns its sibling override. /opt/ditto-platform is the retired pre-cutover root.
 platform_env="${DITTO_RELAY_PLATFORM_ENV:-/opt/ditto-subnet/apps/platform/.env}"
 deploy_env="${DITTO_RELAY_DEPLOY_ENV:-/opt/ditto-subnet/apps/platform/.env.deploy}"
+danilabs_env="${DITTO_RELAY_DANILABS_ENV:-$state_root/danilabs.env}"
 canary_port="${DITTO_RELAY_CANARY_PORT:-8020}"
 start_timeout="${DITTO_RELAY_START_TIMEOUT_SECONDS:-120}"
 
@@ -73,6 +74,20 @@ set -a
 if [ -r "$deploy_env" ]; then
   # shellcheck disable=SC1090
   . "$deploy_env"
+fi
+# The optional, separately provisioned trial file is consumed only by the
+# relay, not by Platform. Clear ambient values so a missing binding fails
+# closed even when an operator's shell contains stale credentials.
+DANILABS_API_KEY=
+DANILABS_FREE_TRIAL_UNTIL=
+DANILABS_TRIAL_SCOPE=
+if [ -e "$danilabs_env" ] || [ -L "$danilabs_env" ]; then
+  [ ! -L "$danilabs_env" ] && [ -f "$danilabs_env" ] && [ -r "$danilabs_env" ] || {
+    echo "ERROR: DaniLabs relay binding is not a readable regular file" >&2
+    exit 1
+  }
+  # shellcheck disable=SC1090
+  . "$danilabs_env"
 fi
 set +a
 export DITTO_BUILD_COMMIT="$source_commit"

@@ -102,7 +102,7 @@ describe('ScreenerCapacityPanel', () => {
     expect(screen.queryByText('Normal writer lease is healthy')).toBeNull()
     expect(screen.queryByText(/5 CPU rentals advertised/)).toBeNull()
     expect(screen.getByText(/Trusted screener release-image builds remain separate/)).toBeTruthy()
-    expect(screen.getByText(/Hetzner handles normal work/)).toBeTruthy()
+    expect(screen.getByText(/primary node \(Hetzner or on-demand AWS\) handles normal work/)).toBeTruthy()
     expect(screen.getByText('Last GCE fleet read')).toBeTruthy()
     expect(screen.getByText(/Aug 13, 2026, 9:40 PM UTC/)).toBeTruthy()
     expect(screen.getByText(/does not mean Targon recovered/)).toBeTruthy()
@@ -239,6 +239,45 @@ describe('ScreenerCapacityPanel', () => {
     expect(screen.getByText('All lanes Targon-first')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'GCP first' })).toBeNull()
     expect(screen.queryByText('GCP first')).toBeNull()
+  })
+
+  it('shows a stored AWS-first overflow revision as the AWS primary', () => {
+    render(
+      <ScreenerCapacityPanel
+        initialState={capacity({
+          provider_control: {
+            current: {
+              environment: 'prod',
+              revision: 4,
+              parent_revision: 3,
+              settings: {
+                ...overflowDefaults,
+                gce_overflow_enabled: true,
+                primary_node_id: 'subnet-screener-3',
+                runtime_provider_priority: ['aws', 'gcp'],
+                source_review_provider_priority: ['aws', 'gcp'],
+                build_provider_priority: ['aws', 'gcp'],
+              },
+              reason: 'on-demand AWS primary with GCE overflow',
+              actor: 'operator@example.com',
+              created_at: '2026-11-09T12:00:00Z',
+            },
+            history: [],
+          },
+        })}
+        readOnly={false}
+      />,
+    )
+
+    expect(screen.getByText('AWS on-demand base load')).toBeTruthy()
+    const aws = screen.getAllByRole('button', { name: 'AWS + GCE overflow' })
+    expect(aws).toHaveLength(3)
+    expect(aws.every((button) => button.getAttribute('aria-pressed') === 'true')).toBe(true)
+    expect(screen.queryByText(/Enabled overflow requires/)).toBeNull()
+
+    // Overflow needs every lane on the same primary.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Hetzner + GCE overflow' })[0])
+    expect(screen.getByText(/Enabled overflow requires/)).toBeTruthy()
   })
 
   it('treats a stored gcp-then-targon revision as GCE only', () => {

@@ -10,6 +10,8 @@ on:
       - "!apps/platform/package.json"
       - "!apps/platform/package-lock.json"
       - packages/ditto-screening-protocol/**
+      # The Ditto Edge shadow lane (SN-481) imports this contract.
+      - packages/ditto-edge-protocol/**
       # The static job checks the generated confirmation release assets
       # against this generator's constants, so a generator-only change must
       # reach that job.

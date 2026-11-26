@@ -16,20 +16,31 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from ditto_screener.conversation import AstraExaminer, Limits, MemoryHarness, evaluate
-from ditto_screening_protocol.conversation import ConversationClaim
+from ditto_screener.conversation import (
+    Limits,
+    MemoryHarness,
+    OpusExaminer,
+    evaluate,
+    judge_client,
+)
+from ditto_screening_protocol.conversation import INSTRUMENT_V2, ConversationClaim
 
 
 async def run(
     claim_path: Path, harness_url: str, output: Path, platform_url: str | None = None
 ) -> int:
     claim = ConversationClaim.model_validate_json(claim_path.read_text())
+    if claim.instrument != INSTRUMENT_V2:
+        raise ValueError("this examiner only runs conversational-continuity-v2 claims")
     remaining = (claim.expires_at - datetime.now(UTC)).total_seconds()
+    remaining -= Limits.judge_seconds
     if remaining <= 0:
         raise ValueError("conversation claim has expired")
-    key = os.environ.get("OPENAI_API_KEY")
+    key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
-        raise ValueError("OPENAI_API_KEY is required in the trusted examiner process")
+        raise ValueError(
+            "OPENROUTER_API_KEY is required in the trusted examiner process"
+        )
     platform_token = os.environ.get("DITTO_PLATFORM_ADMIN_TOKEN")
     if platform_url:
         parsed = urlsplit(platform_url)
@@ -50,17 +61,12 @@ async def run(
         raise ValueError(
             "report already exists; resubmit it without rerunning the judge"
         )
-    limits = Limits(total_seconds=min(3600, remaining))
+    limits = Limits(total_seconds=min(7_200, remaining))
     async with (
         httpx.AsyncClient(
-            timeout=120, follow_redirects=False, trust_env=False
+            timeout=300, follow_redirects=False, trust_env=False
         ) as harness_client,
-        httpx.AsyncClient(
-            timeout=120,
-            follow_redirects=False,
-            trust_env=False,
-            headers={"Authorization": f"Bearer {key}"},
-        ) as judge_client,
+        judge_client(key) as judge,
     ):
         harness = MemoryHarness(harness_client, harness_url, limits)
         # An uncertain billed attempt is not automatically reusable. Keep the
@@ -76,7 +82,7 @@ async def run(
             bench_version=claim.bench_version,
             seed=claim.seed,
             harness=harness,
-            examiner=AstraExaminer(judge_client, limits),
+            examiner=OpusExaminer(judge, limits),
         )
     # Exclusive create prevents accidental overwrite/cherry-picking. Keep the
     # seed and lease token in the private claim file, not the report artifact.

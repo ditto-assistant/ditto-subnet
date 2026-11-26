@@ -73,6 +73,7 @@ describe("ScreeningDispute gate-note mode (#1852)", () => {
       "live",
       "evaluating",
       "ath_pending_review",
+      "era_changed",
     ]);
   });
 

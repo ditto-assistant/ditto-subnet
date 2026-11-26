@@ -8,8 +8,13 @@ import {
   createBackroomMcpServer,
   type McpGrantProps,
 } from './mcp.server'
+import { PlatformAdminError } from './ditto.server'
+import { frontierRefusal } from './generator-competition.service'
 import {
+  generatorFrontierAuditListSchema,
+  generatorFrontierSchema,
   generatorCompetitionSettingsSchema,
+  generatorRoundPreviewSchema,
   generatorRunDetailSchema,
 } from '../lib/generator-competition.schemas'
 
@@ -146,6 +151,109 @@ describe('generator competition MCP tools', () => {
     }
   })
 
+  it('reads generator source only with the artifact scope, attributed to the operator', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const base = `/api/v1/admin/generator-competition/submissions/${SUBMISSION}`
+    const identity = { submission_id: SUBMISSION, source_sha256: 'cd'.repeat(32) }
+    const routes: Record<string, unknown> = {
+      [`${base}/source-files`]: {
+        ...identity, file_count: 2,
+        files: [{ path: 'data/world1.json', bytes: 58 }, { path: 'main.go', bytes: 40 }],
+        opaque_blobs: [], opaque_total: 0, truncated: false,
+      },
+      [`${base}/source-file?path=data%2Fworld1.json&start_line=1&end_line=400`]: {
+        ...identity, path: 'data/world1.json', total_lines: 1, start_line: 1, end_line: 1,
+        lines: [{ line: 1, text: '{"id": "v3h1-q1"}' }],
+      },
+      [`${base}/source-search?pattern=v3h1-q&mode=literal&ignore_case=false&context=0&limit=50&offset=0&path_glob=data%2F*.json`]: {
+        ...identity, pattern: 'v3h1-q', mode: 'literal', path_glob: 'data/*.json',
+        matches: [{ path: 'data/world1.json', line: 1, text: '{"id": "v3h1-q1"}', context_before: [], context_after: [] }],
+        match_count: 1, returned: 1, limit: 50, offset: 0, has_more: false,
+        files_searched: 1, files_matched: 1, opaque_skipped: 0, truncated: false,
+      },
+    }
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      const path = url.replace('https://platform-api.heyditto.ai', '')
+      if (!(path in routes)) return new Response('not found', { status: 404 })
+      return Response.json(routes[path])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const refused = await readOnly.client.callTool({
+        name: 'list_generator_source_files', arguments: { submissionId: SUBMISSION },
+      })
+      expect(refused.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      await readOnly.client.close()
+      await readOnly.server.close()
+    }
+
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      expect(json(await client.callTool({
+        name: 'list_generator_source_files', arguments: { submissionId: SUBMISSION },
+      }))).toMatchObject({ ...identity, count: 2, has_more: false })
+      expect(json(await client.callTool({
+        name: 'read_generator_source_file', arguments: { submissionId: SUBMISSION, path: 'data/world1.json' },
+      }))).toMatchObject({ ...identity, path: 'data/world1.json', total_lines: 1 })
+      expect(json(await client.callTool({
+        name: 'search_generator_source',
+        arguments: { submissionId: SUBMISSION, pattern: 'v3h1-q', mode: 'literal', pathGlob: 'data/*.json' },
+      }))).toMatchObject({ ...identity, match_count: 1, has_more: false })
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      // Platform audits every source read under this actor.
+      for (const [, init] of fetchMock.mock.calls) {
+        expect(new Headers(init?.headers).get('X-Admin-Actor')).toBe(session.email)
+      }
+      const bad = await client.callTool({
+        name: 'read_generator_source_file', arguments: { submissionId: 'not-a-uuid', path: 'main.go' },
+      })
+      expect(bad.isError).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('lists pre-screen batches from Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const batch = {
+      prescreen_index: 1099511627776, status: 'generating',
+      opened_at: '2026-11-12T06:00:00Z', expires_at: '2026-11-12T09:00:00Z',
+      settings_revision: 14, cases_per_column: 16, bench_version: 18,
+      columns: [{
+        column_id: 'c0', submission_id: SUBMISSION, miner_hotkey: submission.miner_hotkey,
+        owner_key: 'coldkey:abc', source_sha256: 'cd'.repeat(32), counted: false, public_default: false,
+      }],
+      panel: [{ agent_id: RUN, owner_key: 'coldkey:panel', champion: true, reference: false }],
+      lease_attempts: 0,
+    }
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = url.replace('https://platform-api.heyditto.ai', '')
+      if (path !== '/api/v1/admin/generator-competition/prescreens?limit=20&offset=0') {
+        return new Response('not found', { status: 404 })
+      }
+      return Response.json({ prescreens: [batch], counts_by_status: { generating: 1 } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      expect(json(await client.callTool({ name: 'list_generator_prescreens', arguments: {} })))
+        .toMatchObject({
+          counts_by_status: { generating: 1 },
+          prescreens: [{ prescreen_index: 1099511627776, status: 'generating', void_reason: null, columns: [{ counted: false }] }],
+        })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('refuses a malformed hotkey filter before calling Platform', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
     const fetchMock = vi.fn()
@@ -167,6 +275,28 @@ describe('generator competition MCP tools', () => {
     }
     for (const cases of [7, 81]) {
       expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, cases_per_seed: cases }).success).toBe(false)
+    }
+  })
+
+  it('reads a round preview from a Platform that predates the challenger queue', () => {
+    const preview = generatorRoundPreviewSchema.parse({
+      schedule: { mode: 'shadow', epochs_per_round: 4 }, columns: [], panel: [],
+      qualified_generators: 0, awaiting_qualification: 0, blockers: [],
+    })
+    expect(preview.challenger_queue).toEqual([])
+  })
+
+  it('admits challenger columns up to the round column capacity', () => {
+    // Platform bounds counted plus challenger columns at 8 (MAX_ROUND_COLUMNS),
+    // so a revision with three challengers beside five counted columns must
+    // parse on read and write. The field alone allows 7 (one counted column);
+    // the write refuses a pair above 8 (see the write-path test).
+    for (const challengers of [0, 2, 3]) {
+      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, counted_columns: 5, challenger_columns: challengers }).success).toBe(true)
+    }
+    expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, counted_columns: 1, challenger_columns: 7 }).success).toBe(true)
+    for (const challengers of [-1, 8]) {
+      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, counted_columns: 1, challenger_columns: challengers }).success).toBe(false)
     }
   })
 
@@ -249,9 +379,41 @@ describe('generator competition MCP tools', () => {
       expect(JSON.stringify(shortSeason.content)).toContain('at least 2 epochs')
       expect(fetchMock).not.toHaveBeenCalled()
 
+      // A round holds at most eight columns; Backroom refuses more before Platform does.
+      const nineColumns = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: {
+          expectedRevision: 1,
+          settings: { ...settings, counted_columns: 5, challenger_columns: 4 },
+          reason: 'add a fourth challenger column',
+          confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
+      })
+      expect(nineColumns.isError).toBe(true)
+      expect(JSON.stringify(nineColumns.content)).toContain('at most 8 columns')
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      // A canary shadow version needs dueling on.
+      const shadowOff = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: {
+          expectedRevision: 1,
+          settings: { ...settings, dueling_shadow_bench_version: 16 },
+          reason: 'shadow canary',
+          confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
+      })
+      expect(shadowOff.isError).toBe(true)
+      expect(JSON.stringify(shadowOff.content)).toContain('needs dueling_enabled')
+      expect(fetchMock).not.toHaveBeenCalled()
+
       const applied = json(await client.callTool({
         name: 'set_generator_competition_settings',
-        arguments: { expectedRevision: 1, settings: { ...settings, upload_fee_required: true }, reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW' },
+        arguments: {
+          expectedRevision: 1,
+          settings: { ...settings, upload_fee_required: true, counted_columns: 5, challenger_columns: 3 },
+          reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
       })) as { revision: number }
       expect(applied.revision).toBe(2)
       expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -259,7 +421,7 @@ describe('generator competition MCP tools', () => {
       expect(settingsUrl).toContain('/api/v1/admin/generator-competition/settings')
       expect(JSON.parse(String(settingsInit.body))).toMatchObject({
         expected_revision: 1, scope: '*', actor: session.email, confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
-        settings: { upload_fee_required: true },
+        settings: { upload_fee_required: true, counted_columns: 5, challenger_columns: 3 },
       })
       expect(settingsInit.headers['X-Admin-Actor']).toBe(session.email)
 
@@ -445,6 +607,20 @@ describe('generator competition MCP tools', () => {
             active_version: 14, bench_version: 13, reason: '2 validator(s) can run a 70-case round column at bench v14, below min_round_validators 3: rounds stay on v13 until a quorum can run v14',
             round_contracts: [13, 14], capable_validators: { 13: 3, 14: 2 }, previous_version: 13, min_round_validators: 3, scorer_grading_versions: [13, 14],
           },
+          challenger_queue: [
+            {
+              queue_position: 1, submission_id: SUBMISSION, miner_hotkey: '5Kin', owner_key: 'coldkey:kin',
+              module: 'kinbind', file_count: 46, size_bytes: 200_032, qualified_at: '2026-11-11T14:59:38Z',
+              family: SUBMISSION, family_size: 12, family_measured: 2, family_position: 2, novelty: 0, status: 'waiting',
+              prescreen_index: 1099511627776, prescreen_score: 0.25,
+            },
+            {
+              queue_position: null, submission_id: RUN, miner_hotkey: '5Dr', owner_key: 'coldkey:dr',
+              module: 'gen-v3h', file_count: 49, size_bytes: 486_590, qualified_at: '2026-11-11T23:35:47Z',
+              family: RUN, family_size: 1, family_measured: 1, family_position: 1, status: 'in_flight',
+              column_id: null, in_flight_round: 26114,
+            },
+          ],
         })
       }
       if (path.endsWith('/rounds/loop')) {
@@ -518,6 +694,10 @@ describe('generator competition MCP tools', () => {
             active_version: 14, bench_version: 13, round_contracts: [13, 14], capable_validators: { 13: 3, 14: 2 },
             previous_version: 13, min_round_validators: 3, scorer_grading_versions: [13, 14],
           },
+          challenger_queue: [
+            { submission_id: SUBMISSION, family_position: 2, novelty: 0, status: 'waiting', column_id: null, in_flight_round: null, prescreen_index: 1099511627776, prescreen_score: 0.25 },
+            { queue_position: null, status: 'in_flight', in_flight_round: 26114, novelty: null },
+          ],
         })
       expect(json(await reader.client.callTool({ name: 'get_generator_round_loop', arguments: {} })))
         .toMatchObject({ available: true, status: { ticks: 3 } })
@@ -677,5 +857,319 @@ describe('generator competition MCP tools', () => {
       await reader.client.close()
       await reader.server.close()
     }
+  })
+
+  it('shows a round skipped as unchanged and the loop that skipped it', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const summary = {
+      round_index: 12, status: 'skipped', epochs_per_round: 4, commitment: 'aa'.repeat(32),
+      commitment_publication: 'disabled', committed_at: '2026-11-04T00:00:00Z', column_count: 5,
+      panel_size: 5, panel_dropped: 0, results: 0, answered_results: 0, secret_hex: null, seed: null,
+      void_reason: null, skip_reason: 'skipped_unchanged', carried_from_round: 11,
+    }
+    const detail = {
+      summary, settings_revision: 2, cases_per_column: 70, seed: null, columns: [], panel: [],
+      generation: { skipped_unchanged: { reason: 'skipped_unchanged', carried_from_round: 11 } },
+      column_case_counts: {}, dataset_bytes: null, lease_id: null, lease_expires_at: null,
+      lease_attempts: 0, commitment_published_at: null, commitment_error: null, attempts: [],
+      results: [], pending_agents: [], score: null, scorer_version: null, standings: [],
+      columns_scored: [], skipped_panel_agents: [],
+    }
+    const loop = {
+      available: true,
+      status: { last_tick_at: null, last_success_at: null, last_error: null, last_actions: ['round 12: skipped'], ticks: 1 },
+      schedule: { mode: 'enforce', epochs_per_round: 4 },
+      skip_unchanged_rounds: true,
+      skipped_rounds: 3,
+      last_skipped_round: { round_index: 12, reason: 'skipped_unchanged', carried_from_round: 11, skipped_at: '2026-11-04T05:00:00Z' },
+    }
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (
+      url.includes('/rounds/loop')
+        ? Response.json(loop)
+        : url.includes('/rounds?')
+          ? Response.json({ schedule: { mode: 'enforce', epochs_per_round: 4 }, rounds: [summary], counts_by_status: { skipped: 3 } })
+          : Response.json(detail)
+    )))
+
+    const reader = await connect([BACKROOM_READ_SCOPE])
+    try {
+      expect(json(await reader.client.callTool({ name: 'list_generator_rounds', arguments: {} })))
+        .toMatchObject({ rounds: [{ status: 'skipped', skip_reason: 'skipped_unchanged', carried_from_round: 11 }] })
+      expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 12 } })))
+        .toMatchObject({ summary: { status: 'skipped', skip_reason: 'skipped_unchanged', carried_from_round: 11 } })
+      expect(json(await reader.client.callTool({ name: 'get_generator_round_loop', arguments: {} })))
+        .toMatchObject({
+          skip_unchanged_rounds: true,
+          skipped_rounds: 3,
+          last_skipped_round: { round_index: 12, reason: 'skipped_unchanged', carried_from_round: 11 },
+        })
+    } finally {
+      await reader.client.close()
+      await reader.server.close()
+    }
+  })
+
+  it('reads and rules frontier audits with artifact-scoped cases and guarded writes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const AGENT = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const audit = {
+      round_index: 7, column_id: 'c1', submission_id: SUBMISSION, miner_hotkey: '5GenMiner',
+      status: 'pending', sample: ['c1/k2', 'c1/k5'], attested_cases: 6, invalid_case_ids: [],
+      reason: null, actor: null, ruled_at: null, audit_deadline: '2026-11-10T10:00:00Z',
+    }
+    const frontier = {
+      round_index: 7, state: 'audit_pending', oracle_agent_id: AGENT, oracle_model: 'z-ai/glm-5.3-flash',
+      frontier_weight: 1, audit_cases: 2,
+      candidates: ['c1/k0', 'c1/k2', 'c1/k5'], oracle_attempts: 1, oracle_deadline: null,
+      oracle: {
+        validator_hotkey: '5Validator', run_id: 'run-o', recorded_at: '2026-11-09T10:00:00Z',
+        passed: 2, failed: 1, faulted: 0,
+        results: [{ case_id: 'c1/k0', score: 0, fault: false }, { case_id: 'c1/k2', score: 1, fault: false }, { case_id: 'c1/k5', score: 1, fault: false }],
+      },
+      attested: { c1: ['c1/k2', 'c1/k5'] }, audits: [audit], applied: null,
+      column_scores: { c1: 0 }, base_column_scores: null, created_at: '2026-11-09T09:00:00Z',
+      settled_at: null, settle_reason: null,
+    }
+    const pair = { pair_id: 'new2', timestamp: '2026-02-01T09:00:00Z', wave: 1, prompt: 'The code is now 5002.', response: 'Updated.' }
+    const calls: Array<[string, string, unknown]> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const path = url.replace('https://platform-api.heyditto.ai', '')
+      const method = init?.method ?? 'GET'
+      calls.push([method, path, init?.body ? JSON.parse(String(init.body)) : null])
+      if (path.startsWith('/api/v1/admin/generator-competition/frontier/audits')) {
+        return Response.json({ audits: [audit], count: 3, returned: 1, limit: 1, offset: 0, has_more: true })
+      }
+      if (path.startsWith('/api/v1/admin/generator-competition/rounds/7/frontier/audits/c1') && method === 'GET') {
+        return Response.json({
+          audit,
+          cases: [{
+            case_id: 'c1/k2', question: 'What is the code for locker 2 now?', expected_answer: '5002',
+            answer_kind: 'number', answer_items: [], accept_any: [], distractor_answers: ['1002'],
+            forbidden_answer: null, dump_guard: [], user_id: '', run_after_wave: 1, evidence: [pair],
+            visible_pairs: 16, memory_matches: [pair], memory_truncated: false,
+            panel_mean_score: 0, panel_solvers: 0, panel_size: 3, oracle_score: 1, oracle_fault: false,
+          }],
+        })
+      }
+      if (path.endsWith('/rounds/7/frontier/settle')) return Response.json({ ...frontier, state: 'settled', applied: { c1: ['c1/k2', 'c1/k5'] } })
+      if (path.endsWith('/rounds/7/frontier/rerun')) return Response.json({ ...frontier, state: 'oracle_pending', oracle_attempts: 0, oracle: null, attested: {}, audits: [], applied: null })
+      if (path.endsWith('/rounds/7/frontier/audits/c1')) return Response.json({ ...frontier, audits: [{ ...audit, status: 'passed' }] })
+      if (path.endsWith('/rounds/7/frontier')) return Response.json(frontier)
+      return Response.json({ detail: 'unexpected' }, { status: 404 })
+    }))
+
+    const reader = await connect([BACKROOM_READ_SCOPE])
+    try {
+      expect(json(await reader.client.callTool({ name: 'list_generator_frontier_audits', arguments: {} })))
+        // The paging contract survives parsing: count is the queue total.
+        .toMatchObject({
+          count: 3, returned: 1, limit: 1, offset: 0, has_more: true,
+          audits: [{ column_id: 'c1', sample: ['c1/k2', 'c1/k5'] }],
+        })
+      expect(calls[0][1]).toBe('/api/v1/admin/generator-competition/frontier/audits?include_ruled=false&limit=50&offset=0')
+      expect(json(await reader.client.callTool({ name: 'get_generator_round_frontier', arguments: { roundIndex: 7 } })))
+        .toMatchObject({
+          state: 'audit_pending', oracle_model: 'z-ai/glm-5.3-flash',
+          attested: { c1: ['c1/k2', 'c1/k5'] }, oracle: { passed: 2 },
+        })
+      // Case content is private benchmark content: artifact scope only.
+      const noArtifact = await reader.client.callTool({ name: 'get_generator_frontier_audit', arguments: { roundIndex: 7, columnId: 'c1' } })
+      expect(noArtifact.isError).toBe(true)
+      const noWrite = await reader.client.callTool({
+        name: 'settle_generator_round_frontier',
+        arguments: { roundIndex: 7, reason: 'oracle agent misconfigured', confirmation: 'SETTLE GENERATOR FRONTIER 7' },
+      })
+      expect(noWrite.isError).toBe(true)
+    } finally {
+      await reader.client.close()
+      await reader.server.close()
+    }
+
+    const artifactReader = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      calls.length = 0
+      expect(json(await artifactReader.client.callTool({
+        name: 'get_generator_frontier_audit', arguments: { roundIndex: 7, columnId: 'c1', q: 'locker 2' },
+      }))).toMatchObject({ cases: [{ expected_answer: '5002', distractor_answers: ['1002'], oracle_score: 1 }] })
+      expect(calls[0][1]).toBe('/api/v1/admin/generator-competition/rounds/7/frontier/audits/c1?q=locker%202')
+    } finally {
+      await artifactReader.client.close()
+      await artifactReader.server.close()
+    }
+
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      calls.length = 0
+      // Confirmation names the verdict; a valid ruling names no invalid case.
+      for (const args of [
+        { valid: true, invalidCaseIds: [], confirmation: 'RULE FRONTIER AUDIT 7 c1 INVALID' },
+        { valid: true, invalidCaseIds: ['c1/k2'], confirmation: 'RULE FRONTIER AUDIT 7 c1 VALID' },
+        { valid: false, invalidCaseIds: [], confirmation: 'RULE FRONTIER AUDIT 7 c1 INVALID' },
+      ]) {
+        const refused = await client.callTool({
+          name: 'rule_generator_frontier_audit',
+          arguments: { roundIndex: 7, columnId: 'c1', reason: 'both cases are fair supersession', ...args },
+        })
+        expect(refused.isError).toBe(true)
+      }
+      expect(calls).toEqual([])
+      expect(json(await client.callTool({
+        name: 'rule_generator_frontier_audit',
+        arguments: {
+          roundIndex: 7, columnId: 'c1', valid: true, reason: 'both cases are fair supersession',
+          confirmation: 'RULE FRONTIER AUDIT 7 c1 VALID',
+        },
+      }))).toMatchObject({ audits: [{ status: 'passed' }] })
+      expect(calls[0]).toEqual([
+        'POST', '/api/v1/admin/generator-competition/rounds/7/frontier/audits/c1',
+        { valid: true, invalid_case_ids: [], reason: 'both cases are fair supersession', actor: session.email, confirmation: 'RULE FRONTIER AUDIT 7 c1 VALID' },
+      ])
+      calls.length = 0
+      expect(json(await client.callTool({
+        name: 'settle_generator_round_frontier',
+        arguments: { roundIndex: 7, reason: 'oracle agent misconfigured', confirmation: 'SETTLE GENERATOR FRONTIER 7' },
+      }))).toMatchObject({ state: 'settled' })
+      expect(calls[0][2]).toMatchObject({ confirmation: 'SETTLE GENERATOR FRONTIER 7', actor: session.email })
+      calls.length = 0
+      const badRerun = await client.callTool({
+        name: 'rerun_generator_round_frontier',
+        arguments: { roundIndex: 7, reason: 'rerun on glm-5.3-flash oracle', confirmation: 'SETTLE GENERATOR FRONTIER 7' },
+      })
+      expect(badRerun.isError).toBe(true)
+      expect(calls).toEqual([])
+      expect(json(await client.callTool({
+        name: 'rerun_generator_round_frontier',
+        arguments: { roundIndex: 7, reason: 'rerun on glm-5.3-flash oracle', confirmation: 'RERUN GENERATOR FRONTIER 7' },
+      }))).toMatchObject({ state: 'oracle_pending', oracle_model: 'z-ai/glm-5.3-flash' })
+      expect(calls[0]).toEqual([
+        'POST', '/api/v1/admin/generator-competition/rounds/7/frontier/rerun',
+        { reason: 'rerun on glm-5.3-flash oracle', actor: session.email, confirmation: 'RERUN GENERATOR FRONTIER 7' },
+      ])
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('describes the frontier audit memory fields without overstating them', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      const tool = (await client.listTools()).tools.find((t) => t.name === 'get_generator_frontier_audit')
+      const help = (await client.callTool({ name: 'get_backroom_tool_help', arguments: { tool: 'get_generator_frontier_audit' } }))
+      const text = [tool?.description ?? '', JSON.stringify(help)].join(' ')
+      // visible_pairs is a count; memory_matches is a capped, possibly
+      // truncated list: neither may read as the user's whole memory.
+      expect(text).toContain('the count of the user')
+      expect(text).toContain('memory_truncated is true when the list was cut')
+      expect(text).not.toContain("visible_pairs (the user's memory at that point)")
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('rejects impossible frontier audit paging from Platform', () => {
+    const page = { audits: [], count: 0, returned: 0, limit: 50, offset: 0, has_more: false }
+    expect(generatorFrontierAuditListSchema.parse(page)).toMatchObject(page)
+    for (const bad of [{ count: -1 }, { limit: 0 }, { limit: -5 }, { returned: -1 }, { offset: -1 }]) {
+      expect(() => generatorFrontierAuditListSchema.parse({ ...page, ...bad })).toThrow()
+    }
+  })
+
+  it('defaults the frontier settings a write omits', () => {
+    const parsed = generatorCompetitionSettingsSchema.parse(settings)
+    expect(parsed).toMatchObject({
+      frontier_weight: 1, frontier_oracle_agent_id: null, frontier_audit_cases: 3,
+      frontier_audit_grace_hours: 24, frontier_oracle_timeout_hours: 12,
+      frontier_oracle_model: null,
+    })
+    expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, frontier_weight: 1.5 })).toThrow()
+  })
+
+  it('keeps the frontier oracle model to the one route the scorer pins', () => {
+    const parsed = generatorCompetitionSettingsSchema.parse({
+      ...settings, frontier_oracle_model: 'z-ai/glm-5.3-flash',
+    })
+    // A write must carry it through, or the next revision would reset it.
+    expect(parsed.frontier_oracle_model).toBe('z-ai/glm-5.3-flash')
+    expect(() => generatorCompetitionSettingsSchema.parse({
+      ...settings, frontier_oracle_model: 'openai/gpt-5',
+    })).toThrow()
+  })
+
+  it('defaults the frontier escalation tier off and bounds its caps', () => {
+    const parsed = generatorCompetitionSettingsSchema.parse(settings)
+    // Ships off: a Platform or revision that predates the tier reads as off.
+    expect(parsed).toMatchObject({
+      frontier_escalation_agent_id: null, frontier_escalation_solve_threshold: 1,
+      frontier_escalation_max_cases: 8, frontier_escalation_max_cases_per_column: 4,
+      frontier_escalation_max_failed_fraction: 0.25,
+    })
+    for (const bad of [
+      { frontier_escalation_max_cases: 0 }, { frontier_escalation_max_cases: 65 },
+      { frontier_escalation_max_cases_per_column: 17 }, { frontier_escalation_solve_threshold: 0 },
+      { frontier_escalation_max_failed_fraction: 0 }, { frontier_escalation_max_failed_fraction: 1.5 },
+    ]) {
+      expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, ...bad })).toThrow()
+    }
+  })
+
+  it('reads a round frontier with or without its escalation tier', () => {
+    const AGENT = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const ESCALATION = '1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d'
+    const base = {
+      round_index: 7, state: 'oracle_pending', oracle_agent_id: AGENT, frontier_weight: 1, audit_cases: 2,
+      candidates: ['c1/k0', 'c1/k2'], oracle_attempts: 1, oracle_deadline: null, oracle: null,
+      attested: { c1: ['c1/k2'] }, audits: [], column_scores: { c1: 0 }, created_at: '2026-11-09T09:00:00Z',
+    }
+    // An older Platform sends no escalation: it reads as null.
+    expect(generatorFrontierSchema.parse(base).escalation).toBeNull()
+    const escalation = {
+      agent_id: ESCALATION, solve_threshold: 1, oracle_failed: 1, selected: ['c1/k0'],
+      skipped_columns: { c3: 'oracle failed 40/70 cases (57% > 25%)' }, attempts: 1,
+      deadline: '2026-11-09T21:00:00Z', outcome: 'pending',
+    }
+    expect(generatorFrontierSchema.parse({ ...base, escalation }).escalation).toMatchObject({
+      agent_id: ESCALATION, selected: ['c1/k0'], outcome: 'pending', passed: [], results: [],
+      skipped_columns: { c3: 'oracle failed 40/70 cases (57% > 25%)' },
+    })
+  })
+
+  it('defaults the season catch-up settings a write omits and bounds the cap', () => {
+    const parsed = generatorCompetitionSettingsSchema.parse(settings)
+    expect(parsed).toMatchObject({ season_catchup_enabled: true, season_catchup_max_agents: 5 })
+    expect(generatorCompetitionSettingsSchema.parse({ ...settings, season_catchup_enabled: false }))
+      .toMatchObject({ season_catchup_enabled: false })
+    expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, season_catchup_max_agents: 11 })).toThrow()
+    // SN-486: the overflow budget and per-run estimate default and are bounded.
+    expect(parsed).toMatchObject({ season_catchup_budget_usd: 10, season_catchup_run_cost_usd: 0.5 })
+    expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, season_catchup_budget_usd: -1 })).toThrow()
+    expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, season_catchup_run_cost_usd: 0 })).toThrow()
+  })
+
+  it('names the frontier write that was refused and the recovery its status implies', () => {
+    const conflict = (message: string) => new PlatformAdminError('request', message, 409)
+    const invalid = (message: string) => new PlatformAdminError('request', message, 422)
+
+    const ruled = frontierRefusal('rule', conflict('column c1 audit is already passed'))!.message
+    expect(ruled).toContain('Nothing was ruled')
+    expect(ruled).toContain('re-read get_generator_round_frontier')
+
+    // A settle refusal says nothing about ruling or an audit sample.
+    const settled = frontierRefusal('settle', conflict('frontier is already settled'))!.message
+    expect(settled).toContain('Nothing was settled')
+    expect(settled).not.toMatch(/ruled|sample/)
+
+    // A 422 is the request itself: correct it; re-reading fixes nothing.
+    for (const kind of ['rule', 'settle'] as const) {
+      const message = frontierRefusal(kind, invalid('request validation failed'))!.message
+      expect(message).toContain('correct the refused fields')
+      expect(message).not.toContain('re-read')
+    }
+    expect(frontierRefusal('settle', invalid('x'))!.message).not.toContain('invalidCaseIds')
+
+    // Anything else passes through untouched.
+    expect(frontierRefusal('rule', new PlatformAdminError('server', 'boom', 503))).toBeNull()
+    expect(frontierRefusal('rule', new Error('plain'))).toBeNull()
   })
 })

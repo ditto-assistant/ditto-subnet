@@ -61,6 +61,14 @@ def _images() -> dict[str, str]:
     }
 
 
+def _candidate_images() -> dict[str, str]:
+    """Component digests of the fixture's 0.10.1 candidate release."""
+    return {
+        key: value.rsplit(":", 1)[0] + ":" + "e" * 64
+        for key, value in _images().items()
+    }
+
+
 def _release_images() -> dict[str, str]:
     return {
         key: f"{repository}@sha256:{index:064x}"
@@ -662,6 +670,11 @@ elif args[:1] == ["exec"]:
             state["busy_checks_remaining"] = checks_remaining - 1
         else:
             state["runtime_state"]["state"] = "drained"
+    if "late_resume_after_reads" in state:
+        # A resume (USR2) the daemon delivers while the updater is waiting.
+        if state["late_resume_after_reads"] <= 0:
+            state["runtime_state"]["state"] = "working"
+        state["late_resume_after_reads"] -= 1
     print(json.dumps(state["runtime_state"], separators=(",", ":")))
 elif args[:1] == ["kill"]:
     signal_name = next(
@@ -721,6 +734,35 @@ if not descriptor_ref.startswith(
     "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:"
 ):
     raise SystemExit("validated release descriptor reference is malformed")
+
+
+def _state_value(name, key):
+    path = os.path.join(state_dir, name)
+    if not os.path.isfile(path):
+        return ""
+    with open(path) as handle:
+        for line in handle:
+            if line.startswith(key + "="):
+                return line.rstrip("\n").split("=", 1)[1]
+    return ""
+
+
+# Mirror validator-stack-compose.sh: current stays bound to the managed release
+# unless a committed (or migration) journal names it, or a bootstrap installs it.
+if release_dir == os.path.join(state_dir, "current"):
+    managed_ref = _state_value("managed-release.env", "STACK_RELEASE")
+    transaction_ref = ""
+    if _state_value("transaction.env", "PHASE") in {"committed", "migration_started"}:
+        transaction_ref = _state_value("transaction.env", "CANDIDATE_RELEASE")
+    bootstrap_ref = ""
+    if not managed_ref and _state_value(
+        "bootstrap-transaction.env", "BOOTSTRAP_PHASE"
+    ) == "installing":
+        bootstrap_ref = _state_value("bootstrap-transaction.env", "BOOTSTRAP_RELEASE")
+    if descriptor_ref not in {managed_ref, transaction_ref, bootstrap_ref}:
+        raise SystemExit(
+            "managed current release descriptor does not match installed state"
+        )
 if args[:2] == ["ps", "-q"]:
     container_name = args[2] + "-container"
     if container_name in state["containers"]:
@@ -971,10 +1013,7 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
     old_release = tmp_path / "old-release"
     new_release = tmp_path / "new-release"
     old_images = _images()
-    new_images = {
-        key: value.rsplit(":", 1)[0] + ":" + "e" * 64
-        for key, value in old_images.items()
-    }
+    new_images = _candidate_images()
     _write_release(old_release, "0.10.0", old_images)
     _write_release(new_release, "0.10.1", new_images)
     image_ids = {
@@ -1265,6 +1304,10 @@ def test_candidate_prefetch_authenticates_and_warms_without_draining(
         "CANDIDATE_RELEASE": STACK_DIGEST,
         "CANDIDATE_VERSION": "0.10.1",
     }
+    assert _manifest(state_dir / "prefetched-release-images.env") == {
+        "CANDIDATE_RELEASE": STACK_DIGEST,
+        **{f"CANDIDATE_{key}": image for key, image in _candidate_images().items()},
+    }
     assert not (state_dir / "staged").exists()
     final = json.loads(state_path.read_text())
     assert [
@@ -1306,6 +1349,141 @@ def test_repeated_candidate_prefetch_reuses_authenticated_warm_state(
         ],
     ]
     assert final["compose_calls"] == []
+
+
+def _prefetch_candidate(env: dict[str, str], env_file: Path) -> None:
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+    prefetched = _run_updater(env, "prefetch")
+    assert prefetched.returncode == 0, prefetched.stderr
+
+
+def _set_channel(state_path: Path, digest: str) -> None:
+    state = json.loads(state_path.read_text())
+    state["channel_digest"] = digest
+    state["calls"] = []
+    state_path.write_text(json.dumps(state))
+
+
+def test_noop_run_tick_keeps_the_prefetched_candidate(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    """#2980: candidate-compat-2 is staged while compat-2 still names the
+    installed release, so every run tick is a no-op until promotion."""
+    env, state_path, state_dir, env_file = stack_updater_env
+    _prefetch_candidate(env, env_file)
+    obsolete = "ghcr.io/ditto-assistant/ditto-subnet-validator@sha256:" + "8" * 64
+    state = json.loads(state_path.read_text())
+    state["image_inventory"].append(obsolete)
+    state_path.write_text(json.dumps(state))
+    _set_channel(state_path, OLD_STACK_DIGEST)
+
+    tick = _run_updater(env, "run")
+
+    assert tick.returncode == 0, tick.stderr
+    assert "already running stack release" in tick.stderr
+    assert (state_dir / "prefetched-release.env").exists()
+    removed = json.loads(state_path.read_text()).get("removed_images", [])
+    assert removed == [obsolete]
+
+    _set_channel(state_path, STACK_DIGEST)
+    repeated = _run_updater(env, "prefetch")
+
+    assert repeated.returncode == 0, repeated.stderr
+    assert "candidate already prefetched" in repeated.stderr
+    pulls = [
+        call[1]
+        for call in json.loads(state_path.read_text())["calls"]
+        if call[0] == "pull"
+    ]
+    assert pulls == ["ghcr.io/ditto-assistant/ditto-subnet-stack:candidate-compat-2"]
+
+
+def test_noop_run_tick_discards_a_prefetch_marker_for_the_installed_release(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    _prefetch_candidate(env, env_file)
+    marker = state_dir / "prefetched-release.env"
+    marker.write_text(marker.read_text().replace(STACK_DIGEST, OLD_STACK_DIGEST))
+    _set_channel(state_path, OLD_STACK_DIGEST)
+
+    tick = _run_updater(env, "run")
+
+    assert tick.returncode == 0, tick.stderr
+    assert not marker.exists()
+    assert not (state_dir / "prefetched-release-images.env").exists()
+    removed = set(json.loads(state_path.read_text()).get("removed_images", []))
+    assert removed == {STACK_DIGEST, *_candidate_images().values()}
+
+
+def test_legacy_prefetch_marker_is_reverified_with_component_digests(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    """A marker written by an older updater names no components, so cleanup
+    cannot retain them. It is discarded and the next prefetch rewrites it."""
+    env, state_path, state_dir, env_file = stack_updater_env
+    _prefetch_candidate(env, env_file)
+    (state_dir / "prefetched-release-images.env").unlink()
+    _set_channel(state_path, STACK_DIGEST)
+
+    refreshed = _run_updater(env, "prefetch")
+
+    assert refreshed.returncode == 0, refreshed.stderr
+    assert "candidate already prefetched" not in refreshed.stderr
+    candidate_validator = _candidate_images()["VALIDATOR_IMAGE"]
+    images = _manifest(state_dir / "prefetched-release-images.env")
+    assert images["CANDIDATE_VALIDATOR_IMAGE"] == candidate_validator
+
+    marker = state_dir / "prefetched-release.env"
+    (state_dir / "prefetched-release-images.env").unlink()
+    _set_channel(state_path, OLD_STACK_DIGEST)
+    tick = _run_updater(env, "run")
+
+    assert tick.returncode == 0, tick.stderr
+    assert not marker.exists()
+
+
+def test_an_image_list_for_another_release_is_not_trusted(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    """The image list vouches only for the release it names; a stale one left
+    beside a newer marker retains nothing and is re-verified."""
+    env, state_path, state_dir, env_file = stack_updater_env
+    _prefetch_candidate(env, env_file)
+    images = state_dir / "prefetched-release-images.env"
+    other = "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "7" * 64
+    images.write_text(images.read_text().replace(STACK_DIGEST, other))
+    _set_channel(state_path, OLD_STACK_DIGEST)
+
+    tick = _run_updater(env, "run")
+
+    assert tick.returncode == 0, tick.stderr
+    assert not (state_dir / "prefetched-release.env").exists()
+    assert not images.exists()
+
+
+def test_validator_status_reader_accepts_the_prefetch_marker(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The marker is read inside already-deployed validator images, whose
+    reader allows only CANDIDATE_RELEASE and CANDIDATE_VERSION."""
+    from ditto.validator.updater_status import collect_updater_status
+
+    env, _, state_dir, env_file = stack_updater_env
+    _prefetch_candidate(env, env_file)
+    monkeypatch.setenv("VALIDATOR_STACK_MODE", "managed")
+    monkeypatch.setenv("VALIDATOR_STACK_UPDATER", "true")
+    monkeypatch.setenv("VALIDATOR_STACK_DESCRIPTOR_REF", OLD_STACK_DIGEST)
+    monkeypatch.setenv("VALIDATOR_STACK_VERSION", "0.10.0")
+
+    status = collect_updater_status(observed_at=100, state_dir=state_dir)
+
+    assert status.state == "prefetched"
+    assert status.candidate_descriptor == STACK_DIGEST
+    assert status.candidate_version == "0.10.1"
 
 
 def test_supervised_adoption_binds_every_running_service(
@@ -2299,7 +2477,7 @@ def test_legacy_validator_only_state_is_not_silently_adopted(
 
 
 @pytest.mark.parametrize(
-    "phase", ["old_stopped", "candidate_started", "rollback_pending"]
+    "phase", ["old_stopped", "candidate_started", "rollback_pending", "rollback_ready"]
 )
 def test_recover_restores_the_complete_previous_stack_after_crash_phase(
     stack_updater_env: tuple[dict[str, str], Path, Path, Path],
@@ -2332,6 +2510,177 @@ def test_recover_restores_the_complete_previous_stack_after_crash_phase(
     assert all(container["running"] for container in final["containers"].values())
     assert final["runtime_state"]["state"] == "working"
     assert len([call for call in final["compose_calls"] if "up" in call]) == 2
+
+
+def _journal_rollback_ready(
+    env: dict[str, str],
+    state_path: Path,
+    state_dir: Path,
+    *,
+    promoted: bool,
+    runtime: dict[str, object],
+    managed: str = OLD_STACK_DIGEST,
+    containers: dict[str, dict[str, object]] | None = None,
+    extra: dict[str, object] | None = None,
+) -> None:
+    """Leave the journal where a rollback died after recording rollback_ready.
+
+    ``promoted=False`` is the committed-candidate rollback before promotion:
+    the failed candidate is still the current tree and the restored release is
+    the previous one. ``promoted=True`` is after promotion, or a rollback from
+    an earlier phase, where the current tree is already the restored release.
+    """
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    if promoted:
+        shutil.copytree(state_dir / "current", state_dir / "previous")
+    else:
+        (state_dir / "current").rename(state_dir / "previous")
+        state = json.loads(state_path.read_text())
+        shutil.copytree(state["descriptor_dirs"][STACK_DIGEST], state_dir / "current")
+        (state_dir / "current/.descriptor-ref").write_text(STACK_DIGEST + "\n")
+    (state_dir / "transaction.env").write_text(
+        f"PHASE=rollback_ready\nPREVIOUS_RELEASE={OLD_STACK_DIGEST}\n"
+        f"CANDIDATE_RELEASE={STACK_DIGEST}\n"
+    )
+    (state_dir / "managed-release.env").write_text(f"STACK_RELEASE={managed}\n")
+    state = json.loads(state_path.read_text())
+    state["runtime_state"].update(runtime)
+    for name, overrides in (containers or {}).items():
+        state["containers"][name].update(overrides)
+    state.update(extra or {})
+    state["calls"] = []
+    state["compose_calls"] = []
+    state_path.write_text(json.dumps(state))
+
+
+@pytest.mark.parametrize("promoted", [False, True])
+def test_rollback_ready_recovery_keeps_a_resumed_working_stack(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+    promoted: bool,
+) -> None:
+    """#2983: the restored validator resumed before the journal was cleared."""
+    env, state_path, state_dir, _ = stack_updater_env
+    _journal_rollback_ready(
+        env, state_path, state_dir, promoted=promoted, runtime={"state": "working"}
+    )
+
+    result = _run_updater(env, "recover")
+
+    assert result.returncode == 0, result.stderr
+    final = json.loads(state_path.read_text())
+    assert not any("up" in call for call in final["compose_calls"])
+    assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
+    assert not (state_dir / "transaction.env").exists()
+    assert _manifest(state_dir / "managed-release.env") == {
+        "STACK_RELEASE": OLD_STACK_DIGEST
+    }
+    current = (state_dir / "current/.descriptor-ref").read_text().strip()
+    assert current == OLD_STACK_DIGEST
+    assert _manifest(state_dir / "failed-candidate")["CANDIDATE"] == STACK_DIGEST
+
+
+def test_rollback_ready_recovery_resumes_a_drained_stack_without_recreating(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    _journal_rollback_ready(
+        env, state_path, state_dir, promoted=False, runtime={"state": "drained"}
+    )
+
+    result = _run_updater(env, "recover")
+
+    assert result.returncode == 0, result.stderr
+    final = json.loads(state_path.read_text())
+    assert not any("up" in call for call in final["compose_calls"])
+    assert ["kill", "--signal=USR2", "ditto-subnet-container"] in final["calls"]
+    assert final["runtime_state"]["state"] == "working"
+    assert not (state_dir / "transaction.env").exists()
+    current = (state_dir / "current/.descriptor-ref").read_text().strip()
+    assert current == OLD_STACK_DIGEST
+
+
+def test_rollback_ready_recovery_refuses_an_ambiguous_running_validator(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    """A running validator that is neither freshly accepted nor drained may be
+    working; recovery keeps the journal instead of recreating under it."""
+    env, state_path, state_dir, _ = stack_updater_env
+    _journal_rollback_ready(
+        env,
+        state_path,
+        state_dir,
+        promoted=False,
+        runtime={"state": "working", "platform_accepted": False},
+    )
+
+    result = _run_updater(env, "recover")
+
+    assert result.returncode != 0
+    assert "state is ambiguous" in result.stderr
+    final = json.loads(state_path.read_text())
+    assert not any("up" in call for call in final["compose_calls"])
+    assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
+    assert (state_dir / "transaction.env").exists()
+
+
+def test_rollback_ready_recovery_restores_a_promoted_release_still_unrecorded(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    """A committed update was rolled back and promoted, then the updater died
+    before managed-release.env named the restored release. The Compose
+    wrapper binds current to that file, so it is recorded first."""
+    env, state_path, state_dir, _ = stack_updater_env
+    _journal_rollback_ready(
+        env,
+        state_path,
+        state_dir,
+        promoted=True,
+        runtime={"state": "drained"},
+        managed=STACK_DIGEST,
+        containers={
+            name: {"running": False}
+            for name in json.loads(state_path.read_text())["containers"]
+        },
+    )
+
+    result = _run_updater(env, "recover")
+
+    assert result.returncode == 0, result.stderr
+    final = json.loads(state_path.read_text())
+    assert all(container["running"] for container in final["containers"].values())
+    assert final["runtime_state"]["state"] == "working"
+    assert not (state_dir / "transaction.env").exists()
+    assert _manifest(state_dir / "managed-release.env") == {
+        "STACK_RELEASE": OLD_STACK_DIGEST
+    }
+    assert _manifest(state_dir / "failed-candidate")["CANDIDATE"] == STACK_DIGEST
+
+
+def test_rollback_ready_recovery_rereads_state_after_the_quiescence_wait(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    """The validator was drained when recovery looked, but resumed while the
+    quiescence wait ran; the drained snapshot must not license a recreate."""
+    env, state_path, state_dir, _ = stack_updater_env
+    _journal_rollback_ready(
+        env,
+        state_path,
+        state_dir,
+        promoted=False,
+        runtime={"state": "drained"},
+        containers={"pylon-container": {"health": "unhealthy"}},
+        extra={"late_resume_after_reads": 1},
+    )
+
+    result = _run_updater(env, "recover")
+
+    assert result.returncode != 0
+    assert "state is ambiguous" in result.stderr
+    final = json.loads(state_path.read_text())
+    assert not any("up" in call for call in final["compose_calls"])
+    assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
+    assert (state_dir / "transaction.env").exists()
 
 
 def test_reconfigure_recreates_the_current_release_from_host_environment(

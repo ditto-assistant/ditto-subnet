@@ -25,8 +25,10 @@ from ditto.miner_cli.commands import link_ditto as link_ditto_cmd
 from ditto.miner_cli.commands import link_github as link_github_cmd
 from ditto.miner_cli.commands import login as login_cmd
 from ditto.miner_cli.commands import logs as logs_cmd
+from ditto.miner_cli.commands import model_context as model_context_cmd
 from ditto.miner_cli.commands import name_claim as name_claim_cmd
 from ditto.miner_cli.commands import practice as practice_cmd
+from ditto.miner_cli.commands import readmit as readmit_cmd
 from ditto.miner_cli.commands import status as status_cmd
 from ditto.miner_cli.commands import upload as upload_cmd
 from ditto.miner_cli.commands import verify as verify_cmd
@@ -138,6 +140,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub_parent = _build_subcommand_parent()
     subparsers = parser.add_subparsers(dest="command", required=True)
     upload_cmd.add_subparser(subparsers, parents=[sub_parent])
+    readmit_cmd.add_subparser(subparsers, parents=[sub_parent])
     practice_cmd.add_subparser(subparsers, parents=[sub_parent])
     status_cmd.add_subparser(subparsers, parents=[sub_parent])
     logs_cmd.add_subparser(subparsers, parents=[sub_parent])
@@ -151,6 +154,7 @@ def _build_parser() -> argparse.ArgumentParser:
     cla_cmd.add_subparser(subparsers, parents=[sub_parent])
     bounty_cmd.add_subparser(subparsers, parents=[sub_parent])
     generator_cmd.add_subparser(subparsers, parents=[sub_parent])
+    model_context_cmd.add_subparser(subparsers, parents=[sub_parent])
 
     return parser
 

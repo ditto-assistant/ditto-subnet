@@ -104,6 +104,10 @@ TRACK_SHARES_BPS = {"memory": BASIS_POINT_SCALE, "coding": 0, "router": 0}
 # to one. Inert while the router track is SHADOW / not weight-eligible.
 ROUTER_RANK_SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
 GENERATOR_RANK_SHARES = (0.40, 0.25, 0.15, 0.12, 0.08)
+# The model_context (CPM) payout curve when the ledger serves none (contract
+# ``docs/research/cpm/competition-v1.md`` section 5.2). Inert: the track ships
+# SHADOW and not weight-eligible.
+MODEL_CONTEXT_RANK_SHARES = (0.50, 0.20, 0.13, 0.10, 0.07)
 _CODING_EXECUTOR_PRIVATE_NETWORKS = tuple(
     ip_network(value) for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
@@ -576,6 +580,27 @@ class ValidatorConfig:
     the ledger would fold an empty generator vector and pay a governed
     generator share to memory while the rest of the fleet pays generators."""
 
+    model_context_track_state: str = "shadow"
+    """Lifecycle state of the model_context (CPM) track. Compiled-only for
+    consensus safety. ``shadow``: folded and logged every epoch, 0 emission.
+    Paying it is a later owner step (contract section 7): add it to Platform's
+    ``PAYABLE_TRACKS``, bump the heartbeat protocol with a gate, and set a
+    share."""
+
+    model_context_weight_eligible: bool = False
+    """Whether the model_context track may contribute emissions. ``False``
+    while the track is in shadow."""
+
+    model_context_rank_shares: tuple[float, ...] = MODEL_CONTEXT_RANK_SHARES
+    """Fallback payout curve when the ledger serves no usable ``rank_shares``.
+    Inert while shadow."""
+
+    model_context_ledger_read_enabled: bool = True
+    """Whether the worker reads ``GET /scoring/model-context-ledger``
+    (``VALIDATOR_MODEL_CONTEXT_LEDGER_READ_ENABLED``, default on). Reading
+    changes no chain output while the track is shadow: a failed or disabled
+    read folds an empty ledger."""
+
     def __post_init__(self) -> None:
         """Fail loud at boot on a genuinely misconfigured router split.
 
@@ -603,6 +628,14 @@ class ValidatorConfig:
                 "generator_rank_shares must be non-empty finite positive values, "
                 f"got {self.generator_rank_shares!r}"
             )
+        if not self.model_context_rank_shares or any(
+            not math.isfinite(share) or share <= 0.0
+            for share in self.model_context_rank_shares
+        ):
+            raise ValidatorConfigError(
+                "model_context_rank_shares must be non-empty finite positive "
+                f"values, got {self.model_context_rank_shares!r}"
+            )
         if self.generator_weight_eligible and not self.generator_ledger_read_enabled:
             # Eligibility without the ledger read would fold an empty ledger
             # and pay a governed generator share to memory while the rest of
@@ -610,6 +643,18 @@ class ValidatorConfig:
             raise ValidatorConfigError(
                 "generator_weight_eligible requires generator_ledger_read_enabled; "
                 "unset VALIDATOR_GENERATOR_LEDGER_READ_ENABLED (default true)"
+            )
+        if (
+            self.model_context_weight_eligible
+            and not self.model_context_ledger_read_enabled
+        ):
+            # Same consensus-split hazard as the generator track: an eligible
+            # model_context track that cannot read its ledger would fold
+            # nothing while the rest of the fleet pays its share.
+            raise ValidatorConfigError(
+                "model_context_weight_eligible requires "
+                "model_context_ledger_read_enabled; unset "
+                "VALIDATOR_MODEL_CONTEXT_LEDGER_READ_ENABLED (default true)"
             )
 
     def signing_source_present(self) -> bool:
@@ -937,6 +982,12 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         ),
         generator_ledger_read_enabled=(
             os.environ.get("VALIDATOR_GENERATOR_LEDGER_READ_ENABLED", "true").lower()
+            in _truthy
+        ),
+        model_context_ledger_read_enabled=(
+            os.environ.get(
+                "VALIDATOR_MODEL_CONTEXT_LEDGER_READ_ENABLED", "true"
+            ).lower()
             in _truthy
         ),
     )

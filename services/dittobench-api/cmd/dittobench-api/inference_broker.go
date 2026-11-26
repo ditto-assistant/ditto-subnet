@@ -151,6 +151,10 @@ type brokerSession struct {
 	provider                 string
 	model                    string
 	requestModel             string
+	// frontierOracleRun is set by claimRunForMode when an oracle-mode run binds
+	// a session on the pinned llm.FrontierOracleModel route. Relay preflight
+	// accepts that route only on such a session (requireTokenAccounting).
+	frontierOracleRun bool
 	// Budget evidence is copied from the authenticated Platform exchange. It is
 	// optional during a rolling upgrade; when present it lets this independent
 	// broker reject an impossible 4102/4104/4109 attribution instead of trusting
@@ -186,6 +190,16 @@ type brokerSession struct {
 	// (decision_lane.go): calls in flight and signed dispatches this run.
 	decisionInFlight   int
 	decisionDispatches uint64
+	// decisionCompleted, decisionInputTokens and decisionOutputTokens are the
+	// 2xx decision calls and their relay-reported usage (bench v16 priced
+	// cost; recordDecisionUsage).
+	decisionCompleted    uint64
+	decisionUsageMissing uint64
+	// decisionPendingBytes is the request size of decision calls dispatched
+	// but not yet settled, priced as input tokens until they settle.
+	decisionPendingBytes uint64
+	decisionInputTokens  uint64
+	decisionOutputTokens uint64
 	// chatConcurrency is the per-source in-flight chat admission for this
 	// session. Zero means brokerPerSourceConcurrency; the scorer raises it to
 	// the run's effective case concurrency so overlapping /run calls are not
@@ -2751,6 +2765,14 @@ func validBrokerTicketIdentity(identity brokerTicketIdentity, now time.Time) boo
 }
 
 func (b *inferenceBroker) claimRun(id, runID string, identity brokerTicketIdentity, benchVersion int) bool {
+	return b.claimRunForMode(id, runID, identity, benchVersion, false)
+}
+
+// claimRunForMode is claimRun for a run whose dataset mode is known. Only a
+// generator frontier oracle run (oracle) may bind a session whose Platform
+// grant pins llm.FrontierOracleModel on its aggregate route; every other run
+// must be on the bench contract's harness model and route, as before.
+func (b *inferenceBroker) claimRunForMode(id, runID string, identity brokerTicketIdentity, benchVersion int, oracle bool) bool {
 	b.mu.RLock()
 	session := b.sessions[id]
 	b.mu.RUnlock()
@@ -2780,15 +2802,19 @@ func (b *inferenceBroker) claimRun(id, runID string, identity brokerTicketIdenti
 			GrantID: session.grantID, AgentID: session.ticketAgentID,
 			SlotID: session.ticketSlotID, TicketDeadline: session.ticketDeadline,
 		}
-		if !validBenchmarkRouteProfile(benchVersion, session.profileRevision) || !validBrokerTicketIdentity(identity, now) ||
+		if !sessionRouteAllowed(benchVersion, session.model, session.profileRevision, oracle) || !validBrokerTicketIdentity(identity, now) ||
 			identity.GrantID != expected.GrantID || identity.AgentID != expected.AgentID ||
 			identity.SlotID != expected.SlotID || !identity.TicketDeadline.Equal(expected.TicketDeadline) {
 			return false
 		}
 	}
-	if session.model != llm.HarnessModelForVersion(benchVersion) || session.provider == "" || session.profileRevision == "" {
+	oracleRoute := oracle && benchVersion >= protocol.BenchVersionV9 &&
+		llm.FrontierOracleRoute(session.model, session.profileRevision)
+	if (session.model != llm.HarnessModelForVersion(benchVersion) && !oracleRoute) ||
+		session.provider == "" || session.profileRevision == "" {
 		return false
 	}
+	session.frontierOracleRun = oracleRoute
 	session.requestModel = session.model
 	session.boundRunID = runID
 	session.benchVersion = benchVersion
@@ -4769,7 +4795,8 @@ func (b *inferenceBroker) snapshot(id string) (relayHealthSnapshot, error) {
 		RecoveryExhaustions:       session.recoveryExhaustions,
 		CallerCancellations:       session.callerCancels, UpstreamAttempts: session.upstreamAttempts,
 		Provider: session.provider, ProfileRevision: session.profileRevision,
-		Model: session.model, UsageAvailable: session.usageAvailable,
+		Model: session.model, FrontierOracleRun: session.frontierOracleRun,
+		UsageAvailable:   session.usageAvailable,
 		UsageUnavailable: session.usageUnavailable, PromptTokens: session.promptTokens,
 		PromptBytes: session.promptBytes, CompletionTokens: session.completionTokens,
 		ProviderLatencyMs: session.providerLatency, TTFTStatus: "not_streamed",

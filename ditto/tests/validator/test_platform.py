@@ -25,6 +25,7 @@ from ditto.api_models.validator import (
     FAILURE_DETAIL_MAX_LENGTH,
     LEGACY_FAILURE_DETAIL_MAX_LENGTH,
     FailJobRequest,
+    HarnessMemoryTelemetry,
     JobRequest,
     JobResponse,
     LedgerEntry,
@@ -40,8 +41,9 @@ from ditto.validator.errors import (
     PlatformError,
     PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
+    PlatformRetryLaterError,
 )
-from ditto.validator.platform import PlatformClient
+from ditto.validator.platform import PlatformClient, last_job_decline_reason
 from ditto.validator.signing import (
     artifact_signing_message,
     job_fail_signing_message,
@@ -163,6 +165,44 @@ async def test_job_claim_is_fresh_and_signed_by_validator_hotkey() -> None:
 
 
 @pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("allocator_busy", "allocator_busy"),
+        ("no_candidate", "no_candidate"),
+        (None, None),
+        ("Not A Reason!", None),
+        ("x" * 65, None),
+    ],
+)
+async def test_job_claim_204_exposes_platforms_decline_reason(
+    header: str | None, expected: str | None
+) -> None:
+    """The worker backs off differently for a busy allocator and an empty queue."""
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    responses = [
+        httpx.Response(
+            204, headers={"X-Ditto-Decline-Reason": header} if header else {}
+        ),
+        httpx.Response(204),
+    ]
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return responses.pop(0)
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        assert await platform.request_job(slot_id="slot-0") is None
+        assert last_job_decline_reason() == expected
+        # Each call starts clean: a later bare 204 never inherits the reason.
+        assert await platform.request_job(slot_id="slot-0") is None
+        assert last_job_decline_reason() is None
+
+
+@pytest.mark.parametrize(
     ("status", "expected"),
     [(428, PlatformHeartbeatRequiredError), (426, PlatformError)],
 )
@@ -184,6 +224,90 @@ async def test_job_claim_types_the_stale_heartbeat_gate(
         with pytest.raises(expected) as raised:
             await platform.request_job(slot_id="slot-0")
     assert (type(raised.value) is PlatformHeartbeatRequiredError) is (status == 428)
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "expected_seconds"),
+    [
+        ("15", 15.0),
+        ("2.5", 2.5),
+        ("0", 1.0),
+        ("9999", 120.0),
+        (None, None),
+        ("", None),
+        ("Wed, 21 Oct 2015 07:28:00 GMT", None),
+        ("-5", None),
+        ("nan", None),
+        ("inf", None),
+    ],
+)
+async def test_job_claim_types_a_retry_later_refusal(
+    retry_after: str | None, expected_seconds: float | None
+) -> None:
+    """Only a 503 with usable delta-seconds Retry-After is a retry-later."""
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    headers = {} if retry_after is None else {"Retry-After": retry_after}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503, json={"detail": "dueling slice preparation pending"}, headers=headers
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        with pytest.raises(PlatformError) as raised:
+            await platform.request_job(slot_id="slot-0")
+    if expected_seconds is None:
+        assert type(raised.value) is PlatformError
+    else:
+        assert isinstance(raised.value, PlatformRetryLaterError)
+        assert raised.value.retry_after_seconds == expected_seconds
+        assert "dueling slice preparation pending" in str(raised.value)
+
+
+async def test_confirmation_claim_types_a_retry_later_refusal() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={"detail": "dueling slice preparation pending"},
+            headers={"Retry-After": "15"},
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        with pytest.raises(PlatformRetryLaterError) as raised:
+            await platform.request_top5_confirmation_job(slot_id="slot-0")
+    assert raised.value.retry_after_seconds == 15.0
+
+
+async def test_job_claim_conflict_is_not_a_retry_later() -> None:
+    """409 keeps its plain refusal even when it carries Retry-After."""
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            409, json={"detail": "stale"}, headers={"Retry-After": "5"}
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        with pytest.raises(PlatformError) as raised:
+            await platform.request_job(slot_id="slot-0")
+    assert type(raised.value) is PlatformError
 
 
 def _coding_certification_submit_args() -> tuple[
@@ -1897,3 +2021,82 @@ async def test_get_artifact_refusal_is_not_retried_or_infrastructure(
 
     assert not isinstance(raised.value, PlatformInfrastructureError)
     assert attempts == 1
+
+
+_TELEMETRY = HarnessMemoryTelemetry(
+    peak_bytes=1900 << 20,
+    p50_bytes=600 << 20,
+    p95_bytes=1700 << 20,
+    samples=812,
+    sampled_seconds=1624.0,
+    limit_bytes=2048 << 20,
+)
+
+
+@pytest.mark.parametrize("telemetry", [_TELEMETRY, None])
+async def test_submit_score_carries_harness_memory_only_when_measured(
+    telemetry: HarnessMemoryTelemetry | None,
+) -> None:
+    """SN-500: unsigned telemetry beside the report, absent when unmeasured."""
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"agent_id": str(agent_id), "status": "evaluating", "accepted": True},
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await PlatformClient(cast(Any, config), http, keypair).submit_score(
+            agent_id,
+            signature="ab" * 64,
+            report=_score_report(),
+            ticket_deadline=datetime.now(UTC) + timedelta(hours=1),
+            harness_memory=telemetry,
+        )
+
+    if telemetry is None:
+        assert "harness_memory" not in bodies[0]
+    else:
+        assert bodies[0]["harness_memory"]["p95_bytes"] == 1700 << 20
+
+
+async def test_report_ticket_failed_carries_harness_memory() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    job = JobResponse(
+        agent_id=agent_id,
+        miner_hotkey="5MinerA" + "x" * 41,
+        sha256="ab" * 32,
+        deadline=datetime(2026, 7, 14, 12, 30, tzinfo=UTC),
+        seed=1,
+        dataset_sha256="cd" * 32,
+        run_size="full",
+    )
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"agent_id": str(agent_id), "reopened": True})
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await PlatformClient(cast(Any, config), http, keypair).report_ticket_failed(
+            job, "sandbox_oom", "harness_oom", harness_memory=_TELEMETRY
+        )
+        await PlatformClient(cast(Any, config), http, keypair).report_ticket_failed(
+            job, "scoring_error"
+        )
+
+    assert bodies[0]["harness_memory"]["peak_bytes"] == 1900 << 20
+    assert "harness_memory" not in bodies[1]

@@ -1,5 +1,12 @@
 import { z } from 'zod'
-import { auditReasonSchema } from './admin.schemas'
+import {
+  auditReasonSchema,
+  sourceExcerptInputSchema,
+  sourceExcerptSchema,
+  sourceListingSchema,
+  sourceSearchInputSchema,
+  sourceSearchResultSchema,
+} from './admin.schemas'
 
 // DittoBench generator competition. Miners submit CPU-only Go generator
 // source; the scorer qualifies it (build, valid packs on secret seeds,
@@ -11,9 +18,12 @@ import { auditReasonSchema } from './admin.schemas'
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/)
 const uuid = z.string().uuid()
+const frontierState = z.enum(['oracle_pending', 'audit_pending', 'settled'])
 const ss58 = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{47,48}$/)
 
 export const GENERATOR_SETTINGS_SCOPE = '*'
+// Platform MAX_ROUND_COLUMNS: counted plus challenger columns in one round.
+export const MAX_ROUND_COLUMNS = 8
 export const PROBE_ROTATION_CONFIRMATION = 'ROTATE GENERATOR PROBE SEED'
 export const REJECT_GENERATOR_CONFIRMATION = 'REJECT GENERATOR SUBMISSION'
 export const REINSTATE_GENERATOR_CONFIRMATION = 'REINSTATE GENERATOR SUBMISSION'
@@ -27,6 +37,19 @@ export function voidRoundConfirmation(roundIndex: number) {
 
 export function closeRoundConfirmation(roundIndex: number) {
   return `CLOSE GENERATOR ROUND ${roundIndex}`
+}
+
+// Platform frontier_audit_confirmation / frontier_settle_confirmation.
+export function frontierAuditConfirmation(roundIndex: number, columnId: string, valid: boolean) {
+  return `RULE FRONTIER AUDIT ${roundIndex} ${columnId} ${valid ? 'VALID' : 'INVALID'}`
+}
+
+export function frontierSettleConfirmation(roundIndex: number) {
+  return `SETTLE GENERATOR FRONTIER ${roundIndex}`
+}
+
+export function frontierRerunConfirmation(roundIndex: number) {
+  return `RERUN GENERATOR FRONTIER ${roundIndex}`
 }
 
 export function generatorSettingsConfirmation(mode: string) {
@@ -57,7 +80,11 @@ export const generatorCompetitionSettingsSchema = z.object({
   retry_backoff_seconds: z.number().int().min(60).max(86_400),
   epochs_per_round: z.number().int().min(1).max(48),
   counted_columns: z.number().int().min(1).max(6),
-  challenger_columns: z.number().int().min(0).max(2),
+  // The minimum a round seats: above 0, every waiting template family gets a
+  // challenger column up to MAX_ROUND_COLUMNS. The setting is still bounded by
+  // that capacity: counted plus challenger columns hold at most
+  // MAX_ROUND_COLUMNS (Platform refuses more; the write below checks it first).
+  challenger_columns: z.number().int().min(0).max(MAX_ROUND_COLUMNS - 1),
   reference_agent_ids: z.array(uuid).max(3),
   privacy_window_rounds: z.number().int().min(1).max(180),
   onchain_commitment: z.boolean(),
@@ -85,6 +112,64 @@ export const generatorCompetitionSettingsSchema = z.object({
   // dueling version is active or rolling out, so a canary at it can lease a
   // slice before start_benchmark_rollout. Null by default; needs dueling_enabled.
   dueling_shadow_bench_version: z.number().int().min(16).nullable(),
+  // Skip a round that would only repeat the last scored round (same
+  // generator sources, panel agents, bench version, column size and score
+  // params): no generation or panel inference, and the ledger keeps paying
+  // that scored round. Ships on; a write that omits it keeps it on.
+  skip_unchanged_rounds: z.boolean().default(true),
+  // At each season boundary, re-score once on the new set every paid or
+  // public top-five agent with no score in the season that just closed, so
+  // it does not expire unscored. season_catchup_enabled is the kill switch
+  // (ships on); season_catchup_max_agents caps the agents per season (0..10,
+  // default 5). Board agents past the cap, then scored agents off the board
+  // whose window scores expire (once per agent and bench version), queue
+  // while their estimated cost fits season_catchup_budget_usd (0..200, default
+  // 10; runs x the metered per-run cost of the last 24 hours, or
+  // season_catchup_run_cost_usd, default 0.5, when nothing was metered). A
+  // write that omits them keeps the shipped defaults.
+  season_catchup_enabled: z.boolean().default(true),
+  season_catchup_max_agents: z.number().int().min(0).max(10).default(5),
+  season_catchup_budget_usd: z.number().min(0).max(200).default(10),
+  season_catchup_run_cost_usd: z.number().gt(0).max(20).default(0.5),
+  // Frontier cases: a case no two panel owners solved that the frontier
+  // oracle (frontier_oracle_agent_id, a subnet-run reference agent answering
+  // from a bounded context) passed and no failed sampled audit voided earns
+  // frontier_weight of full credit instead of the unsolved penalty. Off while
+  // frontier_oracle_agent_id is null (the default); a write that omits these
+  // keeps the shipped defaults.
+  frontier_weight: z.number().min(0).max(1).default(1),
+  frontier_oracle_agent_id: uuid.nullable().default(null),
+  frontier_audit_cases: z.number().int().min(0).max(16).default(3),
+  frontier_audit_grace_hours: z.number().int().min(1).max(336).default(24),
+  frontier_oracle_timeout_hours: z.number().int().min(1).max(168).default(12),
+  // The model the frontier oracle (and the escalation agent) answers on
+  // instead of the bench contract's harness model: exactly the route the
+  // scorer pins. Null (the default, and the reading of a revision that
+  // predates it) keeps the contract model. Set, an oracle job leases only to
+  // validators whose scorer advertises the model (SN-496).
+  frontier_oracle_model: z.enum(['z-ai/glm-5.3-flash']).nullable().default(null),
+  // Frontier escalation (ships off: inference spend): a stronger reference
+  // agent re-checks a capped, secret-seed sample of the cases the oracle
+  // failed (at most frontier_escalation_max_cases per round and
+  // frontier_escalation_max_cases_per_column per column, none from a column
+  // whose oracle failures exceed frontier_escalation_max_failed_fraction of
+  // its cases). A pass at frontier_escalation_solve_threshold (default 1.0, a
+  // full answer) is attested and audited like an oracle pass. Off while
+  // frontier_escalation_agent_id is null; a Platform or revision that
+  // predates the tier reads as off.
+  frontier_escalation_agent_id: uuid.nullable().default(null),
+  frontier_escalation_solve_threshold: z.number().gt(0).max(1).default(1),
+  frontier_escalation_max_cases: z.number().int().min(1).max(64).default(8),
+  frontier_escalation_max_cases_per_column: z.number().int().min(1).max(16).default(4),
+  frontier_escalation_max_failed_fraction: z.number().gt(0).max(1).default(0.25),
+  // Pre-screens (ships off: inference spend): batches of up to
+  // prescreen_columns never-scored generators, prescreen_cases cases each, on
+  // the top prescreen_panel_size runnable owners while no round needs the
+  // panel. A Platform or revision that predates the lane reads as off.
+  prescreen_enabled: z.boolean().default(false),
+  prescreen_cases: z.number().int().min(8).max(80).default(16),
+  prescreen_panel_size: z.number().int().min(1).max(16).default(3),
+  prescreen_columns: z.number().int().min(1).max(8).default(4),
 })
 
 // The shortest safe dueling season in subnet epochs (dueling-bench.md
@@ -156,6 +241,23 @@ export const setGeneratorSettingsInputSchema = z
         message: `a dueling season must span at least ${MIN_DUELING_SEASON_EPOCHS} epochs: `
           + `rounds_per_season x epochs_per_round = ${seasonEpochs}`,
         path: ['settings', 'rounds_per_season'],
+      })
+    }
+    // Platform refuses this too; checking here saves an operator a round trip.
+    if (input.settings.dueling_shadow_bench_version != null && !input.settings.dueling_enabled) {
+      context.addIssue({
+        code: 'custom',
+        message: 'dueling_shadow_bench_version needs dueling_enabled',
+        path: ['settings', 'dueling_shadow_bench_version'],
+      })
+    }
+    const columns = input.settings.counted_columns + input.settings.challenger_columns
+    if (columns > MAX_ROUND_COLUMNS) {
+      context.addIssue({
+        code: 'custom',
+        message: `a round holds at most ${MAX_ROUND_COLUMNS} columns: `
+          + `counted_columns + challenger_columns = ${columns}`,
+        path: ['settings', 'challenger_columns'],
       })
     }
   })
@@ -329,6 +431,26 @@ export const listGeneratorSubmissionsInputSchema = z.object({
 
 export const generatorSubmissionIdInputSchema = z.object({ submissionId: uuid })
 export const generatorRunIdInputSchema = z.object({ runId: uuid })
+
+// Generator source reads use the screening source readers' bounded Platform
+// inspector and audit trail, keyed on the generator submission instead of an
+// agent, with the archive digest the miner signed (source_sha256).
+const generatorSourceIdentity = { submission_id: uuid, source_sha256: sha256 }
+export const generatorSourceExcerptInputSchema = sourceExcerptInputSchema
+  .omit({ agentId: true })
+  .extend({ submissionId: uuid })
+export const generatorSourceSearchInputSchema = sourceSearchInputSchema
+  .omit({ agentId: true })
+  .extend({ submissionId: uuid })
+export const generatorSourceListingSchema = sourceListingSchema
+  .omit({ agent_id: true, artifact_sha256: true })
+  .extend(generatorSourceIdentity)
+export const generatorSourceExcerptSchema = sourceExcerptSchema
+  .omit({ agent_id: true })
+  .extend(generatorSourceIdentity)
+export const generatorSourceSearchResultSchema = sourceSearchResultSchema
+  .omit({ agent_id: true, artifact_sha256: true })
+  .extend(generatorSourceIdentity)
 export const generatorPromotionInputSchema = z.object({
   limit: z.number().int().min(1).max(500).default(100),
   offset: z.number().int().min(0).default(0),
@@ -363,7 +485,9 @@ export const reinstateGeneratorInputSchema = z.object({
 
 // --- rounds ----------------------------------------------------------------
 
-const roundStatus = z.enum(['committed', 'generating', 'running', 'scoring', 'scored', 'void'])
+const roundStatus = z.enum([
+  'committed', 'generating', 'running', 'scoring', 'scored', 'skipped', 'void',
+])
 
 const roundScheduleSchema = z.object({
   mode: z.string(),
@@ -401,6 +525,10 @@ const roundSummarySchema = z.object({
   closed_at: z.string().nullable().optional(),
   scored_at: z.string().nullable().optional(),
   void_reason: z.string().nullable().optional(),
+  // skipped_unchanged on a skipped round, and the scored round it carries
+  // forward. Absent from a Platform that never skips.
+  skip_reason: z.string().nullable().optional().default(null),
+  carried_from_round: z.number().int().nullable().optional().default(null),
   revealed_at: z.string().nullable().optional(),
   secret_hex: z.string().nullable().optional(),
   seed: z.string().nullable().optional(),
@@ -470,6 +598,10 @@ const columnViewSchema = z.object({
   trivial: z.number().int().nullable().optional(),
   unsolved: z.number().int().nullable().optional(),
   duplicate: z.number().int().nullable().optional(),
+  // Oracle-attested cases scored as frontier, and the round's frontier lane
+  // state. Optional so an older Platform parses.
+  frontier: z.number().int().nullable().optional(),
+  frontier_state: frontierState.nullable().optional(),
 })
 
 export const generatorRoundDetailSchema = z.object({
@@ -484,6 +616,9 @@ export const generatorRoundDetailSchema = z.object({
   generation: z.record(z.string(), z.unknown()).nullable(),
   column_case_counts: z.record(z.string(), z.number().int()),
   dataset_bytes: z.number().int().nullable(),
+  // The scored round's frontier lane (oracle, audits, applied credit).
+  // Optional so an older Platform parses.
+  frontier: z.lazy(() => generatorFrontierSchema).nullable().optional(),
   lease_id: uuid.nullable(),
   lease_expires_at: z.string().nullable(),
   lease_attempts: z.number().int(),
@@ -553,6 +688,37 @@ export const roundBenchContractPreviewSchema = z.object({
   scorer_grading_versions: z.array(z.number().int()).nullable().optional().default(null),
 })
 
+// One never-scored qualified miner generator in challenger pick order
+// (Platform GeneratorChallengerQueueEntry). Template families are interleaved:
+// family_position counts the family's scored or in-flight members plus its
+// members ahead of this one. Within a position the queue takes the highest
+// novelty: the share of its probe cases no measured generator and no
+// generator ahead of it emitted.
+const challengerQueueEntrySchema = z.object({
+  queue_position: z.number().int().nullable(),
+  submission_id: uuid,
+  miner_hotkey: z.string(),
+  owner_key: z.string(),
+  module: z.string(),
+  file_count: z.number().int(),
+  size_bytes: z.number().int(),
+  qualified_at: z.string().nullable(),
+  family: z.string(),
+  family_size: z.number().int(),
+  family_measured: z.number().int(),
+  family_position: z.number().int(),
+  // Absent from a Platform that predates novelty ordering; null in flight.
+  novelty: z.number().min(0).max(1).nullable().optional().default(null),
+  // Its latest pre-screen batch and its column score there once scored.
+  // Within a family position a positive score goes first (best first), then
+  // the unscreened, then a zero. Absent from a Platform without pre-screens.
+  prescreen_index: z.number().int().nullable().optional().default(null),
+  prescreen_score: z.number().nullable().optional().default(null),
+  status: z.enum(['challenger', 'counted', 'in_flight', 'owner_has_column', 'waiting']),
+  column_id: z.string().nullable().optional().default(null),
+  in_flight_round: z.number().int().nullable().optional().default(null),
+})
+
 export const generatorRoundPreviewSchema = z.object({
   schedule: roundScheduleSchema,
   columns: z.array(columnSlotSchema),
@@ -562,6 +728,8 @@ export const generatorRoundPreviewSchema = z.object({
   blockers: z.array(z.string()),
   skipped_panel_agents: z.array(skippedPanelAgentSchema).optional().default([]),
   bench_contract: roundBenchContractPreviewSchema.nullable().optional().default(null),
+  // Absent from a Platform that predates the challenger queue.
+  challenger_queue: z.array(challengerQueueEntrySchema).optional().default([]),
 })
 
 export const generatorRoundLoopSchema = z.object({
@@ -576,6 +744,20 @@ export const generatorRoundLoopSchema = z.object({
     })
     .nullable(),
   schedule: roundScheduleSchema.nullable(),
+  // The governing skip_unchanged_rounds setting, how many rounds were ever
+  // skipped as unchanged, and the newest one. Absent from an older Platform.
+  skip_unchanged_rounds: z.boolean().nullable().optional().default(null),
+  skipped_rounds: z.number().int().optional().default(0),
+  last_skipped_round: z
+    .object({
+      round_index: z.number().int(),
+      reason: z.string(),
+      carried_from_round: z.number().int().nullable(),
+      skipped_at: z.string().nullable(),
+    })
+    .nullable()
+    .optional()
+    .default(null),
 })
 
 const generatorScorerHeartbeatSchema = z.object({
@@ -638,6 +820,30 @@ export const tickGeneratorRoundsInputSchema = z.object({
 export const listGeneratorRoundsInputSchema = z.object({
   limit: z.number().int().min(1).max(100).default(20),
   offset: z.number().int().min(0).default(0),
+})
+
+export const listGeneratorPrescreensInputSchema = listGeneratorRoundsInputSchema
+
+// One pre-screen batch (Platform GeneratorPrescreenView). Its index is at or
+// above 2**40, apart from round indexes; it is never paid and only orders the
+// challenger queue.
+export const generatorPrescreenListSchema = z.object({
+  prescreens: z.array(z.object({
+    prescreen_index: z.number().int(),
+    status: z.enum(['generating', 'running', 'scoring', 'scored', 'void']),
+    opened_at: z.string(),
+    expires_at: z.string(),
+    closed_at: z.string().nullable().optional().default(null),
+    settings_revision: z.number().int(),
+    cases_per_column: z.number().int(),
+    bench_version: z.number().int(),
+    columns: z.array(columnSlotSchema),
+    panel: z.array(roundPanelSlotSchema),
+    dataset_sha256: z.string().nullable().optional().default(null),
+    lease_attempts: z.number().int().default(0),
+    void_reason: z.string().nullable().optional().default(null),
+  })),
+  counts_by_status: z.record(z.string(), z.number().int()),
 })
 
 export const generatorRoundIndexInputSchema = z.object({
@@ -713,3 +919,205 @@ export const defaultGeneratorUploadResponseSchema = z.object({
   expires_in: z.number().int().positive(),
   max_bytes: z.number().int().positive(),
 })
+
+// --- frontier cases ----------------------------------------------------------
+
+const frontierAuditStatus = z.enum(['pending', 'passed', 'failed'])
+
+export const generatorFrontierAuditSchema = z.object({
+  round_index: z.number().int(),
+  column_id: z.string(),
+  submission_id: uuid.nullable(),
+  miner_hotkey: z.string().nullable(),
+  status: frontierAuditStatus,
+  sample: z.array(z.string()),
+  attested_cases: z.number().int(),
+  invalid_case_ids: z.array(z.string()).default([]),
+  reason: z.string().nullable().optional(),
+  actor: z.string().nullable().optional(),
+  ruled_at: z.string().nullable().optional(),
+  audit_deadline: z.string().nullable().optional(),
+})
+
+export const generatorFrontierSchema = z.object({
+  round_index: z.number().int(),
+  state: frontierState,
+  oracle_agent_id: uuid,
+  // The model the oracle and escalation runs answer on (SN-496); null is the
+  // bench contract's harness model, as is a Platform that predates the field.
+  oracle_model: z.string().nullable().default(null),
+  frontier_weight: z.number(),
+  audit_cases: z.number().int(),
+  candidates: z.array(z.string()),
+  oracle_attempts: z.number().int(),
+  oracle_deadline: z.string().nullable(),
+  oracle: z
+    .object({
+      validator_hotkey: z.string(),
+      run_id: z.string(),
+      recorded_at: z.string(),
+      passed: z.number().int(),
+      failed: z.number().int(),
+      faulted: z.number().int(),
+      results: z.array(
+        z.object({ case_id: z.string(), score: z.number(), fault: z.boolean() }),
+      ),
+    })
+    .nullable(),
+  // The escalation tier's re-check of oracle-failed cases; null with
+  // escalation off (and from a Platform that predates it).
+  escalation: z
+    .object({
+      agent_id: uuid,
+      solve_threshold: z.number(),
+      oracle_failed: z.number().int(),
+      selected: z.array(z.string()),
+      skipped_columns: z.record(z.string(), z.string()).default({}),
+      attempts: z.number().int(),
+      deadline: z.string().nullable().optional().default(null),
+      outcome: z.string(),
+      validator_hotkey: z.string().nullable().optional().default(null),
+      run_id: z.string().nullable().optional().default(null),
+      recorded_at: z.string().nullable().optional().default(null),
+      passed: z.array(z.string()).default([]),
+      results: z
+        .array(z.object({ case_id: z.string(), score: z.number(), fault: z.boolean() }))
+        .default([]),
+    })
+    .nullable()
+    .optional()
+    .default(null),
+  attested: z.record(z.string(), z.array(z.string())),
+  audits: z.array(generatorFrontierAuditSchema),
+  applied: z.record(z.string(), z.array(z.string())).nullable().optional(),
+  column_scores: z.record(z.string(), z.number()),
+  base_column_scores: z.record(z.string(), z.number()).nullable().optional(),
+  created_at: z.string(),
+  settled_at: z.string().nullable().optional(),
+  settle_reason: z.string().nullable().optional(),
+  hold_reason: z.string().nullable().optional().default(null),
+})
+
+// The MCP paging contract (docs/mcp.md, Paging): count is the queue total,
+// returned this page, has_more whether another page exists. Platform serves
+// them; optional so an older Platform still parses.
+export const generatorFrontierAuditListSchema = z.object({
+  audits: z.array(generatorFrontierAuditSchema),
+  count: z.number().int().nonnegative(),
+  returned: z.number().int().nonnegative().optional(),
+  // The request bound (listGeneratorFrontierAuditsInputSchema): 1..200.
+  limit: z.number().int().positive().optional(),
+  offset: z.number().int().nonnegative().optional(),
+  has_more: z.boolean().optional(),
+})
+
+const frontierMemoryPair = z.object({
+  pair_id: z.string(),
+  timestamp: z.string(),
+  wave: z.number().int(),
+  prompt: z.string(),
+  response: z.string(),
+})
+
+export const generatorFrontierAuditDetailSchema = z.object({
+  audit: generatorFrontierAuditSchema,
+  cases: z.array(
+    z.object({
+      case_id: z.string(),
+      question: z.string(),
+      expected_answer: z.string(),
+      answer_kind: z.string().nullable().optional(),
+      answer_items: z.array(z.string()).default([]),
+      accept_any: z.array(z.string()).default([]),
+      distractor_answers: z.array(z.string()).default([]),
+      forbidden_answer: z.string().nullable().optional(),
+      dump_guard: z.array(z.string()).default([]),
+      user_id: z.string(),
+      run_after_wave: z.number().int(),
+      evidence: z.array(frontierMemoryPair),
+      visible_pairs: z.number().int(),
+      memory_matches: z.array(frontierMemoryPair),
+      memory_truncated: z.boolean(),
+      panel_mean_score: z.number().nullable().optional(),
+      panel_solvers: z.number().int().nullable().optional(),
+      panel_size: z.number().int().nullable().optional(),
+      oracle_score: z.number().nullable().optional(),
+      oracle_fault: z.boolean().nullable().optional(),
+    }),
+  ),
+})
+
+export const listGeneratorFrontierAuditsInputSchema = z.object({
+  includeRuled: z.boolean().default(false),
+  limit: z.number().int().min(1).max(200).default(50),
+  offset: z.number().int().min(0).default(0),
+})
+
+export const generatorFrontierAuditInputSchema = z.object({
+  roundIndex: z.number().int().nonnegative(),
+  columnId: z.string().min(1).max(32),
+  q: z.string().max(200).optional(),
+})
+
+export const ruleGeneratorFrontierAuditInputSchema = z
+  .object({
+    roundIndex: z.number().int().nonnegative(),
+    columnId: z.string().min(1).max(32),
+    valid: z.boolean(),
+    invalidCaseIds: z.array(z.string().min(1)).max(16).default([]),
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = frontierAuditConfirmation(input.roundIndex, input.columnId, input.valid)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
+        path: ['confirmation'],
+      })
+    }
+    if (input.valid !== (input.invalidCaseIds.length === 0)) {
+      context.addIssue({
+        code: 'custom',
+        message: input.valid
+          ? 'a valid ruling names no invalid cases'
+          : 'an invalid ruling names the sampled cases that are invalid',
+        path: ['invalidCaseIds'],
+      })
+    }
+  })
+
+export const settleGeneratorFrontierInputSchema = z
+  .object({
+    roundIndex: z.number().int().nonnegative(),
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = frontierSettleConfirmation(input.roundIndex)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
+        path: ['confirmation'],
+      })
+    }
+  })
+
+export const rerunGeneratorFrontierInputSchema = z
+  .object({
+    roundIndex: z.number().int().nonnegative(),
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = frontierRerunConfirmation(input.roundIndex)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
+        path: ['confirmation'],
+      })
+    }
+  })

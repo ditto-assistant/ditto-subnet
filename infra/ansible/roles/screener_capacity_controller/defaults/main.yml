@@ -19,3 +19,13 @@ screener_capacity_gce_project: ditto-app-dev
 screener_capacity_gce_region: us-central1
 screener_capacity_gce_mig: ditto-screener-fleet
 screener_capacity_platform_token_secret: screener-controller-api-token-prod
+
+# On-demand AWS EC2 primary. The controller starts the stopped instance when
+# work waits for it, through a web-identity role its own Google identity can
+# assume (no AWS key). Leave either value empty to stay GCE-only. Both come from
+# the aws-screener Terraform outputs.
+screener_capacity_aws_primary_instance_id: ""
+screener_capacity_aws_primary_role_arn: ""
+screener_capacity_aws_region: us-east-1
+screener_capacity_aws_web_identity_audience: ditto-screener-capacity
+screener_capacity_primary_wake_grace_seconds: 600

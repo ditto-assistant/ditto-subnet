@@ -28,9 +28,11 @@ from ditto.api_models.admin_copy_review import (
     AdminCopyReviewOpenResponse,
     AdminCopyReviewPrecedent,
     AdminCopyReviewPrecedentList,
+    AdminCopyReviewReferenceRelease,
     AdminCopyReviewResolveRequest,
     AdminCopyReviewResolveResponse,
     AdminDeferredReviewEvidence,
+    AdminSeasonRetestOutcome,
     AdminSourceDiffFileDetail,
     AdminSourceDiffManifest,
 )
@@ -50,6 +52,7 @@ from ditto.api_server.ath_review_state import (
     load_reopened_review_actions,
 )
 from ditto.api_server.dependencies import get_session, get_storage_client
+from ditto.api_server.dueling_seasons import queue_cleared_hold_retest
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.review_lineage import (
     ReviewLineageUnavailableError,
@@ -93,6 +96,12 @@ from ditto.db.queries.benchmark_rollout import (
     active_bench_version,
     open_rollout,
     preserve_desired_authority,
+)
+from ditto.db.queries.copy_hold_reference import (
+    ReferencePublicRelease,
+    ReferenceReleaseQuery,
+    derive_reference_public_releases,
+    reference_release_from_provenance,
 )
 from ditto.db.queries.king_reign import get_king_reveal
 from ditto.db.queries.lease_liveness import (
@@ -345,6 +354,7 @@ def _item(
     miner_coldkey: str | None = None,
     duplicate_of_coldkey: str | None = None,
     actions: list[AthReviewAction] | None = None,
+    reference_release: ReferencePublicRelease | None = None,
 ) -> AdminCopyReviewItem:
     provenance = review.algorithm_provenance
     review_kind = provenance.get("review_kind")
@@ -415,9 +425,52 @@ def _item(
             duplicate_of_coldkey=duplicate_of_coldkey if matched else None,
             duplicate_of_submitted_at=matched.created_at if matched else None,
             deferred_review=deferred_review,
+            reference_public_release=(
+                AdminCopyReviewReferenceRelease(
+                    reference_agent_id=reference_release.reference_agent_id,
+                    published_at=reference_release.published_at,
+                    public_before_upload=reference_release.public_before_upload,
+                    source=reference_release.source,
+                )
+                if reference_release is not None
+                else None
+            ),
         ),
         current_comparison=comparison,
     )
+
+
+async def _reference_releases(
+    session: AsyncSession, row_pairs: list[tuple[AthReview, Agent]]
+) -> dict[UUID, ReferencePublicRelease]:
+    """Each hold's reference publication, keyed by ``review_id`` (SN-499).
+
+    A hold opened since SN-499 recorded it at open. Older holds derive it from
+    the release ledger under the policy in force at their upload, in one
+    batched read for the whole set rather than one per hold. Rows without a
+    reference are absent.
+    """
+    releases: dict[UUID, ReferencePublicRelease] = {}
+    pending: list[ReferenceReleaseQuery] = []
+    for review, agent in row_pairs:
+        reference = review.original_duplicate_of
+        if reference is None:
+            continue
+        recorded = reference_release_from_provenance(review.algorithm_provenance)
+        if recorded is not None and recorded.reference_agent_id == reference:
+            releases[review.review_id] = recorded
+            continue
+        pending.append(
+            ReferenceReleaseQuery(
+                key=review.review_id,
+                reference_agent_id=reference,
+                held_uploaded_at=agent.created_at,
+            )
+        )
+    derived = await derive_reference_public_releases(session, pending)
+    for query in pending:
+        releases[cast(UUID, query.key)] = derived[query.key]
+    return releases
 
 
 def _audit(
@@ -428,6 +481,7 @@ def _audit(
     *,
     miner_coldkey: str | None = None,
     duplicate_of_coldkey: str | None = None,
+    reference_release: ReferencePublicRelease | None = None,
 ) -> AdminCopyReviewAudit:
     evidence = review.original_evidence
     provenance = review.algorithm_provenance
@@ -455,6 +509,7 @@ def _audit(
             miner_coldkey=miner_coldkey,
             duplicate_of_coldkey=duplicate_of_coldkey,
             actions=list(actions or []),
+            reference_release=reference_release,
         ),
         agent_status=agent.status.value,
         held_artifact_sha256=held_artifact_sha256,
@@ -729,7 +784,15 @@ async def list_copy_reviews(
         "copy", "benchmark_overfit", "deferred_source_review", "anomalous_score"
     ]
     | None = None,
+    order: Literal["oldest", "public_reference_first"] = "oldest",
 ) -> AdminCopyReviewList:
+    if order == "public_reference_first" and status != "pending":
+        # The priority tier is a queue order. Resolved history has no queue,
+        # and sorting all of it in Python would be unbounded.
+        raise HTTPException(
+            status_code=400,
+            detail="order=public_reference_first applies to status=pending only",
+        )
     active_version = await active_bench_version(session)
     rollout = await open_rollout(session)
     rollout_version = (
@@ -785,13 +848,51 @@ async def list_copy_reviews(
             func.coalesce(AthReview.reopened_at, AthReview.opened_at).asc(),
             AthReview.review_id.asc(),
         )
-        .limit(limit)
-        .offset(offset)
     )
-    if with_comparisons:
-        stmt = stmt.options(Load(Agent).undefer_group("anticopy"))
-    rows = (await session.execute(stmt)).all()
-    row_pairs = [(review, agent) for review, agent in rows]
+    if order == "public_reference_first":
+        # SN-499: forks of a public release are usually the fastest ruling
+        # and the most disputed wait. The pending queue is at most one row
+        # per held agent, so it is ranked whole and then paged. The sort is
+        # stable, so each tier stays oldest first. The ranking scan never
+        # loads the comparison-only fingerprint columns; they are reloaded
+        # below for just the rows the page returns.
+        every_pending = [
+            (review, agent) for review, agent in (await session.execute(stmt)).all()
+        ]
+        references = await _reference_releases(session, every_pending)
+        every_pending.sort(
+            key=lambda pair: (
+                not (
+                    (release := references.get(pair[0].review_id)) is not None
+                    and release.public_before_upload
+                )
+            )
+        )
+        row_pairs = every_pending[offset : offset + limit]
+        if with_comparisons and row_pairs:
+            page_ids = [review.review_id for review, _agent in row_pairs]
+            loaded = {
+                review.review_id: (review, agent)
+                for review, agent in (
+                    await session.execute(
+                        stmt.where(AthReview.review_id.in_(page_ids))
+                        .options(Load(Agent).undefer_group("anticopy"))
+                        .execution_options(populate_existing=True)
+                    )
+                ).all()
+            }
+            # A review resolved between the scan and this reload no longer
+            # matches the pending filter; drop it rather than fail the page.
+            row_pairs = [
+                loaded[review_id] for review_id in page_ids if review_id in loaded
+            ]
+    else:
+        page_stmt = stmt.limit(limit).offset(offset)
+        if with_comparisons:
+            page_stmt = page_stmt.options(Load(Agent).undefer_group("anticopy"))
+        rows = (await session.execute(page_stmt)).all()
+        row_pairs = [(review, agent) for review, agent in rows]
+        references = await _reference_releases(session, row_pairs)
     matched = await _matched_agents(
         session,
         [review for review, _ in row_pairs],
@@ -828,6 +929,7 @@ async def list_copy_reviews(
                     else None
                 ),
                 actions=reopen_actions.get(review.review_id),
+                reference_release=references.get(review.review_id),
             )
             for review, agent in row_pairs
         ],
@@ -835,6 +937,7 @@ async def list_copy_reviews(
         limit=limit,
         offset=offset,
         review_kind=review_kind,
+        order=order,
         generation=generation,
         active_bench_version=active_version,
         rollout_bench_version=rollout_version,
@@ -937,6 +1040,9 @@ async def get_copy_review(
         actions=(await load_reopened_review_actions(session, [review])).get(
             review.review_id
         ),
+        reference_release=(await _reference_releases(session, [(review, agent)])).get(
+            review.review_id
+        ),
     )
 
 
@@ -965,6 +1071,9 @@ async def get_copy_review_audit(
         actions,
         miner_coldkey=candidate_coldkey,
         duplicate_of_coldkey=reference_coldkey,
+        reference_release=(await _reference_releases(session, [(review, agent)])).get(
+            review.review_id
+        ),
     )
 
 
@@ -1130,8 +1239,12 @@ async def open_review(
                 )
             if existing.status != "resolved":
                 raise HTTPException(status_code=409, detail="ATH review already exists")
+            # A stranded review closed behind a terminal agent (SN-434) did
+            # not ban it, so it is not a reject this path can withdraw.
             reconsidering_rejection = (
-                existing.resolution == "reject" and agent.status == AgentStatus.BANNED
+                existing.resolution == "reject"
+                and agent.status == AgentStatus.BANNED
+                and "terminal_close" not in (existing.algorithm_provenance or {})
             )
             if agent.status not in openable and not reconsidering_rejection:
                 raise HTTPException(
@@ -1406,6 +1519,27 @@ async def resolve_copy_review(
             )
         )
         await session.flush()
+    season_retest: AdminSeasonRetestOutcome | None = None
+    if canonical == "clear":
+        # Its own transaction, after the clear commits: the audit chain lock
+        # is never taken while the agent row lock is held, and a failed
+        # re-test write can never undo the ruling. A clear whose re-test did
+        # not land is still caught by the next boundary's off-board catch-up.
+        async with session.begin():
+            season_retest = AdminSeasonRetestOutcome.model_validate(
+                await queue_cleared_hold_retest(
+                    session,
+                    agent_id=agent_id,
+                    review_id=review.review_id,
+                    now=datetime.now(UTC),
+                )
+            )
+        logger.info(
+            "ATH clear %s by %s: season re-test %s",
+            agent_id,
+            actor,
+            season_retest.model_dump(exclude_none=True),
+        )
     candidate_coldkey, reference_coldkey = await _review_coldkeys(
         session, agent, matched
     )
@@ -1420,6 +1554,7 @@ async def resolve_copy_review(
         agent_status=agent.status.value,
         idempotent=False,
         reconciled_quarantine_ids=reconciled_quarantine_ids,
+        season_retest=season_retest,
     )
 
 

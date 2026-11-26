@@ -258,6 +258,23 @@ class TestFirstQueuedAfterTheRolloutOpenedIsAdmitted:
         assert ticket.agent_id == agent_id
         assert ticket.bench_version == _DESIRED_VERSION
 
+    async def test_build_only_first_admission_after_activation_is_leased(
+        self, session: AsyncSession
+    ) -> None:
+        """Source review is retired: a fresh admission is a build-only pass."""
+        async with session.begin():
+            rollout = await _seed_rollout(session)
+            agent_id = await _seed_agent(session, name="build-only-first")
+            await _attempt(
+                session, agent_id, status="passed", finished_at=_AFTER, build_only=True
+            )
+
+        async with session.begin():
+            assert agent_id in await _admitted(session, rollout)
+            ticket = await _lease(session, agent_id)
+        assert ticket is not None
+        assert ticket.agent_id == agent_id
+
     async def test_quarantine_released_after_the_rollout_opened(
         self, session: AsyncSession
     ) -> None:

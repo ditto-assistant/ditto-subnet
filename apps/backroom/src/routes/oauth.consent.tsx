@@ -373,13 +373,13 @@ function ConsentPending() {
   )
 }
 
-function ConsentError({ error }: { error: Error }) {
+function ConsentError({ error }: { error: unknown }) {
   return (
     <main className="grid min-h-screen place-items-center bg-[var(--ink)] px-4">
       <section className="w-full max-w-md rounded-xl border border-[var(--red)]/30 bg-[var(--panel)] p-6 text-center">
         <LockKeyhole className="mx-auto h-6 w-6 text-[var(--red)]" />
         <h1 className="mt-4 text-lg font-semibold">Connection request failed</h1>
-        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{error.message}</p>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{error instanceof Error ? error.message : 'An unexpected error occurred'}</p>
       </section>
     </main>
   )

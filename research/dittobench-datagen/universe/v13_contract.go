@@ -647,6 +647,9 @@ type v13Member struct {
 	// custody is the holder-vs-actor oracle input: one handover per record
 	// (v14_role_families.go). Never rendered.
 	custody []v14Handover
+	// phrase is the v19 phrase family the question is asked under
+	// (v19_phrasing.go); set at every version, never rendered.
+	phrase string
 }
 
 func v13Subject(seed int64, group int, purpose string) string {
@@ -709,7 +712,7 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 			"%[3]s note: %[2]s now holds %[4]s on %[1]s, replacing whoever held it before.",
 		}), g.Alias, current, schema.Correction, schema.Owner)
 		m.DecoyClause = fmt.Sprintf(" Its %s is %s.", schema.Owner, g.People[3])
-		m.Question = v13Question(seed, group, variant, []string{
+		m.ask(d, V19PhraseProgramOwnerCurrent, group, variant, []string{
 			"who currently holds the %[2]s role on %[1]s?",
 			"after every recorded reassignment, who is the %[2]s for %[1]s?",
 			"for %[1]s, which person stands as %[2]s today?",
@@ -740,7 +743,7 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 			"%[3]s: %[1]s's %[2]s was revised to %[4]s, replacing the earlier reading.",
 		}), g.Alias, schema.Status, schema.Correction, d.statusAlias(current))
 		m.DecoyClause = fmt.Sprintf(" Its %s is %s.", schema.Status, d.statusAlias(decoy))
-		m.Question = v13Question(seed, group, variant, []string{
+		m.ask(d, V19PhraseProgramStatusCurrent, group, variant, []string{
 			"what %[2]s currently stands for %[1]s?",
 			"after the recorded revision, what is the standing %[2]s of %[1]s?",
 			"for %[1]s, which %[2]s governs now?",
@@ -777,7 +780,7 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 		latestIdx := v13LatestEventIndex(events)
 		cls := V13EventClasses[events[latestIdx].Class]
 		m.DecoyClause = fmt.Sprintf(" Its only %s is a %s.", schema.Event, V13EventClasses[g.DecoyEvent].Canonical)
-		m.Question = v13Question(seed, group, variant, []string{
+		m.ask(d, V19PhraseProgramLatestEvent, group, variant, []string{
 			"which %[2]s is the most recent one recorded for %[1]s?",
 			"of every dated %[2]s on %[1]s, which happened last?",
 			"for %[1]s, what is the latest %[2]s on record?",
@@ -855,7 +858,7 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 		}), g.Alias, current, schema.Correction, schema.Responsible)
 		decoyAction := V13ActionClasses[g.Classes[1]]
 		m.DecoyClause = fmt.Sprintf(" Its %s is to %s, owned by %s.", schema.Action, decoyAction.Canonical, g.People[3])
-		m.Question = v13Question(seed, group, variant, []string{
+		m.ask(d, V19PhraseProgramNextAction, group, variant, []string{
 			"what is the pending %[2]s on %[1]s, and who is its %[3]s now?",
 			"for %[1]s, state the standing %[2]s and the person currently named %[3]s.",
 			"which step is next on %[1]s and who owns it after every recorded change?",
@@ -896,7 +899,7 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 			"%[3]s: %[1]s's %[2]s switched to %[4]s, replacing the earlier arrangement.",
 		}), g.Alias, schema.Channel, schema.Correction, V13ChannelClasses[current].Canonical)
 		m.DecoyClause = fmt.Sprintf(" Its %s is %s.", schema.Channel, V13ChannelClasses[decoy].Canonical)
-		m.Question = v13Question(seed, group, variant, []string{
+		m.ask(d, V19PhraseProgramChannelCurrent, group, variant, []string{
 			"which %[2]s currently stands for %[1]s?",
 			"after the recorded change, how do we reach the other side on %[1]s — which %[2]s?",
 			"for %[1]s, what %[2]s governs now?",
@@ -928,7 +931,7 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 			"Another record lists %[2]s as %[1]s's launch approver, with no reference to any earlier entry.",
 		}), g.Alias, b)
 		m.DecoyClause = fmt.Sprintf(" Its launch was signed off by %s.", g.People[3])
-		m.Question = v13Question(seed, group, variant, []string{
+		m.ask(d, V19PhraseProgramDisagree, group, variant, []string{
 			"do the records agree on who gave the launch sign-off for %[1]s? Say whether they agree and give the name each record carries.",
 			"is the launch sign-off consistent across the records for %[1]s? State agree or disagree and name whoever each record credits.",
 			"according to the records, who gave the launch sign-off for %[1]s — and do those records agree with each other?",
@@ -1177,6 +1180,7 @@ func materializeV13Case(
 		Facts:           append([]string(nil), m.Facts...),
 		Constraints:     append([]string(nil), m.Constraints...),
 		Operations:      append([]string(nil), m.Operations...),
+		phrase:          m.phrase,
 	}
 	provenance := V10CaseProvenance{
 		Revision:         V13ProvenanceRevision,

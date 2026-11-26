@@ -74,6 +74,7 @@ type concurrencySettings struct {
 	// ScoredProviderRouting mirrors scored_provider_routing: which OpenRouter
 	// provider preference the aggregate scored chat route sends.
 	ScoredProviderRouting string
+	DaniLabsPercent       int
 }
 
 // decisionLaneSettings mirrors DecisionLaneSettings' live fields.
@@ -303,6 +304,13 @@ func parseConcurrencySettings(payload []byte) (concurrencySettings, error) {
 		}
 		out.ScoredProviderRouting = normalizeScoredProviderRouting(routing)
 	}
+	if value, ok := raw["danilabs_percent"]; ok {
+		var percent *int
+		if err := json.Unmarshal(value, &percent); err != nil || percent == nil || *percent < 0 || *percent > 100 {
+			return defaultConcurrencySettings(), errors.New("danilabs_percent must be an integer from 0 to 100")
+		}
+		out.DaniLabsPercent = *percent
+	}
 	return out, nil
 }
 
@@ -436,5 +444,6 @@ func applySettings(cfg config.InferenceProxyConfig, s concurrencySettings) confi
 	cfg.DecisionValidatorRPM = s.Decision.PerValidatorRPM
 	cfg.DecisionGlobalRPM = s.Decision.GlobalRPM
 	cfg.ScoredProviderRouting = s.ScoredProviderRouting
+	cfg.DaniLabsPercent = s.DaniLabsPercent
 	return cfg
 }

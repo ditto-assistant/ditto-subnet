@@ -432,6 +432,17 @@
         "default": "",
         "type": "string"
       },
+      "budget_exhausted": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "called": {
         "items": {
           "type": "string"
@@ -664,6 +675,58 @@
     "type": "object"
   },
   "FailJobRequest": {
+    "$defs": {
+      "HarnessMemoryTelemetry": {
+        "properties": {
+          "limit_bytes": {
+            "anyOf": [
+              {
+                "maximum": 1099511627776,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "p50_bytes": {
+            "maximum": 1099511627776,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "p95_bytes": {
+            "maximum": 1099511627776,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "peak_bytes": {
+            "maximum": 1099511627776,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sampled_seconds": {
+            "maximum": 604800,
+            "minimum": 0,
+            "type": "number"
+          },
+          "samples": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "peak_bytes",
+          "p50_bytes",
+          "p95_bytes",
+          "samples",
+          "sampled_seconds"
+        ],
+        "type": "object"
+      }
+    },
     "properties": {
       "agent_id": {
         "format": "uuid",
@@ -686,6 +749,17 @@
           {
             "maxLength": 4096,
             "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "harness_memory": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/HarnessMemoryTelemetry"
           },
           {
             "type": "null"
@@ -758,6 +832,27 @@
             "maximum": 64,
             "minimum": 1,
             "type": "integer"
+          },
+          "memory_factor_floor_bps": {
+            "default": 9000,
+            "maximum": 10000,
+            "minimum": 5000,
+            "type": "integer"
+          },
+          "memory_factor_free_mib": {
+            "default": 512,
+            "maximum": 32768,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_factor_posture": {
+            "default": "shadow",
+            "enum": [
+              "off",
+              "shadow",
+              "enforce"
+            ],
+            "type": "string"
           },
           "relay_delay_fingerprint_max_ms": {
             "default": 250,
@@ -1143,11 +1238,36 @@
         ],
         "default": null
       },
+      "seed_anchor_agent_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "seed_index": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "seed_scope": {
         "default": "agent",
         "enum": [
           "agent",
-          "validator"
+          "validator",
+          "season"
         ],
         "type": "string"
       },
@@ -1348,7 +1468,10 @@
               12,
               13,
               14,
-              15
+              15,
+              16,
+              17,
+              18
             ],
             "type": "integer"
           },
@@ -1765,6 +1888,19 @@
             "minimum": 0,
             "type": "number"
           },
+          "datagen_qualifier": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "datagen_raw": {
             "maximum": 1,
             "minimum": 0,
@@ -2007,7 +2143,10 @@
               12,
               13,
               14,
-              15
+              15,
+              16,
+              17,
+              18
             ],
             "type": "integer"
           },
@@ -2630,7 +2769,10 @@
               12,
               13,
               14,
-              15
+              15,
+              16,
+              17,
+              18
             ],
             "type": "integer"
           },
@@ -2764,7 +2906,10 @@
               12,
               13,
               14,
-              15
+              15,
+              16,
+              17,
+              18
             ],
             "type": "integer"
           },
@@ -3131,7 +3276,10 @@
               12,
               13,
               14,
-              15
+              15,
+              16,
+              17,
+              18
             ],
             "type": "integer"
           },
@@ -3295,6 +3443,20 @@
           {
             "const": "mean_after_quorum",
             "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "duel_history": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/$defs/ConfirmationScoreRecord"
+            },
+            "type": "array"
           },
           {
             "type": "null"
@@ -3636,7 +3798,10 @@
               12,
               13,
               14,
-              15
+              15,
+              16,
+              17,
+              18
             ],
             "type": "integer"
           },
@@ -4006,6 +4171,19 @@
             "minimum": 1,
             "type": "integer"
           },
+          "duel_window_pairs": {
+            "anyOf": [
+              {
+                "maximum": 15,
+                "minimum": 2,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "min_dethrone_confirmations": {
             "maximum": 15,
             "minimum": 2,
@@ -4098,6 +4276,19 @@
             "maximum": 1,
             "minimum": 0,
             "type": "number"
+          },
+          "datagen_qualifier": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "datagen_raw": {
             "maximum": 1,
@@ -4296,6 +4487,20 @@
               {
                 "const": "mean_after_quorum",
                 "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "duel_history": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ConfirmationScoreRecord"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
@@ -4663,7 +4868,10 @@
               12,
               13,
               14,
-              15
+              15,
+              16,
+              17,
+              18
             ],
             "type": "integer"
           },
@@ -5540,7 +5748,10 @@
               12,
               13,
               14,
-              15
+              15,
+              16,
+              17,
+              18
             ],
             "type": "integer"
           },
@@ -5674,7 +5885,10 @@
               12,
               13,
               14,
-              15
+              15,
+              16,
+              17,
+              18
             ],
             "type": "integer"
           },
@@ -6041,7 +6255,10 @@
               12,
               13,
               14,
-              15
+              15,
+              16,
+              17,
+              18
             ],
             "type": "integer"
           },
@@ -6440,6 +6657,17 @@
           "audit_half": {
             "default": "",
             "type": "string"
+          },
+          "budget_exhausted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "called": {
             "items": {
@@ -7132,6 +7360,17 @@
             "default": "",
             "type": "string"
           },
+          "budget_exhausted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "called": {
             "items": {
               "type": "string"
@@ -7533,6 +7772,56 @@
         ],
         "type": "object"
       },
+      "HarnessMemoryTelemetry": {
+        "properties": {
+          "limit_bytes": {
+            "anyOf": [
+              {
+                "maximum": 1099511627776,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "p50_bytes": {
+            "maximum": 1099511627776,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "p95_bytes": {
+            "maximum": 1099511627776,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "peak_bytes": {
+            "maximum": 1099511627776,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sampled_seconds": {
+            "maximum": 604800,
+            "minimum": 0,
+            "type": "number"
+          },
+          "samples": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "peak_bytes",
+          "p50_bytes",
+          "p95_bytes",
+          "samples",
+          "sampled_seconds"
+        ],
+        "type": "object"
+      },
       "InferenceCostEvidence": {
         "properties": {
           "attributed": {
@@ -7813,6 +8102,17 @@
       }
     },
     "properties": {
+      "harness_memory": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/HarnessMemoryTelemetry"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "report": {
         "$ref": "#/$defs/ScoreReport"
       },
@@ -8283,6 +8583,29 @@
             ],
             "default": null
           },
+          "generator_frontier_oracle": {
+            "default": false,
+            "type": "boolean"
+          },
+          "generator_frontier_oracle_models": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 128,
+                  "minLength": 3,
+                  "pattern": "^[a-z0-9][a-z0-9._/:-]*$",
+                  "type": "string"
+                },
+                "maxLength": 4,
+                "minLength": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "generator_round_bench_versions": {
             "anyOf": [
               {
@@ -8412,6 +8735,17 @@
             "anyOf": [
               {
                 "$ref": "#/$defs/V15ScoredRuntimeEnvEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "v16_scored_runtime_env": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V16ScoredRuntimeEnvEvidence"
               },
               {
                 "type": "null"
@@ -8647,6 +8981,42 @@
         ],
         "type": "object"
       },
+      "V16ScoredRuntimeEnvEvidence": {
+        "properties": {
+          "bench_version": {
+            "const": 16,
+            "type": "integer"
+          },
+          "injected_keys": {
+            "items": {
+              "maxLength": 128,
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "const": "scorer-injected-env-only",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "source_revision": {
+            "pattern": "^[0-9a-f]{40}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bench_version",
+          "scope",
+          "source_revision",
+          "injected_keys",
+          "sha256"
+        ],
+        "type": "object"
+      },
       "V7InferenceCalibration": {
         "properties": {
           "manifest_sha256": {
@@ -8707,6 +9077,10 @@
             "default": null
           },
           "screened_images": {
+            "type": "boolean"
+          },
+          "season_commitments": {
+            "default": false,
             "type": "boolean"
           },
           "signed_score_quorum": {
@@ -9474,6 +9848,19 @@
               "$ref": "#/$defs/HeldLease"
             },
             "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "sandbox_memory_limit_mib": {
+        "anyOf": [
+          {
+            "maximum": 32768,
+            "minimum": 512,
+            "type": "integer"
           },
           {
             "type": "null"

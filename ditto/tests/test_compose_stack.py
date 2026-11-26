@@ -740,10 +740,9 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     assert re.search(r"docker/setup-qemu-action@[0-9a-f]{40}\b", workflow)
     # Both native validator children, the sandbox daemon, both native scorer
     # children, the dedicated coding-executor scorer, patched Pylon, the
-    # frozen-updater relay shim, the signed validator stack descriptor, and the
-    # signed screener fleet and generator scorer descriptors are independently built
-    # and published;
-    # the two cached starter-kit verify gates build without publishing.
+    # frozen-updater relay shim, the signed validator stack descriptor, the
+    # signed screener fleet and generator scorer descriptors, and the signed
+    # CPM scorer GPU image are independently built and published.
     build_action_count = sum(
         workflow.count(action)
         for action in (
@@ -751,7 +750,7 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
             "useblacksmith/build-push-action@",
         )
     )
-    assert build_action_count == 13
+    assert build_action_count == 12
     for repository in (
         "ghcr.io/ditto-assistant/ditto-subnet-validator",
         "ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker",

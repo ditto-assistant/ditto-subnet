@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from typing import Any
+from uuid import UUID, uuid5
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,23 +34,65 @@ from ditto.db.queries.audit import (
     EVENT_SCORE_RETEST_REQUESTED,
     SCORE_RETEST_EVENTS,
     append_audit_entry,
+    get_latest_score_retest_event,
 )
-from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
+from ditto.db.queries.benchmark_rollout import (
+    MIN_SCOREABLE_BENCH_VERSION,
+    ActivationBlockingQuorum,
+    activation_blocking_quorum,
+    blocking_quorum_lease_available,
+)
 from ditto.db.queries.lease_liveness import (
     LeaseLiveness,
     lease_liveness,
     record_declined_force_expiry,
     record_lease_revocation,
 )
-from ditto.db.queries.tickets import release_generator_round_dataset_pin
+from ditto.db.queries.tickets import release_foreign_dataset_pin
 
 # Default only: paired with the canonical scoring TTL and, since #1156, both
 # come from the operator's scoring lease revision. Callers pass the resolved
 # value as ``ttl``; a promoted replacement stamps it onto its NEW deadline.
 REPLACEMENT_TICKET_TTL = DEFAULT_SCORING_TICKET_TTL
 V9_CONTRACT_RETEST_BASIS = "v9_contract_mismatch"
+DUELING_ROTATION_RETEST_BASIS = "dueling_season_rotation"
+"""Bench v16+: a season rotation re-runs the champion and the retest cohort on
+the new generator set (``dueling-bench.md`` section 3, "Rotation is a
+mini-rollout"). Queued by Platform at season open, champion first, then by
+rank; promoted ahead of every other re-test, on any free slot. During an open
+rollout a re-score that cannot add a quorum score waits while the validator
+can lease an activation-blocking member's missing score instead."""
+OUTAGE_VOID_RETEST_BASIS = "provider_outage_void"
+"""SN-489: a canonical score whose serving grant shows provider-outage
+evidence (:mod:`ditto.db.queries.canonical_outage_voids`). Queued by the
+post-outage sweep or an operator void, re-run on the same validator ahead of
+ordinary quorum work on any free slot, and never charged to the miner's
+attempt budget: the outage was the platform's provider path, not the agent."""
+PARALLEL_RETEST_BASES = frozenset(
+    {V9_CONTRACT_RETEST_BASIS, DUELING_ROTATION_RETEST_BASIS, OUTAGE_VOID_RETEST_BASIS}
+)
+"""Typed bases that may run beside ordinary work on otherwise-free slots."""
+REPAIR_RETEST_BASES = frozenset({V9_CONTRACT_RETEST_BASIS, OUTAGE_VOID_RETEST_BASIS})
+"""Bases that repair one known-bad accepted score rather than re-buy evidence.
+The accepted score and its exact run are the authority, so they may run
+before quorum (evaluating or ATH-held agents), may re-lease a row a continual
+retest left ``expired``, and a failed replacement restores the consumed ticket
+and closes instead of stranding the lifecycle."""
+EXPIRED_ROW_RELEASE_BASES = REPAIR_RETEST_BASES | {DUELING_ROTATION_RETEST_BASIS}
+"""Queued bases that may re-lease a shared ticket row another lane's lapsed
+lease left ``expired`` (SN-497). The continual retest lane leases the same
+``(agent, version, validator)`` row as the accepted score; when that lease
+lapses the row reads ``expired`` although the accepted score and its run are
+untouched. Closing a season rotation re-test there left that validator's row
+in an older season while the others moved on, splitting a valid quorum across
+non-adjacent seasons so no two-season window held it. A rotation re-test
+waits out the row's ``retry_after`` cooldown instead of closing."""
 MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS = 1
 _FINALIZED_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE)
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _agent_retestable(agent: Agent | None, entry: ScoreAuditEntry) -> bool:
@@ -62,7 +105,9 @@ def _agent_retestable(agent: Agent | None, entry: ScoreAuditEntry) -> bool:
     # require a finalized three-score set, but one already-accepted shadow
     # score is independently known to be non-authoritative and may be replaced
     # without waiting for the other validators or the human review to finish.
-    return entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS and agent.status in {
+    # An outage void is the same: re-issuing the ticket keeps an agent still
+    # accumulating its quorum from finalizing on a provider-outage run.
+    return entry.payload.get("basis") in REPAIR_RETEST_BASES and agent.status in {
         AgentStatus.EVALUATING,
         AgentStatus.ATH_PENDING_REVIEW,
     }
@@ -90,20 +135,25 @@ async def try_lock_validator(session: AsyncSession, validator_hotkey: str) -> bo
 async def latest_retest_events_for_validator(
     session: AsyncSession, *, validator_hotkey: str
 ) -> dict[UUID, ScoreAuditEntry]:
-    """Return the latest lifecycle entry for every queued/recent agent."""
-    entries = list(
-        (
-            await session.scalars(
-                select(ScoreAuditEntry)
-                .where(
-                    ScoreAuditEntry.validator_hotkey == validator_hotkey,
-                    ScoreAuditEntry.event.in_(SCORE_RETEST_EVENTS),
-                )
-                .order_by(ScoreAuditEntry.seq.asc())
+    """Return the latest lifecycle entry for every queued/recent agent.
+
+    One row per agent, selected in PostgreSQL: the audit log is append-only,
+    and re-reading a validator's whole re-test history on every job poll cost
+    the API up to 1.1 MB/s of decoded payloads. Entries come back in ``seq``
+    order; every consumer orders by ``seq`` itself.
+    """
+    entries = (
+        await session.scalars(
+            select(ScoreAuditEntry)
+            .where(
+                ScoreAuditEntry.validator_hotkey == validator_hotkey,
+                ScoreAuditEntry.event.in_(SCORE_RETEST_EVENTS),
             )
-        ).all()
-    )
-    return {entry.agent_id: entry for entry in entries}
+            .distinct(ScoreAuditEntry.agent_id)
+            .order_by(ScoreAuditEntry.agent_id, ScoreAuditEntry.seq.desc())
+        )
+    ).all()
+    return {entry.agent_id: entry for entry in sorted(entries, key=lambda e: e.seq)}
 
 
 async def score_retest_queue_positions(
@@ -152,7 +202,7 @@ async def _requeue_failed_contract_retests(
     latest: dict[UUID, ScoreAuditEntry],
     now: datetime,
 ) -> None:
-    """Return failed v9 contract replacements to their preserved queue.
+    """Return failed v9 contract and outage-void replacements to their queue.
 
     A replacement reuses the consumed score ticket. ``fail_job`` therefore
     changes that row to ``expired`` while the append-only lifecycle remains
@@ -165,7 +215,7 @@ async def _requeue_failed_contract_retests(
     for entry in tuple(latest.values()):
         if (
             entry.event != EVENT_SCORE_RETEST_REQUESTED
-            or entry.payload.get("basis") != V9_CONTRACT_RETEST_BASIS
+            or entry.payload.get("basis") not in REPAIR_RETEST_BASES
         ):
             continue
         bench_version = int(entry.payload.get("bench_version", -1))
@@ -245,6 +295,100 @@ async def _requeue_failed_contract_retests(
         )
 
 
+async def _has_lapsed_replacement(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    latest: dict[UUID, ScoreAuditEntry],
+) -> bool:
+    """Whether an active re-test's replacement row already reads ``expired``.
+
+    An unlocked status read, made only for ``score_retest_requested``
+    lifecycles (rare: an operator action). It lets every re-test lane on this
+    validator settle the lapse, not only the lane of the re-test's own basis.
+    """
+    for entry in latest.values():
+        if entry.event != EVENT_SCORE_RETEST_REQUESTED:
+            continue
+        status = await session.scalar(
+            select(ValidatorTicket.status).where(
+                ValidatorTicket.agent_id == entry.agent_id,
+                ValidatorTicket.bench_version
+                == int(entry.payload.get("bench_version", -1)),
+                ValidatorTicket.validator_hotkey == validator_hotkey,
+            )
+        )
+        if status == TicketStatus.EXPIRED:
+            return True
+    return False
+
+
+def _lapsed_replacement_reason(entry: ScoreAuditEntry, ticket: ValidatorTicket) -> str:
+    """Name how the replacement lease ended: its deadline, or a failure.
+
+    The overdue sweep leaves the deadline the replacement was promoted with;
+    ``fail_job`` moves it to the moment the validator reported the failure.
+    """
+    promoted = entry.payload.get("replacement_deadline")
+    try:
+        promoted_deadline = (
+            None if promoted is None else _utc(datetime.fromisoformat(str(promoted)))
+        )
+    except ValueError:
+        promoted_deadline = None
+    if promoted_deadline is not None and _utc(ticket.deadline) < promoted_deadline:
+        return "replacement run ended before completion"
+    return "replacement ticket expired before completion"
+
+
+async def _close_lapsed_replacements(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    latest: dict[UUID, ScoreAuditEntry],
+    now: datetime,
+) -> None:
+    """Release ordinary re-tests whose replacement lease ended without a score.
+
+    The repair bases are requeued by :func:`_requeue_failed_contract_retests`.
+    Every other basis closes, exactly as the ``issued``-past-deadline branch of
+    :func:`activate_next_score_retest` closes it. That branch sees the row only
+    while it is still ``issued``. Every job request runs the fleet-wide
+    ``expire_overdue_tickets`` sweep first, and ``fail_job`` also writes
+    ``expired``, so the row usually reads ``expired`` before this validator's
+    lane looks at it. Without this transition the lifecycle stayed
+    ``score_retest_requested`` forever. That blocked confirmation and continual
+    leases for the (agent, validator) pair, and Backroom kept showing an active
+    re-test (#2965). The accepted score is untouched, so the row is restored to
+    its consumed ``scored`` shape, as the manual ``release-ticket`` does.
+    """
+    for entry in tuple(latest.values()):
+        if (
+            entry.event != EVENT_SCORE_RETEST_REQUESTED
+            or entry.payload.get("basis") in REPAIR_RETEST_BASES
+        ):
+            continue
+        ticket = await session.get(
+            ValidatorTicket,
+            (
+                entry.agent_id,
+                int(entry.payload.get("bench_version", -1)),
+                validator_hotkey,
+            ),
+            with_for_update=True,
+        )
+        if ticket is None or ticket.status != TicketStatus.EXPIRED:
+            continue
+        ticket.status = TicketStatus.SCORED
+        ticket.retry_after = None
+        await _close_unserviceable(
+            session,
+            entry=entry,
+            now=now,
+            reason=_lapsed_replacement_reason(entry, ticket),
+        )
+
+
 async def _rollout_member_positions(
     session: AsyncSession, *, bench_version: int
 ) -> dict[UUID, int]:
@@ -264,19 +408,69 @@ async def _rollout_member_positions(
     return dict(rows.tuples().all())
 
 
-async def _ordered_queued_retests(
-    session: AsyncSession,
-    *,
-    latest: dict[UUID, ScoreAuditEntry],
-    required_basis: str | None,
+def _queued_entries(
+    latest: dict[UUID, ScoreAuditEntry], *, required_basis: str | None
 ) -> list[ScoreAuditEntry]:
-    """Use one ordering contract for issuance and operator-visible positions."""
-    queued = [
+    return [
         entry
         for entry in latest.values()
         if entry.event == EVENT_SCORE_RETEST_QUEUED
         and (required_basis is None or entry.payload.get("basis") == required_basis)
     ]
+
+
+async def _rotation_blocking_quorums(
+    session: AsyncSession, entries: list[ScoreAuditEntry]
+) -> dict[int, ActivationBlockingQuorum]:
+    """The open rollout's blocking members, keyed by its desired version when
+    rotation re-tests wait at it; empty outside an open rollout (ordering
+    unchanged)."""
+    blocking = await activation_blocking_quorum(
+        session,
+        bench_versions={
+            int(entry.payload.get("bench_version", -1))
+            for entry in entries
+            if entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS
+        },
+    )
+    if blocking is None:
+        return {}
+    return {blocking.rollout.desired_version: blocking}
+
+
+def _rotation_supplies_missing_score(
+    entry: ScoreAuditEntry,
+    blocking: dict[int, ActivationBlockingQuorum],
+    *,
+    score_season_id: UUID | None,
+) -> bool:
+    """Whether a rotation re-test restores a blocking member's quorum score."""
+    quorum = blocking.get(int(entry.payload.get("bench_version", -1)))
+    return quorum is not None and quorum.supplies_missing_score(
+        entry.agent_id, score_season_id=score_season_id
+    )
+
+
+def _queued_score_season(entry: ScoreAuditEntry) -> UUID | None:
+    """The accepted score's season when the rotation re-test was queued (a
+    score that changed since closes the re-test stale at promotion)."""
+    raw = entry.payload.get("previous_dueling_season_id")
+    return None if raw is None else UUID(str(raw))
+
+
+async def _ordered_queued_retests(
+    session: AsyncSession,
+    *,
+    latest: dict[UUID, ScoreAuditEntry],
+    required_basis: str | None,
+    blocking: dict[int, ActivationBlockingQuorum] | None = None,
+) -> list[ScoreAuditEntry]:
+    """Use one ordering contract for issuance and operator-visible positions.
+
+    ``blocking`` (:func:`_rotation_blocking_quorums` of the same entries) is
+    read when omitted; issuance passes the one it also defers against.
+    """
+    queued = _queued_entries(latest, required_basis=required_basis)
     contract_versions = {
         int(entry.payload.get("bench_version", -1))
         for entry in queued
@@ -287,14 +481,30 @@ async def _ordered_queued_retests(
         rollout_positions.update(
             await _rollout_member_positions(session, bench_version=bench_version)
         )
-    return sorted(
-        queued,
-        key=lambda entry: (
-            0 if entry.agent_id in rollout_positions else 1,
-            rollout_positions.get(entry.agent_id, entry.seq),
-            entry.seq,
-        ),
-    )
+    if blocking is None:
+        blocking = await _rotation_blocking_quorums(session, queued)
+
+    def order(entry: ScoreAuditEntry) -> tuple[int, int, int, int]:
+        # A season rotation re-test goes first, champion (rank 0) first --
+        # except that, during an open rollout, a rotation re-score that
+        # restores an activation-blocking member's missing quorum score goes
+        # ahead of re-scores that only re-buy evidence.
+        if entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS:
+            return (
+                0,
+                0
+                if _rotation_supplies_missing_score(
+                    entry, blocking, score_season_id=_queued_score_season(entry)
+                )
+                else 1,
+                int(entry.payload.get("rotation_rank", 0)),
+                entry.seq,
+            )
+        if entry.agent_id in rollout_positions:
+            return (1, 0, rollout_positions[entry.agent_id], entry.seq)
+        return (2, 0, entry.seq, entry.seq)
+
+    return sorted(queued, key=order)
 
 
 async def activate_next_score_retest(
@@ -322,8 +532,11 @@ async def activate_next_score_retest(
     """
     if (
         allow_parallel_ordinary or allow_parallel_contract_retests
-    ) and required_basis != V9_CONTRACT_RETEST_BASIS:
-        raise ValueError("parallel execution is reserved for v9 contract retests")
+    ) and required_basis not in PARALLEL_RETEST_BASES:
+        raise ValueError(
+            "parallel execution is reserved for v9 contract, dueling "
+            "rotation and provider-outage void retests"
+        )
     # Look before locking. A validator with no re-test lifecycle at all cannot
     # reach any mutating branch below -- `issued` needs a REQUESTED entry and
     # `queued` needs a QUEUED one, so an empty history returns None down every
@@ -348,13 +561,20 @@ async def activate_next_score_retest(
     probe = await latest_retest_events_for_validator(
         session, validator_hotkey=validator_hotkey
     )
+    # A replacement whose row the overdue sweep or ``fail_job`` already
+    # expired is settled by whichever lane polls first. The ordinary lane runs
+    # only on an idle validator outside a rollout, so waiting for the
+    # re-test's own lane could strand the lifecycle indefinitely.
+    lapsed = await _has_lapsed_replacement(
+        session, validator_hotkey=validator_hotkey, latest=probe
+    )
     if required_basis is not None:
         probe = {
             agent_id: entry
             for agent_id, entry in probe.items()
             if entry.payload.get("basis") == required_basis
         }
-    if not probe:
+    if not probe and not lapsed:
         return None
 
     if not await try_lock_validator(session, validator_hotkey):
@@ -364,16 +584,13 @@ async def activate_next_score_retest(
     latest = await latest_retest_events_for_validator(
         session, validator_hotkey=validator_hotkey
     )
-    await _requeue_failed_contract_retests(
-        session,
-        validator_hotkey=validator_hotkey,
-        latest=latest,
-        now=now,
-    )
-    latest = await latest_retest_events_for_validator(
-        session, validator_hotkey=validator_hotkey
-    )
-
+    # Lock every issued ticket BEFORE either cleanup below appends to the audit
+    # chain. ``submit_score`` holds its own ticket row and then takes the
+    # transaction-scoped audit-chain lock, so taking the audit lock first and
+    # the issued rows after would wait on a scorer that is waiting on us, and
+    # Postgres would abort one side (a 500 that discards a finished run). The
+    # cleanups only move ``expired`` rows back to ``scored``, so they never
+    # change which rows are ``issued``: this set is still exact afterwards.
     issued_rows = list(
         (
             await session.scalars(
@@ -386,6 +603,22 @@ async def activate_next_score_retest(
             )
         ).all()
     )
+    await _requeue_failed_contract_retests(
+        session,
+        validator_hotkey=validator_hotkey,
+        latest=latest,
+        now=now,
+    )
+    await _close_lapsed_replacements(
+        session,
+        validator_hotkey=validator_hotkey,
+        latest=latest,
+        now=now,
+    )
+    latest = await latest_retest_events_for_validator(
+        session, validator_hotkey=validator_hotkey
+    )
+
     issued_retests = [
         ticket
         for ticket in issued_rows
@@ -468,11 +701,18 @@ async def activate_next_score_retest(
         else:
             return None
 
+    blocking = await _rotation_blocking_quorums(
+        session, _queued_entries(latest, required_basis=required_basis)
+    )
     queued = await _ordered_queued_retests(
         session,
         latest=latest,
         required_basis=required_basis,
+        blocking=blocking,
     )
+    # Per open-rollout version: may this validator lease a blocking member's
+    # missing quorum score right now? Read once, only if a re-score asks.
+    blocking_lease_here: dict[int, bool] = {}
     for entry in queued:
         bench_version = int(entry.payload.get("bench_version", -1))
         # The floor comes first, and it is a different KIND of check from the
@@ -509,7 +749,7 @@ async def activate_next_score_retest(
             stale_reason = "accepted score ticket is no longer reusable"
         elif (
             ticket.status == TicketStatus.ISSUED
-            and entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS
+            and entry.payload.get("basis") in PARALLEL_RETEST_BASES
         ):
             # Continual evidence reuses the same (agent, version, validator)
             # ticket row as the accepted canonical score. A contract repair
@@ -520,20 +760,66 @@ async def activate_next_score_retest(
             continue
         elif ticket.status != TicketStatus.SCORED and not (
             ticket.status == TicketStatus.EXPIRED
-            and entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS
+            and entry.payload.get("basis") in EXPIRED_ROW_RELEASE_BASES
         ):
             stale_reason = "accepted score ticket is no longer reusable"
         elif score is None or score.run_id != entry.payload.get("run_id"):
             stale_reason = "accepted score changed while the request was queued"
+        elif entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS:
+            stale_reason = await _rotation_retest_stale_reason(
+                session, entry=entry, score=score
+            )
         if stale_reason is not None:
             await _close_unserviceable(
                 session, entry=entry, now=now, reason=stale_reason
             )
             continue
+        assert ticket is not None
+        if (
+            ticket.status == TicketStatus.EXPIRED
+            and entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS
+            and ticket.retry_after is not None
+            and _utc(ticket.retry_after) > now
+        ):
+            # SN-497: another lane's lease on this shared row just lapsed.
+            # Keep the rotation re-test queued through that lease's cooldown;
+            # the season boundary closes it if the season ends first.
+            continue
+        if (
+            entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS
+            and bench_version in blocking
+            and not _rotation_supplies_missing_score(
+                entry,
+                blocking,
+                score_season_id=None if score is None else score.dueling_season_id,
+            )
+        ):
+            # An open rollout's activation waits on priority members that
+            # still lack a quorum score. A re-score of a member whose row
+            # already counts cannot move that gate, so it never takes a slot
+            # this validator could give a blocking member's missing score:
+            # it stays queued and runs once that lease is out (the rollout
+            # lane issues it on this same poll).
+            if bench_version not in blocking_lease_here:
+                blocking_lease_here[
+                    bench_version
+                ] = await blocking_quorum_lease_available(
+                    session,
+                    blocking=blocking[bench_version],
+                    validator_hotkey=validator_hotkey,
+                    now=now,
+                )
+            if blocking_lease_here[bench_version]:
+                continue
 
         assert ticket is not None
         deadline = now + ttl
-        release_generator_round_dataset_pin(ticket)
+        release_foreign_dataset_pin(ticket)
+        if entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS:
+            # The row still pins the last season's slice for this run seed;
+            # a rotation re-test must take the open season's slice instead.
+            ticket.dueling_season_id = None
+            ticket.slice_sha256 = None
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1
@@ -542,10 +828,12 @@ async def activate_next_score_retest(
         ticket.issued_at = now
         ticket.deadline = deadline
         parked_epoch = ticket.provider_outage_epoch
-        if parked_epoch is None:
-            ticket.attempt_count += 1
-        else:
+        if parked_epoch is not None:
             ticket.provider_outage_attempted_epoch = parked_epoch
+        elif entry.payload.get("basis") != OUTAGE_VOID_RETEST_BASIS:
+            # An outage void's replacement is not charged: the voided run
+            # measured the platform's provider outage, not the agent.
+            ticket.attempt_count += 1
         ticket.provider_outage_epoch = None
         ticket.retry_after = None
         ticket.first_reported_at = None
@@ -563,6 +851,190 @@ async def activate_next_score_retest(
         return ticket
     await session.flush()
     return None
+
+
+async def _rotation_retest_stale_reason(
+    session: AsyncSession, *, entry: ScoreAuditEntry, score: Score
+) -> str | None:
+    """Why a queued season rotation re-test no longer applies, or None."""
+    from ditto.api_server.dueling_seasons import open_season
+
+    season = await open_season(session, int(entry.payload.get("bench_version", -1)))
+    if season is None or str(season.id) != entry.payload.get("dueling_season_id"):
+        return "the dueling season it was queued for is no longer open"
+    if score.dueling_season_id == season.id:
+        return ROTATION_ALREADY_CURRENT_REASON
+    return None
+
+
+ROTATION_ALREADY_CURRENT_REASON = "the score is already from the open dueling season"
+"""The one automatic close of a rotation re-test that is not a missed
+re-score: the validator's accepted score is already from the open season."""
+
+
+CATCH_UP_SOURCE_BOARD = "board"
+"""A paid or public top-five agent within ``season_catchup_max_agents``."""
+CATCH_UP_SOURCE_BOARD_OVERFLOW = "board_overflow"
+"""A board agent past ``season_catchup_max_agents``, within the catch-up budget."""
+CATCH_UP_SOURCE_OFF_BOARD = "off_board"
+"""A scored agent off the board whose in-window scores expire (or expired),
+within the catch-up budget; at most once per agent and bench version."""
+CATCH_UP_SOURCE_ATH_CLEAR = "ath_clear"
+"""An ATH hold was cleared while the agent's scores sat outside the open
+season: the hold kept it off the board, so the platform re-scores it."""
+CATCH_UP_SOURCES = frozenset(
+    {
+        CATCH_UP_SOURCE_BOARD,
+        CATCH_UP_SOURCE_BOARD_OVERFLOW,
+        CATCH_UP_SOURCE_OFF_BOARD,
+        CATCH_UP_SOURCE_ATH_CLEAR,
+    }
+)
+_CATCH_UP_ACTOR_REASON = {
+    CATCH_UP_SOURCE_BOARD: (
+        "platform:dueling-season-catchup",
+        "dueling season catch-up: no score in the closed season",
+    ),
+    CATCH_UP_SOURCE_BOARD_OVERFLOW: (
+        "platform:dueling-season-catchup",
+        "dueling season catch-up: board agent past the catch-up cap, within budget",
+    ),
+    CATCH_UP_SOURCE_OFF_BOARD: (
+        "platform:dueling-season-catchup",
+        "dueling season catch-up: off-board agent whose window scores expire",
+    ),
+    CATCH_UP_SOURCE_ATH_CLEAR: (
+        "platform:ath-clear-retest",
+        "ATH hold cleared: re-score on the open season so the hold cannot expire it",
+    ),
+}
+
+
+def rotation_request_id(season_id: UUID, agent_id: UUID, validator_hotkey: str) -> UUID:
+    """The deterministic request id of one season's rotation re-test."""
+    return uuid5(season_id, f"dueling-rotation:{agent_id}:{validator_hotkey}")
+
+
+async def queue_dueling_rotation_retests(
+    session: AsyncSession,
+    *,
+    season_id: UUID,
+    bench_version: int,
+    cohort: list[UUID],
+    now: datetime,
+    catch_up: bool = False,
+    first_rank: int = 0,
+    catch_up_source: str | None = None,
+    extra_payload: dict[str, Any] | None = None,
+) -> dict[str, int]:
+    """Queue one rotation re-test per accepted score of every cohort member.
+
+    ``cohort`` is the champion first, then the retest cohort by rank. With
+    ``catch_up`` the members are a season-boundary catch-up
+    (:func:`ditto.api_server.dueling_seasons.queue_catchup_retests`), ranked
+    from ``first_rank`` so they queue behind the opening cohort, and tagged
+    ``catch_up`` so their spend is told apart. ``catch_up_source`` says why
+    (:data:`CATCH_UP_SOURCES`; ``board`` when omitted); ``extra_payload`` is
+    merged into each queued entry (the ATH review that cleared a hold). Every
+    ``(agent, validator)`` score at ``bench_version`` from another season is
+    queued behind nothing (:func:`_ordered_queued_retests` puts rotation work
+    first); a score already in ``season_id``, a live ticket, or an open
+    re-test of another basis is left alone. A rotation re-test still waiting
+    from an earlier season is closed and replaced. Idempotent per season: the
+    request id is derived from ``(season, agent, validator)``. Caller commits.
+    """
+    source = (catch_up_source or CATCH_UP_SOURCE_BOARD) if catch_up else None
+    if source is not None and source not in CATCH_UP_SOURCES:
+        raise ValueError(f"unknown catch-up source {source!r}")
+    actor, reason = (
+        _CATCH_UP_ACTOR_REASON[source]
+        if source is not None
+        else (
+            "platform:dueling-season-rotation",
+            "dueling season rotation: re-score on the new set",
+        )
+    )
+    counts = {"queued": 0, "already_current": 0, "busy": 0, "replaced": 0}
+    for rank, agent_id in enumerate(dict.fromkeys(cohort), start=first_rank):
+        rows = list(
+            (
+                await session.execute(
+                    select(
+                        Score.validator_hotkey,
+                        Score.run_id,
+                        Score.dueling_season_id,
+                    ).where(
+                        Score.agent_id == agent_id,
+                        Score.bench_version == bench_version,
+                    )
+                )
+            ).all()
+        )
+        for validator_hotkey, run_id, scored_season in sorted(rows):
+            if scored_season == season_id:
+                counts["already_current"] += 1
+                continue
+            request_id = rotation_request_id(season_id, agent_id, validator_hotkey)
+            latest = await get_latest_score_retest_event(
+                session, agent_id=agent_id, validator_hotkey=validator_hotkey
+            )
+            if latest is not None and latest.payload.get("request_id") == str(
+                request_id
+            ):
+                continue  # already queued (or run) for this season
+            if retest_is_open(latest):
+                assert latest is not None
+                ticket = await session.get(
+                    ValidatorTicket, (agent_id, bench_version, validator_hotkey)
+                )
+                running = (
+                    latest.event == EVENT_SCORE_RETEST_REQUESTED
+                    and ticket is not None
+                    and ticket.status == TicketStatus.ISSUED
+                )
+                if (
+                    latest.payload.get("basis") != DUELING_ROTATION_RETEST_BASIS
+                    or running
+                ):
+                    counts["busy"] += 1
+                    continue
+                # An earlier season's rotation re-test still queued, or one
+                # whose lease already ended without a score: replace it.
+                await _close_unserviceable(
+                    session,
+                    entry=latest,
+                    now=now,
+                    reason="a newer dueling season rotation replaced this re-test",
+                )
+                counts["replaced"] += 1
+            await append_audit_entry(
+                session,
+                agent_id=agent_id,
+                validator_hotkey=validator_hotkey,
+                event=EVENT_SCORE_RETEST_QUEUED,
+                payload={
+                    # Caller metadata first: it can never replace the
+                    # deterministic idempotency key or any core field.
+                    **(extra_payload or {}),
+                    "request_id": str(request_id),
+                    "actor": actor,
+                    "reason": reason,
+                    "basis": DUELING_ROTATION_RETEST_BASIS,
+                    "bench_version": bench_version,
+                    "run_id": run_id,
+                    "dueling_season_id": str(season_id),
+                    "previous_dueling_season_id": (
+                        None if scored_season is None else str(scored_season)
+                    ),
+                    "rotation_rank": rank,
+                    "catch_up": catch_up,
+                    **({"catch_up_source": source} if source is not None else {}),
+                    "automatic": True,
+                },
+                recorded_at=now,
+            )
+            counts["queued"] += 1
+    return counts
 
 
 def retest_is_open(entry: ScoreAuditEntry | None) -> bool:
@@ -583,7 +1055,11 @@ def retest_is_queued(entry: ScoreAuditEntry | None) -> bool:
 __all__ = [
     "EVENT_SCORE_INVALIDATED",
     "REPLACEMENT_TICKET_TTL",
+    "REPAIR_RETEST_BASES",
+    "EXPIRED_ROW_RELEASE_BASES",
+    "ROTATION_ALREADY_CURRENT_REASON",
     "MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS",
+    "OUTAGE_VOID_RETEST_BASIS",
     "V9_CONTRACT_RETEST_BASIS",
     "activate_next_score_retest",
     "try_lock_validator",

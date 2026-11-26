@@ -398,6 +398,19 @@ describe("EntityPanel miner profile card", () => {
     expect(link).toHaveAttribute("href", expect.stringContaining("agent=agent-0"));
   });
 
+  it("places terminal scoring failures under Closed", async () => {
+    installProfileFetch([submission(0, "scoring_failed"), submission(1, "waiting_validator")]);
+    renderPanel();
+    visit("/h/jupiter");
+    await waitFor(() => expect(rows().length).toBe(2));
+    expect(rows()[0]?.textContent).toContain("Cannot finish scoring");
+    expect(bandButton("Closed").textContent).toContain("1");
+    bandButton("Closed").click();
+    await waitFor(() => expect(rows().length).toBe(1));
+    expect(rows()[0]?.textContent).toContain("Cannot finish scoring");
+    expect(rows()[0]?.textContent).not.toContain("Waiting for validators");
+  });
+
   it("filters the history by status band", async () => {
     installProfileFetch(many());
     renderPanel();

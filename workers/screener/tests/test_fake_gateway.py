@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
+import pytest
 
 from ditto_screener.fake_gateway import FakeModelGateway, tool_capability
 from ditto_screener.gate import _write_openrouter_shim_certs
@@ -773,3 +774,15 @@ async def test_scorer_shaped_tool_route_authenticates_case_and_user() -> None:
     assert wrong_cap.status_code == 401
     assert wrong_route.status_code == 404
     assert gateway.model_calls == 0
+
+
+def test_request_log_failure_is_reported_not_silent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gateway = FakeModelGateway(
+        request_log_file=str(tmp_path / "missing-dir" / "requests.jsonl")
+    )
+
+    gateway._record_model_request(b"{}", readable=True)
+
+    assert "could not record model-request measurement" in capsys.readouterr().out

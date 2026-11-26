@@ -50,6 +50,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -712,6 +713,77 @@ def _phase_error_code(error: HTTPException) -> str:
     }.get(detail, "provider_unavailable")
 
 
+_PROVIDER_CONTEXT_LENGTH_EXCEEDED_CODE = "provider_context_length_exceeded"
+
+
+_CONTEXT_LIMIT = re.compile(r"maximum context length is (\d+) tokens\b")
+_SPLIT_COUNTS = re.compile(r"\(([^()]*\b(?:in the completion|in the output)[^()]*)\)")
+_INPUT_COUNT = re.compile(r"(\d+) (?:in the messages|of [a-z ]*input)\b")
+
+
+def _split_context_input_exceeds_limit(message: str) -> bool:
+    """Mirror splitContextCounts: is the stated input alone over the limit?
+
+    Reads OpenAI's ``(I in the messages, C in the completion)`` and
+    OpenRouter's ``(T of text input, U of tool input, O in the output)``.
+    """
+    limit = _CONTEXT_LIMIT.search(message)
+    split = _SPLIT_COUNTS.search(message)
+    if limit is None or split is None:
+        return False
+    counts = _INPUT_COUNT.findall(split.group(1))
+    return bool(counts) and sum(int(count) for count in counts) > int(limit.group(1))
+
+
+def _strict_error_envelope(decoded: dict[str, Any], error: dict[str, Any]) -> bool:
+    """Mirror providerErrorEnvelope's shape check for an HTTP 200 body."""
+    if not set(decoded) <= {"error", "id"}:
+        return False
+    if "id" in decoded and not (isinstance(decoded["id"], str) and decoded["id"]):
+        return False
+    if not set(error) <= {"code", "message", "metadata"}:
+        return False
+    if "metadata" in error and not isinstance(error["metadata"], dict):
+        return False
+    message = error.get("message")
+    return isinstance(message, str) and bool(message)
+
+
+def _provider_context_length_exceeded(status_code: int, decoded: object) -> bool:
+    """Mirror providerContextLengthExceeded for a provider rejection.
+
+    The input alone is longer than the model's context window: every provider
+    refuses the same harness bytes, so the request is the harness's, not the
+    route's. A window overflowed only by the requested completion is not. The
+    rejection arrives as an HTTP 400 or an HTTP 200 envelope carrying code 400.
+    """
+    if status_code not in (200, 400) or not isinstance(decoded, dict):
+        return False
+    error = decoded.get("error")
+    if not isinstance(error, dict):
+        return False
+    if status_code == 200 and not _strict_error_envelope(decoded, error):
+        return False
+    code = error.get("code")
+    if not isinstance(code, int) or isinstance(code, bool) or code != 400:
+        return False
+    metadata = error.get("metadata")
+    texts = [error.get("message")]
+    if isinstance(metadata, dict):
+        texts.append(metadata.get("raw"))
+    for text in texts:
+        if not isinstance(text, str):
+            continue
+        message = text.lower()
+        if "maximum context length" not in message:
+            continue
+        if "in the completion" not in message and "in the output" not in message:
+            return True
+        if _split_context_input_exceeds_limit(message):
+            return True
+    return False
+
+
 async def _complete_chat_with_recovery(
     client: httpx.AsyncClient,
     config: InferenceProxyConfig,
@@ -779,6 +851,10 @@ async def _complete_chat_with_recovery(
             decoded = None
         router_attempts += _openrouter_attempt_count(decoded)
         last_provider = _openrouter_last_attempted_provider(decoded) or last_provider
+        if _provider_context_length_exceeded(response.status_code, decoded):
+            last_timed_out = False
+            last_code = _PROVIDER_CONTEXT_LENGTH_EXCEEDED_CODE
+            continue
         if response.status_code >= 400:
             last_timed_out = response.status_code in {408, 504}
             last_code = f"upstream_http_{response.status_code}"
@@ -2067,6 +2143,13 @@ async def proxy_chat_completions(
         timed_out = error.timed_out
         upstream_provider = error.upstream_provider
         route_observable = error.route_observable
+        if terminal_error_code == _PROVIDER_CONTEXT_LENGTH_EXCEEDED_CODE:
+            # Brokers charge a 413 from this route to the harness
+            # (inference_request_rejected:request_too_large), as on the relay.
+            raise HTTPException(
+                status_code=413,
+                detail="request exceeds the model's maximum context length",
+            ) from error
         detail = (
             "inference provider timed out"
             if timed_out

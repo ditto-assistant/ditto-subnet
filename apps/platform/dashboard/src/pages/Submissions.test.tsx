@@ -1097,6 +1097,97 @@ describe("async agent evidence", () => {
     expect(section.textContent).not.toContain("Running");
   });
 
+  it("shows the agent's own harness memory", async () => {
+    const mib = 1048576;
+    stubPipelineFetch(() =>
+      Promise.resolve(
+        pipelineResponse({
+          harness_memory: {
+            runs: 2,
+            peak_bytes_max: 650 * mib,
+            p50_bytes_median: 240 * mib,
+            p95_bytes_median: 480 * mib,
+            p95_bytes_max: 600 * mib,
+            limit_bytes_max: 2048 * mib,
+            last_recorded_at: "2026-07-31T13:55:00Z",
+            recent_runs: [
+              {
+                validator_hotkey: "5CFtzzb4mS118",
+                bench_version: 18,
+                lease_issued_at: "2026-07-31T13:00:00Z",
+                outcome: "failed",
+                peak_bytes: 650 * mib,
+                p50_bytes: 300 * mib,
+                p95_bytes: 600 * mib,
+                samples: 200,
+                sampled_seconds: 400,
+                limit_bytes: 2048 * mib,
+              },
+              {
+                validator_hotkey: "5GrwvaEFother",
+                bench_version: 18,
+                lease_issued_at: "2026-07-31T12:00:00Z",
+                outcome: "scored",
+                peak_bytes: 400 * mib,
+                p50_bytes: 180 * mib,
+                p95_bytes: 360 * mib,
+                samples: 210,
+                sampled_seconds: 420,
+                limit_bytes: 2048 * mib,
+              },
+            ],
+          },
+        }),
+      ),
+    );
+
+    render(() => <AgentEvidence entry={summary} />);
+
+    await waitFor(() => expect(document.getElementById("pipeline-harness-memory")).toBeTruthy());
+    const section = document
+      .getElementById("pipeline-harness-memory")
+      ?.closest("section") as HTMLElement;
+    expect(section.textContent).toContain("P95 480 MiB median");
+    expect(section.textContent).toContain("peak 650 MiB · cap 2,048 MiB · 2 runs");
+    expect(section.querySelectorAll(".inference-run")).toHaveLength(2);
+    expect(section.textContent).toContain("P95 600 MiB");
+    expect(section.textContent).toContain("Failed");
+    expect(section.textContent).toContain("Scored");
+  });
+
+  it("shows a reported zero reading as 0 MiB and a missing one as a dash", async () => {
+    stubPipelineFetch(() =>
+      Promise.resolve(
+        pipelineResponse({
+          harness_memory: {
+            runs: 1,
+            peak_bytes_max: 0,
+            p50_bytes_median: 0,
+            p95_bytes_median: 0,
+            p95_bytes_max: 0,
+            limit_bytes_max: null,
+            last_recorded_at: "2026-07-31T13:55:00Z",
+            recent_runs: [],
+          },
+        }),
+      ),
+    );
+    render(() => <AgentEvidence entry={summary} />);
+    await waitFor(() => expect(document.getElementById("pipeline-harness-memory")).toBeTruthy());
+    const section = document
+      .getElementById("pipeline-harness-memory")
+      ?.closest("section") as HTMLElement;
+    expect(section.textContent).toContain("P95 0 MiB median");
+    expect(section.textContent).toContain("peak 0 MiB · cap — · 1 run");
+  });
+
+  it("omits the harness memory section for an unmeasured agent", async () => {
+    stubPipelineFetch(() => Promise.resolve(pipelineResponse({ harness_memory: null })));
+    render(() => <AgentEvidence entry={summary} />);
+    await waitFor(() => expect(document.getElementById("pipeline-validator-history")).toBeTruthy());
+    expect(document.getElementById("pipeline-harness-memory")).toBeNull();
+  });
+
   it("isolates a detail failure and retries from the section", async () => {
     let attempts = 0;
     stubPipelineFetch(() => {
@@ -1330,5 +1421,24 @@ describe("review-event evidence in the table (#622/#636)", () => {
     expect(cell.textContent).toContain("Zeus_v11, Submission v6");
     expect(cell.textContent).not.toContain("Compared with");
     expect(cell.textContent).not.toContain("Initial comparison");
+  });
+});
+
+it("names stranded terminal activity rows as unable to finish scoring", async () => {
+  stubActivityFetch(() => ({
+    ...activity,
+    entries: [
+      {
+        ...activity.entries![0],
+        status: "waiting_validator",
+        retry_disposition: "terminal_artifact_failure",
+        terminal_failure_code: "inference_allowance_exhausted",
+      },
+    ],
+  }));
+  await renderPage();
+  await waitFor(() => {
+    const row = document.querySelector("#activity-rows tr[aria-label]");
+    expect(row?.getAttribute("aria-label")).toContain("Cannot finish scoring");
   });
 });

@@ -45,7 +45,7 @@ BASIS_POINT_SCALE = 10_000
 TRACK_SHARES_PROTOCOL = 33
 """Validator heartbeat protocol that pays the generator track a served share."""
 
-KNOWN_TRACKS = ("memory", "coding", "router", "generator")
+KNOWN_TRACKS = ("memory", "coding", "router", "generator", "model_context")
 """Track ids the validator registry knows, in its registration order."""
 
 PAYABLE_TRACKS = frozenset({"memory", "generator"})

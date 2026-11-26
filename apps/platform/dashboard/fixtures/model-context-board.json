@@ -1,0 +1,59 @@
+{
+  "entries": [
+    {
+      "rank": 1,
+      "hotkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+      "submission_id": "ec168ac3-67ae-47c1-aab7-617919c71cba",
+      "score": 0.4514,
+      "eligible": true,
+      "commitment_block": 5012340,
+      "season": 1,
+      "base_id": "qwen3.5-0.8b",
+      "kind": "lora",
+      "hf_repo": "miner/cpm",
+      "revision": "301af1331a4fcde3cf5480add68210da2dbf8346",
+      "model_url": "https://huggingface.co/miner/cpm/tree/301af1331a4fcde3cf5480add68210da2dbf8346",
+      "components": {
+        "tool_cases": 90,
+        "tool_recall": 0.305,
+        "memory_cases": 120,
+        "memory_recall": 0.61,
+        "packed_tokens": null,
+        "distractor_rate": 0.2
+      },
+      "floor": 0.3108
+    },
+    {
+      "rank": 2,
+      "hotkey": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y",
+      "submission_id": "09a236a1-98c6-4aa2-8b7d-8f23fa3bf0e7",
+      "score": 0.3145,
+      "eligible": false,
+      "commitment_block": 5011870,
+      "season": 1,
+      "base_id": "qwen3.5-0.8b",
+      "kind": "lora",
+      "hf_repo": "cpm-lab/qwen-packer",
+      "revision": "3d8b85333fa8fb660f38bcfdf20a6f2b412b86df",
+      "model_url": "https://huggingface.co/cpm-lab/qwen-packer/tree/3d8b85333fa8fb660f38bcfdf20a6f2b412b86df",
+      "components": {
+        "tool_cases": 90,
+        "tool_recall": 0.2125,
+        "memory_cases": 120,
+        "memory_recall": 0.425,
+        "packed_tokens": null,
+        "distractor_rate": 0.2
+      },
+      "floor": 0.3108
+    }
+  ],
+  "count": 2,
+  "season": 1,
+  "mode": "shadow",
+  "floor_margin": 0.01,
+  "base_floors": {
+    "qwen3.5-2b": 0.34780000000000005,
+    "qwen3.5-0.8b": 0.3108
+  },
+  "generated_at": "2026-11-18T11:13:25.022518Z"
+}

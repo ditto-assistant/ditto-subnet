@@ -7,7 +7,7 @@ description: >
   operator review bar, package a tarball, and upload. Use when the user
   runs /mine, clones ditto-subnet to mine, asks how to practice, score,
   submit, or upload an agent, compares local OpenRouter 1.0 vs on-chain 0.7,
-  asks whether a harness change would be quarantined or rejected, or mentions
+  asks whether a harness change would be rejected after scoring, or mentions
   ditto practice, evaluate, run-size, starter kit, or SN118 mining.
 ---
 
@@ -17,11 +17,22 @@ This is the miner-facing skill. Load it before editing the starter kit,
 scoring, or uploading. A local score is not a production clearance: walk the
 served path against `$backroom-review` before `full`, packaging, or upload.
 
+Production screening is build and safety checks only (source review retired
+2026-11-07): archive and size limits, a static malicious-source check, the
+isolated image build and health check, copy protection, and banned hotkeys.
+There is no source review and no review hold; only copy protection can hold
+a near-duplicate when its scores finalize. Operators read the top agents' code
+after scoring and can void scores, reject or ban, so the review bar below is
+still the bar a top agent is judged against.
+
 The numbers below drift. For the live scoring bench, emission split, payout
 curve, champion, next epoch, and your own agents' status, run `$subnet-status`
 (`python3 .agents/skills/subnet-status/scripts/subnet_status.py --hotkey <ss58>`).
 
-Live scoring is **bench 15**, `run_size=full`, observed tools, locked
+Live scoring is **bench 18** (the accuracy contract on the dueling bench: a
+production-sized menu of 1,400 to 2,000 tools, multi-call tool encounters graded
+on the outcome, and a $1.00 per 350-case run budget; priced-cost-v2 unchanged,
+$0.50 reference per 350 cases, 0.3 floor), `run_size=full`, observed tools, locked
 `openai/gpt-oss-20b`. Without `--bench-version`, `uv run ditto practice` reads
 the live scoring version (`active_version`) from the public rollout endpoint
 (`https://dittobench.ai/api/v1/public/bench/rollout`) at run time, so the
@@ -32,12 +43,41 @@ each activation. A live version newer than the checkout's `MAX_BENCH_VERSION`
 fails loudly: update ditto-subnet. The wire `bench_version` a harness receives
 stays 9 in every contract.
 
+Bench 18's rollout opened on 2026-11-10. A whole v18 menu (about 100k to 200k
+tokens) does not fit the locked model's context, so a harness that forwards it
+scores 0: retrieve or defer tools. The stock kit serves the Jev hybrid for any
+menu over 64k estimated tokens (`src/hybrid.rs`); unrun cases past the run
+budget score 0 with `budget_exhausted`.
+
 Bench 15 activated on 2026-11-03. It keeps v14's grader and the v13 gates
 (shadow, replayed locally with `--gates`, below) and adds a ~235-tool catalog
 (200 unlinked connector tools that answer "not connected" and count as extra
 calls) plus the scored decision lane at `DITTOBENCH_DECISIONS_URL`. Pin
 `--bench-version 14` only to compare against the previous contract. See
 [`benchmark-v15-rollout.md`](../../../docs/benchmark-v15-rollout.md).
+
+Bench 16 (the dueling bench) is shipped and **shadow, not live**: it scores
+nothing on chain until the operator activates it
+([`benchmark-v16-rollout.md`](../../../docs/benchmark-v16-rollout.md)). A v16
+run is a 175-case datagen half plus a 175-case generator slice (5 columns x 35,
+`composite = gate x (0.5 x datagen + 0.1 x each unmasked column)`; a column
+your own coldkey owns is masked and its 10% returns to the datagen half).
+Bench 19 (staged, **not active**) changes the split: each column weighs 0.15
+(the datagen half 25%), and a datagen qualifier `min(1, datagen / 0.8)` scales
+the whole composite, so skipping the public bench still costs you. Tool calling
+then carries about 12.5% of the composite. Check `subnet-status` for which
+version actually scores before tuning for either split
+([dueling-bench.md](../../../research/dittobench-datagen/docs/dueling-bench.md)
+section 9).
+`uv run ditto practice --bench-version 16` rehearses it: the runner builds a
+local slice with `challenge-scorer reproduce-slice` from the **public default
+generator only** (`miners/dittobench-generator-starter-kit` in all five
+columns, owner `""`, a throwaway local season secret and anchor), passes it to
+the local scorer, and prints the composite plus each column's mean. Live
+columns come from the top eligible miner generators and stay private until
+their source is released, so a local v16 score is a shape check, not a
+prediction. `--no-slice` scores the datagen half only; `--slice-sandbox docker`
+runs the generator isolated.
 
 ## Practice loops (do not collapse these)
 
@@ -104,9 +144,9 @@ for missing toolchain errors.
 
 ## Review the served path
 
-This is the local half of `$backroom-review`. Read those files; do not copy
-the bar into this skill. Inspect only: no Backroom MCP, no quarantine or ATH
-writes.
+This is the local half of `$backroom-review`, the bar an operator applies
+when reading a top agent after scoring. Read those files; do not copy the bar
+into this skill. Inspect only: no Backroom MCP, no Backroom writes.
 
 - [review-rules.md](../backroom-review/references/review-rules.md)
 - [review-bar.md](../backroom-review/references/review-bar.md)
@@ -130,8 +170,8 @@ python3 .agents/skills/backroom-review/scripts/search-precedents.py "<pattern>"
 ```
 
 Hits are leads, not a verdict. Decide under the same two-limb test,
-production-engine test, and quarantine rejection boundary. Do not invent a
-lighter miner bar.
+production-engine test, and rejection boundary. Do not invent a lighter miner
+bar.
 
 | Result | Do |
 |---|---|
@@ -139,7 +179,8 @@ lighter miner bar.
 | Would reject | Stop. Cite limb/engine/policy, file:line, and precedent. Do not run `full` as certification, package, or upload. |
 | Mixed / source missing | Do not upload. Say what is missing. |
 
-A local pass is not a production clearance. Screening and ATH still apply.
+A local pass is not a production clearance. The build and safety checks, copy
+protection, and post-hoc operator review of top agents still apply.
 
 ## Iterate vs certify
 
@@ -220,6 +261,27 @@ uv run ditto --network finney upload --path ... --name ... --coldkey ... --hotke
 
 Do not put keys, `.env`, or host Docker sockets in the image. Follow
 [`docs/MINER.md`](../../../docs/MINER.md) for wallet, fee, and status.
+
+### Readmission (SN-485)
+
+When an era changes and a scored agent was not carried into it, the miner
+can pay the upload fee to readmit that unchanged agent:
+`uv run ditto --network finney readmit <agent_id> --coldkey ... --hotkey ...`.
+It applies from v19, no earlier than seven days after Ditto announces it; the
+CLI prints whether it is active and why not.
+
+- The check refuses **before payment**. Do not pay around a refusal: read the
+  reason, and resubmit instead for a partial (2 of 3) or withdrawn agent.
+- The fee equals the upload fee and starts the coldkey upload cooldown.
+- A refusal found after payment becomes a 30-day upload credit. There is no
+  on-chain refund.
+- An `--allow-identical-rescore` upload, or a near-identical re-upload of your
+  own agent, is labelled a readmission once active: same fee, same cooldown.
+- Retries Ditto causes are free. A failure the agent caused is not retried for
+  free; fix it and upload, or pay to re-run.
+- Payouts still count only the owner's best agent, so readmit your best one.
+
+See [`docs/MINER.md#readmission`](../../../docs/MINER.md#readmission).
 
 ## Generator miners at a bench version change
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -44,6 +44,7 @@ from ditto.db.queries.tickets import (
     issue_confirmation_ticket,
     issue_ticket,
     mark_ticket_scored,
+    release_foreign_dataset_pin,
     scoring_retry_ticket,
     ticket_retry_budget_spent,
 )
@@ -3896,6 +3897,161 @@ class TestTicketLifecycle:
         assert ticket is not None
         assert ticket.bench_version == _BENCH
 
+    @staticmethod
+    async def _seed_issued(
+        session: AsyncSession,
+        *,
+        agent_id: UUID,
+        bench_version: int,
+        slot_id: str,
+        deadline: datetime,
+    ) -> None:
+        async with session.begin():
+            session.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    bench_version=bench_version,
+                    validator_hotkey="5V1",
+                    slot_id=slot_id,
+                    status=TicketStatus.ISSUED,
+                    issued_at=_NOW - timedelta(hours=2),
+                    deadline=deadline,
+                )
+            )
+
+    @pytest.mark.parametrize("older_first", [True, False])
+    async def test_cross_version_lookup_resolves_each_issued_lease_by_deadline(
+        self, session: AsyncSession, older_first: bool
+    ) -> None:
+        """#2962: two issued leases on one agent, one validator, two slots.
+
+        The per-slot unique index allows this, so the lookup must select the
+        signed lease in SQL. Filtering on the deadline after taking whichever
+        row came back first resolved one of the two leases to nothing, and
+        which one depended on insertion order.
+        """
+        aid = await _seed_evaluating(session)
+        leases = [
+            (_BENCH, "slot-0", _NOW + _TTL),
+            (_BENCH + 1, "slot-1", _NOW + _TTL + timedelta(minutes=1)),
+        ]
+        for version, slot, deadline in leases if older_first else leases[::-1]:
+            await self._seed_issued(
+                session,
+                agent_id=aid,
+                bench_version=version,
+                slot_id=slot,
+                deadline=deadline,
+            )
+        for version, _, deadline in leases:
+            async with session.begin():
+                ticket = await get_open_ticket(
+                    session,
+                    agent_id=aid,
+                    validator_hotkey="5V1",
+                    now=_NOW,
+                    deadline=deadline,
+                    bench_version=None,
+                    for_update=True,
+                )
+            assert ticket is not None
+            assert ticket.bench_version == version
+
+    @pytest.mark.parametrize("stale_first", [True, False])
+    async def test_unswept_overdue_lease_does_not_shadow_the_live_one(
+        self, session: AsyncSession, stale_first: bool
+    ) -> None:
+        """An overdue row still ``issued`` (the sweep has not run) sits beside
+        a fresh lease at another version: the fresh lease is still found."""
+        aid = await _seed_evaluating(session)
+        live_deadline = _NOW + _TTL
+        rows = [
+            (_BENCH, "slot-0", _NOW - timedelta(minutes=1)),
+            (_BENCH + 1, "slot-1", live_deadline),
+        ]
+        for version, slot, deadline in rows if stale_first else rows[::-1]:
+            await self._seed_issued(
+                session,
+                agent_id=aid,
+                bench_version=version,
+                slot_id=slot,
+                deadline=deadline,
+            )
+        async with session.begin():
+            ticket = await get_open_ticket(
+                session,
+                agent_id=aid,
+                validator_hotkey="5V1",
+                now=_NOW,
+                deadline=live_deadline,
+                bench_version=None,
+            )
+        assert ticket is not None
+        assert ticket.bench_version == _BENCH + 1
+
+    async def test_cross_version_lookup_refuses_two_leases_on_one_deadline(
+        self, session: AsyncSession
+    ) -> None:
+        """Two issued rows that the signed lease cannot tell apart resolve to
+        nothing: a no-op for ``fail_job`` and dropped heartbeat progress,
+        never an action against an arbitrary one of them."""
+        aid = await _seed_evaluating(session)
+        deadline = _NOW + _TTL
+        for version, slot in ((_BENCH, "slot-0"), (_BENCH + 1, "slot-1")):
+            await self._seed_issued(
+                session,
+                agent_id=aid,
+                bench_version=version,
+                slot_id=slot,
+                deadline=deadline,
+            )
+        async with session.begin():
+            ambiguous = await get_open_ticket(
+                session,
+                agent_id=aid,
+                validator_hotkey="5V1",
+                now=_NOW,
+                deadline=deadline,
+                bench_version=None,
+            )
+            pinned = await get_open_ticket(
+                session,
+                agent_id=aid,
+                validator_hotkey="5V1",
+                now=_NOW,
+                deadline=deadline,
+                bench_version=_BENCH + 1,
+            )
+        assert ambiguous is None
+        assert pinned is not None
+        assert pinned.bench_version == _BENCH + 1
+
+    async def test_open_ticket_normalizes_non_utc_aware_deadline(
+        self, session: AsyncSession
+    ) -> None:
+        """An aware non-UTC signed deadline matches the stored UTC lease."""
+        aid = await _seed_evaluating(session)
+        deadline = _NOW + _TTL
+        await self._seed_issued(
+            session,
+            agent_id=aid,
+            bench_version=_BENCH,
+            slot_id="slot-0",
+            deadline=deadline,
+        )
+        plus_two = timezone(timedelta(hours=2))
+        async with session.begin():
+            ticket = await get_open_ticket(
+                session,
+                agent_id=aid,
+                validator_hotkey="5V1",
+                now=_NOW.astimezone(plus_two),
+                deadline=deadline.astimezone(plus_two),
+                bench_version=None,
+            )
+        assert ticket is not None
+        assert ticket.bench_version == _BENCH
+
 
 # SN-334: a generator round's lease shares the canonical ticket row. The round
 # lane creates that row with no scoring lease on it; a scoring lane that reuses
@@ -4035,6 +4191,55 @@ async def test_round_only_row_reused_for_continual_retest_starts_fresh(
         assert ticket.purpose == TicketPurpose.CONTINUAL_RETEST
         assert ticket.attempt_count == 1
         assert (ticket.seed, ticket.dataset_sha256) == (123, "ab" * 32)
+
+
+@pytest.mark.parametrize(
+    ("purpose", "released"),
+    [
+        (TicketPurpose.GENERATOR_ROUND, True),
+        # A scored continual retest leaves its shared wave seed on the row; a
+        # canonical reuse that kept it was refused 409 "ticket seed does not
+        # match its validator identity" on every poll (5CFtz, 2026-11-04).
+        (TicketPurpose.CONTINUAL_RETEST, True),
+        # A canonical lease's own validator-identity pin must survive, so a
+        # retry cannot rotate its dataset.
+        (TicketPurpose.CANONICAL_QUORUM, False),
+    ],
+)
+async def test_scoring_reuse_drops_only_a_foreign_dataset_pin(
+    session: AsyncSession, purpose: TicketPurpose, released: bool
+) -> None:
+    agent_id = await _seed_scored(session)
+    async with session.begin():
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                validator_hotkey="5ForeignPin",
+                slot_id="slot-0",
+                status=TicketStatus.SCORED,
+                purpose=purpose,
+                purpose_revision=3,
+                issued_at=_NOW - timedelta(hours=2),
+                deadline=_NOW - timedelta(minutes=30),
+                bench_version=_BENCH,
+                seed=987654321,
+                dataset_sha256="ef" * 32,
+                seed_block=100,
+                seed_block_hash="0x" + "ab" * 32,
+                attempt_count=1,
+                manual_retry_grants=0,
+                legacy_completion_allowed=False,
+            )
+        )
+    async with session.begin():
+        row = await session.get(ValidatorTicket, (agent_id, _BENCH, "5ForeignPin"))
+        assert row is not None
+        release_foreign_dataset_pin(row)
+        pin = (row.seed, row.dataset_sha256, row.seed_block, row.seed_block_hash)
+    if released:
+        assert pin == (None, None, None, None)
+    else:
+        assert pin == (987654321, "ef" * 32, 100, "0x" + "ab" * 32)
 
 
 async def test_scoring_retry_ticket_sql_matches_python(

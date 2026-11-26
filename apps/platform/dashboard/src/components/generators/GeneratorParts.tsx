@@ -6,7 +6,13 @@ import type { JSX } from "solid-js";
 import { StatusChip } from "../ui/StatusChip";
 import type { GeneratorCaseCounts, GeneratorSubmissionStatus } from "./generator-data";
 
-export const CASE_OUTCOMES = ["discriminating", "trivial", "unsolved", "duplicate"] as const;
+export const CASE_OUTCOMES = [
+  "discriminating",
+  "frontier",
+  "trivial",
+  "unsolved",
+  "duplicate",
+] as const;
 
 export function CaseBar(props: { counts: Partial<GeneratorCaseCounts> }): JSX.Element {
   const parts = () => CASE_OUTCOMES.map((name) => [name, props.counts[name] ?? 0] as const);
@@ -38,6 +44,11 @@ export function CaseLegend(): JSX.Element {
       <li>
         <span class="gen-case discriminating" aria-hidden="true" /> Discriminating: some panel
         agents solve it and others miss it (earns credit)
+      </li>
+      <li>
+        <span class="gen-case frontier" aria-hidden="true" /> Frontier: too few agent owners solve
+        it, but the frontier oracle answered it and no sampled audit of its column ruled it out
+        (earns credit)
       </li>
       <li>
         <span class="gen-case trivial" aria-hidden="true" /> Trivial: every eligible agent solves it

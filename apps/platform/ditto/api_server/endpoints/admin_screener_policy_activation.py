@@ -27,26 +27,20 @@ the model cannot see:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, cast
+from typing import Annotated, Any, NoReturn, cast
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import and_, exists, func, or_, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener_policy_activation import (
-    ADVANCE_SCORED_RESCREEN_CONFIRMATION,
-    CONFIRMATION,
     RESTORE_SCORED_CONFIRMATION,
-    AdvanceScoredPolicyRescreenRequest,
     RestoredScoredSubmission,
     RestoreScoredScreeningSnapshotRequest,
     RestoreScoredScreeningSnapshotResponse,
-    ScheduleScreenerPolicyActivationRequest,
-    ScheduleV13ReviewClockRequest,
     ScoredPolicyRescreenReleaseView,
     ScoredPolicyRescreenView,
     ScoredRescreenState,
@@ -56,7 +50,6 @@ from ditto.api_models.screener_policy_activation import (
     V13ReviewClockRevision,
     V13ReviewClockSchedule,
 )
-from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_models.system_health import fleet_release_from_heartbeat_envelope
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -70,7 +63,6 @@ from ditto.db.models import (
     ScoredPolicyRescreenRelease,
     ScoredScreeningSnapshotRestoration,
     ScreenerHeartbeat,
-    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     ScreeningReviewDeadlineActivation,
 )
@@ -80,7 +72,6 @@ from ditto.db.models import (
 from ditto.db.queries.heartbeats import list_screener_heartbeats
 from ditto.db.queries.scores import list_eligible_ledger
 from ditto.db.queries.screener_policy_activation import (
-    insert_screener_policy_activation,
     latest_screener_policy_activation,
     list_screener_policy_activations,
 )
@@ -100,24 +91,20 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 
 
-_MAX_SCORED_POLICY_RESCREEN_WINDOW = 4
-_REVIEW_CLOCK_SCHEDULE_LOCK = 29002100
-# The public notice begins only after the write commits and becomes readable.
-# A small publication margin protects the promised full hour across commit and
-# CDN propagation; the public endpoint itself is explicitly no-store.
-_REVIEW_CLOCK_NOTICE = timedelta(hours=1, minutes=5)
+SOURCE_REVIEW_RETIRED_DETAIL = (
+    "screening source review is retired (owner decision 2026-11-07): new "
+    "review-policy activations, review clocks and scored-policy rescreens are no "
+    "longer scheduled; build and safety checks are the whole screen"
+)
 
 
-async def _review_clock_database_now(session: AsyncSession) -> datetime:
-    clock = (
-        func.clock_timestamp()
-        if session.get_bind().dialect.name == "postgresql"
-        else func.current_timestamp()
-    )
-    value = await session.scalar(select(clock))
-    if value is None:
-        raise RuntimeError("review clock database time unavailable")
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+_RETIRED_RESPONSES: dict[int | str, dict[str, Any]] = {
+    410: {"description": SOURCE_REVIEW_RETIRED_DETAIL}
+}
+
+
+def _source_review_retired() -> HTTPException:
+    return HTTPException(status_code=410, detail=SOURCE_REVIEW_RETIRED_DETAIL)
 
 
 def _review_clock_revision(
@@ -162,69 +149,14 @@ async def get_v13_review_clock(
     return await _review_clock_schedule(session)
 
 
-@router.post("/review-clock", response_model=V13ReviewClockSchedule)
+@router.post(
+    "/review-clock", status_code=410, responses=_RETIRED_RESPONSES, response_model=None
+)
 async def schedule_v13_review_clock(
-    payload: ScheduleV13ReviewClockRequest,
     _admin: AdminDep,
-    session: SessionDep,
-) -> V13ReviewClockSchedule:
-    """Schedule a future first-claim clock; never backfill existing attempts."""
-    if payload.activate_at.tzinfo is None:
-        raise HTTPException(status_code=422, detail="activate_at requires a timezone")
-    activate_at = payload.activate_at.astimezone(UTC)
-    if payload.policy_document_digest != POLICY_V13_DOCUMENT_DIGEST:
-        raise HTTPException(
-            status_code=409, detail="published v13 policy document digest mismatch"
-        )
-    try:
-        async with session.begin():
-            if session.get_bind().dialect.name == "postgresql":
-                await session.execute(
-                    select(func.pg_advisory_xact_lock(_REVIEW_CLOCK_SCHEDULE_LOCK))
-                )
-            latest = await session.scalar(
-                select(ScreeningReviewDeadlineActivation)
-                .order_by(ScreeningReviewDeadlineActivation.revision.desc())
-                .limit(1)
-            )
-            actual_revision = latest.revision if latest is not None else 0
-            if payload.expected_revision != actual_revision:
-                raise HTTPException(
-                    status_code=409,
-                    detail="review clock revision changed; refresh before scheduling",
-                )
-            # Recheck after the lock using DB time. A request delayed while
-            # waiting for that lock must not silently shorten public notice.
-            if (
-                activate_at
-                < await _review_clock_database_now(session) + _REVIEW_CLOCK_NOTICE
-            ):
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        "review clock requires one hour of notice "
-                        "plus a five-minute publication margin"
-                    ),
-                )
-            session.add(
-                ScreeningReviewDeadlineActivation(
-                    policy_version=13,
-                    # The legacy column stores the module-manifest digest.
-                    policy_digest=payload.policy_manifest_digest,
-                    policy_document_digest=payload.policy_document_digest,
-                    activate_at=activate_at,
-                    window_seconds=payload.window_seconds,
-                    reason=payload.reason.strip(),
-                    actor=payload.actor.strip(),
-                )
-            )
-            await session.flush()
-    except IntegrityError as error:
-        raise HTTPException(
-            status_code=409,
-            detail="review clock changed concurrently; refresh before scheduling",
-        ) from error
-    return await _review_clock_schedule(session)
+) -> NoReturn:
+    """Retired: source review no longer runs, so no review clock is scheduled."""
+    raise _source_review_retired()
 
 
 def _revision_view(
@@ -308,13 +240,6 @@ def _view(
         revisions=[_revision_view(row, now=now) for row in history],
         fleet=fleet,
     )
-
-
-async def _latest_revision(session: AsyncSession) -> int:
-    # Serialize schedules with incident snapshot restorations. Both operations
-    # lock the newest append-only row before trusting its revision.
-    latest = await latest_screener_policy_activation(session, for_update=True)
-    return latest.revision if latest is not None else 0
 
 
 def _release_view(
@@ -459,332 +384,29 @@ async def get_scored_rescreen(
     )
 
 
-@router.post("/advance-scored-rescreen", response_model=ScoredPolicyRescreenView)
+@router.post(
+    "/advance-scored-rescreen",
+    status_code=410,
+    responses=_RETIRED_RESPONSES,
+    response_model=None,
+)
 async def advance_scored_rescreen(
-    payload: AdvanceScoredPolicyRescreenRequest,
     _admin: AdminDep,
-    session: SessionDep,
-) -> ScoredPolicyRescreenView:
-    """Fill a bounded current-board window after an explicit checkpoint.
-
-    The policy schedule establishes the rule.  It does *not* bulk-requeue
-    every existing score: a false V11 clear remains observable before more than
-    the configured window of V10 scores is touched.  A non-verdict leaves its
-    row paused, prevents the window from widening, and requires an explicit
-    retry rather than silently advancing.
-    """
-    if payload.confirmation != ADVANCE_SCORED_RESCREEN_CONFIRMATION:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"confirmation must be exactly {ADVANCE_SCORED_RESCREEN_CONFIRMATION}"
-            ),
-        )
-    if payload.max_active_releases > _MAX_SCORED_POLICY_RESCREEN_WINDOW:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "max_active_releases exceeds the four-slot scored policy "
-                "rescreen safety window"
-            ),
-        )
-    actor = (payload.actor or "backroom").strip()
-    async with session.begin():
-        policy = await resolve_screener_policy_activation(session)
-        if (
-            policy.governing_revision is None
-            or not policy.rescreen_scored
-            or not policy.rescreen_stale_agents
-            or policy.governing_revision != payload.expected_activation_revision
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="no due scored policy rescreen matches the expected activation",
-            )
-        activation = await session.get(
-            ActivationRow, policy.governing_revision, with_for_update=True
-        )
-        assert activation is not None
-        releases = list(
-            await session.scalars(
-                select(ScoredPolicyRescreenRelease)
-                .where(
-                    ScoredPolicyRescreenRelease.activation_revision
-                    == activation.revision
-                )
-                .order_by(ScoredPolicyRescreenRelease.position)
-                .with_for_update()
-            )
-        )
-        active = [row for row in releases if row.state != "terminal"]
-        paused = [row for row in active if row.state == "paused"]
-        if paused:
-            current = next(
-                (row for row in paused if row.agent_id == payload.expected_agent_id),
-                None,
-            )
-            if current is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "scored policy rescreen is paused; refresh and retry the "
-                        f"paused row ({paused[0].agent_id})"
-                    ),
-                )
-            if payload.retry_paused:
-                if (
-                    payload.review_settings_revision is not None
-                    and payload.review_settings_revision
-                    != current.review_settings_revision
-                ):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            "paused scored policy rescreens retain their original "
-                            "review settings revision"
-                        ),
-                    )
-                current.state = "pending"
-                current.attempt_id = None
-                current.actor = actor
-                current.reason = payload.reason.strip()
-            else:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "scored policy rescreen is paused; use retry_paused only "
-                        "for that non-verdict"
-                    ),
-                )
-        else:
-            review_settings_revision = payload.review_settings_revision
-            if activation.canary_only:
-                if review_settings_revision is None:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=(
-                            "canary-only scored policy rescreens require an "
-                            "immutable L4-enforce review settings revision"
-                        ),
-                    )
-                review_revision = await session.get(
-                    ScreenerReviewSettingsRevision, review_settings_revision
-                )
-                if review_revision is None:
-                    raise HTTPException(
-                        status_code=422,
-                        detail="review settings revision does not exist",
-                    )
-                review_settings = ScreenerReviewSettings.model_validate(
-                    review_revision.settings
-                )
-                if (
-                    review_settings.mode != "enforce"
-                    or not review_settings.l3_enabled
-                    or review_settings.adjudicator_mode != "enforce"
-                ):
-                    raise HTTPException(
-                        status_code=422,
-                        detail=(
-                            "canary-only scored policy rescreens require enforce "
-                            "mode with L3 and the adjudicator enforced"
-                        ),
-                    )
-                active_review_revisions = {
-                    row.review_settings_revision for row in active
-                }
-                if active_review_revisions and active_review_revisions != {
-                    review_settings_revision
-                }:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            "active scored policy rescreens retain their immutable "
-                            "review settings revision"
-                        ),
-                    )
-            elif review_settings_revision is not None:
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        "review settings revision is only valid for a canary-only "
-                        "scored policy rescreen"
-                    ),
-                )
-            slots = payload.max_active_releases - len(active)
-            if slots <= 0:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "scored policy rescreen window is full; wait for a terminal "
-                        "verdict before backfilling another slot"
-                    ),
-                )
-            next_candidate = await _next_scored_rescreen_candidate(
-                session,
-                activation=activation,
-                released_agent_ids={row.agent_id for row in releases},
-            )
-            if next_candidate is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="no eligible stale scored submission remains to rescreen",
-                )
-            agent_id, _position = next_candidate
-            if agent_id != payload.expected_agent_id:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "scored policy rescreen order changed; refresh before "
-                        f"advancing (next {agent_id})"
-                    ),
-                )
-            released_agent_ids = {row.agent_id for row in releases}
-            # ``max_active_releases`` is a capacity window, not a batch size:
-            # a later checkpoint backfills only the slots that reached a
-            # terminal verdict. That keeps the four Hetzner workers busy while
-            # never releasing a whole historical board into fallback capacity.
-            for _ in range(slots):
-                candidate = await _next_scored_rescreen_candidate(
-                    session,
-                    activation=activation,
-                    released_agent_ids=released_agent_ids,
-                )
-                if candidate is None:
-                    break
-                candidate_agent_id, candidate_position = candidate
-                session.add(
-                    ScoredPolicyRescreenRelease(
-                        release_id=uuid4(),
-                        activation_revision=activation.revision,
-                        target_policy_version=activation.target_policy_version,
-                        agent_id=candidate_agent_id,
-                        position=candidate_position,
-                        state="pending",
-                        attempt_id=None,
-                        review_settings_revision=review_settings_revision,
-                        actor=actor,
-                        reason=payload.reason.strip(),
-                    )
-                )
-                released_agent_ids.add(candidate_agent_id)
-    return await _scored_rescreen_view(
-        session, policy=await resolve_screener_policy_activation(session)
-    )
+) -> NoReturn:
+    """Retired: scored agents are never rescreened for a review policy."""
+    raise _source_review_retired()
 
 
-@router.post("", response_model=ScreenerPolicyActivationView)
+@router.post("", status_code=410, responses=_RETIRED_RESPONSES, response_model=None)
 async def schedule_activation(
-    payload: ScheduleScreenerPolicyActivationRequest,
-    request: Request,
     _admin: AdminDep,
-    session: SessionDep,
-) -> ScreenerPolicyActivationView:
-    """Append one optimistic, confirmation-gated schedule revision.
+) -> NoReturn:
+    """Retired: the required screening policy is frozen at its last activation.
 
-    The required version rises to ``target_policy_version`` when
-    ``activate_at`` passes, not when this row is written — miners get the full
-    notice window. Superseding an earlier schedule is a normal append: the
-    newest due revision governs.
+    Validators lease on the benchmark contract floor alone, so nothing waits on
+    a new review-policy version. Reads of the activation history still work.
     """
-    if payload.confirmation != CONFIRMATION:
-        raise HTTPException(
-            status_code=409,
-            detail=f"confirmation must be exactly {CONFIRMATION}",
-        )
-    if payload.activate_at.tzinfo is None:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "activate_at must carry a timezone offset (for example "
-                "2026-08-29T09:00:00-04:00 for 9 a.m. Eastern); a naive "
-                "datetime would silently mean server-local time"
-            ),
-        )
-    activate_at = payload.activate_at.astimezone(UTC)
-    if activate_at <= datetime.now(UTC):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "activate_at must be in the future; an activation is "
-                "notice, not a retroactive rule change"
-            ),
-        )
-    if payload.target_policy_version < SCREENING_FLOOR_POLICY_VERSION:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"target_policy_version must be at least the current floor "
-                f"{SCREENING_FLOOR_POLICY_VERSION}"
-            ),
-        )
-    if payload.target_policy_version > SCREENING_POLICY_VERSION:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"target_policy_version {payload.target_policy_version} exceeds "
-                f"the version this build implements "
-                f"({SCREENING_POLICY_VERSION}); deploy the build that "
-                "implements it, then schedule the activation"
-            ),
-        )
-    if payload.target_policy_version > SCREENING_ACTIVATION_CEILING_POLICY_VERSION:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"target_policy_version {payload.target_policy_version} is not "
-                "activation-ready; the published activation ceiling is "
-                f"{SCREENING_ACTIVATION_CEILING_POLICY_VERSION}"
-            ),
-        )
-    if payload.canary_only and not payload.rescreen_scored:
-        raise HTTPException(
-            status_code=422,
-            detail="canary-only activation requires rescreen_scored=true",
-        )
-    if (
-        payload.canary_only
-        and payload.target_policy_version <= SCREENING_FLOOR_POLICY_VERSION
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="canary-only activation must target a policy above the floor",
-        )
-    actual_revision = await _latest_revision(session)
-    if payload.expected_revision != actual_revision:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "screener policy activation changed; refresh before applying "
-                f"(expected {payload.expected_revision}, current {actual_revision})"
-            ),
-        )
-    actor = (payload.actor or "backroom").strip()
-    try:
-        await insert_screener_policy_activation(
-            session,
-            parent_revision=actual_revision,
-            target_policy_version=payload.target_policy_version,
-            activate_at=activate_at,
-            rescreen_scored=payload.rescreen_scored,
-            canary_only=payload.canary_only,
-            reason=payload.reason.strip(),
-            actor=actor,
-        )
-        await session.commit()
-    except IntegrityError as error:
-        await session.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="screener policy activation changed concurrently; refresh and retry",
-        ) from error
-    resolver = getattr(request.app.state, "screener_policy_activation", None)
-    if resolver is not None:
-        resolver.invalidate()
-    policy = await resolve_screener_policy_activation(session)
-    latest = await latest_screener_policy_activation(session)
-    history = list(await list_screener_policy_activations(session))
-    return _view(policy, latest, history, fleet=await _fleet_view(session))
+    raise _source_review_retired()
 
 
 @router.post(

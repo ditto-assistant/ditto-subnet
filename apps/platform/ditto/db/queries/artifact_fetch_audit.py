@@ -73,6 +73,12 @@ ENDPOINT_ADMIN_COPY_REVIEW_DIFF_FILE = "admin.get_copy_review_source_diff_file"
 ENDPOINT_ADMIN_LINEAGE_DIFF = "admin.get_lineage_source_diff"
 ENDPOINT_ADMIN_LINEAGE_DIFF_FILE = "admin.get_lineage_source_diff_file"
 ENDPOINT_ADMIN_REVIEW_LINEAGE = "admin.get_screening_review_lineage"
+# Generator source reads key their row on the generator submission id. The
+# ``agent_id`` column is not FK-bound, ids never collide across the two lanes,
+# and the endpoint names the generator lane.
+ENDPOINT_ADMIN_GENERATOR_SOURCE_FILES = "admin.list_generator_source_files"
+ENDPOINT_ADMIN_GENERATOR_SOURCE_FILE = "admin.read_generator_source_file"
+ENDPOINT_ADMIN_GENERATOR_SOURCE_SEARCH = "admin.search_generator_source"
 
 
 async def record_artifact_fetch(

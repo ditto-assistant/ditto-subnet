@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from ditto.api_models.era_change import PublicEraChange
 from ditto.api_models.inference_observability import ProviderCircuitSnapshot
 from ditto.api_models.retry_state import RecommendedRetryAction, RetryState
 
@@ -119,6 +120,14 @@ class AdminValidationQueueWithdrawal(BaseModel):
     score_count: int
     evicted_validator_hotkeys: list[str] | None = None
     """``None`` for an ordinary withdrawal; the revoked leases for an eviction."""
+    terminal_failure_code: str | None = None
+    """The agent-attributable code that made quorum unreachable, if any.
+
+    Set when every remaining quorum slot failed on the same named agent code,
+    whether the platform wrote the withdrawal itself (``actor`` is
+    ``platform:terminal-artifact-failure``) or an operator did. Public surfaces
+    report such a submission as ``scoring_failed``.
+    """
     created_at: datetime
     reinstated_at: datetime | None = None
     """When this removal was reversed, or ``None`` while it is still in force.
@@ -257,6 +266,17 @@ class AdminStuckSubmission(BaseModel):
     automatic_retry_available: bool
     recovery_allowed: bool
     blocking_reason: str | None
+    """Why the row is not advancing. A row the active bench does not admit,
+    or whose retry state sits in an era validators no longer serve, says so
+    here instead of a quorum or retry message that cannot apply, and quotes
+    the label miners see (see :attr:`era_change`)."""
+    era_change: PublicEraChange | None = None
+    """Set when the active bench's era boundary refuses the submission: the
+    same reason code and next step the miner's ``era_changed`` row carries.
+    Read-only; ``retry_state`` keeps the classifier's own label."""
+    serves_active_bench: bool = True
+    """False when nothing this row's retry state describes can run: its era is
+    older than the active bench, or the active bench does not admit it."""
     recommended_action: RecommendedRetryAction | None = None
     """``withdraw`` for named agent-attributable exhaustion; ``retry`` when a
     grant can still restore quorum. ``None`` on rows that are not exhausted.

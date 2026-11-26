@@ -1,0 +1,102 @@
+---
+# The NVIDIA open datacenter driver and container toolkit, from NVIDIA's signed
+# CUDA repository for Ubuntu 24.04, at exact versions.
+- name: Install deb822 repository support
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+    update_cache: true
+
+- name: Add the NVIDIA CUDA repository key
+  ansible.builtin.get_url:
+    url: "{{ cpm_scorer_nvidia_repo }}3bf863cc.pub"
+    dest: /usr/share/keyrings/nvidia-cuda.asc
+    mode: "0644"
+    checksum: "sha256:{{ cpm_scorer_nvidia_apt_key_sha256 }}"
+
+- name: Add the NVIDIA CUDA apt repository
+  ansible.builtin.deb822_repository:
+    name: nvidia-cuda
+    types: [deb]
+    uris: "{{ cpm_scorer_nvidia_repo }}"
+    suites: ["/"]
+    signed_by: /usr/share/keyrings/nvidia-cuda.asc
+    state: present
+
+# Installed first, so that apt resolves every driver package (and nothing
+# newer) at this one version, now and on every later upgrade.
+- name: Pin the NVIDIA driver to one exact version
+  ansible.builtin.apt:
+    name: "nvidia-driver-pinning-{{ cpm_scorer_nvidia_driver_version }}={{ cpm_scorer_nvidia_driver_package_version }}"
+    state: present
+    update_cache: true
+
+# DKMS builds the open kernel module against the running kernel; the flavour
+# metapackage keeps headers following kernel security updates.
+- name: Install kernel headers for DKMS
+  ansible.builtin.apt:
+    name: "{{ ['linux-headers-' ~ ansible_facts['kernel']] + (['linux-headers-aws'] if ansible_facts['kernel'] is search('-aws$') else []) }}"
+    state: present
+
+- name: Install the pinned NVIDIA driver and container toolkit
+  ansible.builtin.apt:
+    name:
+      - "nvidia-headless-open={{ cpm_scorer_nvidia_driver_package_version }}"
+      - "nvidia-container-toolkit={{ cpm_scorer_nvidia_container_toolkit_version }}"
+      - "nvidia-container-toolkit-base={{ cpm_scorer_nvidia_container_toolkit_version }}"
+      - "libnvidia-container-tools={{ cpm_scorer_nvidia_container_toolkit_version }}"
+      - "libnvidia-container1={{ cpm_scorer_nvidia_container_toolkit_version }}"
+    state: present
+
+# The driver pinning package covers the driver; hold the toolkit explicitly.
+- name: Hold the container toolkit at its pinned version
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - nvidia-container-toolkit
+    - nvidia-container-toolkit-base
+    - libnvidia-container-tools
+    - libnvidia-container1
+
+- name: Load the NVIDIA kernel module
+  ansible.builtin.command: modprobe nvidia
+  register: cpm_scorer_modprobe
+  changed_when: false
+  failed_when: false
+
+- name: Require the NVIDIA kernel module
+  ansible.builtin.fail:
+    msg: >-
+      modprobe nvidia failed ({{ cpm_scorer_modprobe.stderr | default('') }}).
+      DKMS builds for the running kernel, so this usually means a pending kernel
+      update or a loaded nouveau: reboot the instance (aws ec2 reboot-instances)
+      and run the playbook again.
+  when:
+    - not ansible_check_mode
+    - cpm_scorer_modprobe.rc != 0
+
+- name: Read the GPU through the pinned driver
+  ansible.builtin.command: nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+  register: cpm_scorer_nvidia_smi
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Require the scorer's GPU on the pinned driver
+  ansible.builtin.assert:
+    that:
+      - cpm_scorer_nvidia_smi.stdout_lines | length == 1
+      - cpm_scorer_nvidia_smi.stdout | trim == cpm_scorer_expected_gpu ~ ', ' ~ cpm_scorer_nvidia_driver_version
+    fail_msg: >-
+      expected one {{ cpm_scorer_expected_gpu }} on driver {{ cpm_scorer_nvidia_driver_version }},
+      nvidia-smi reports {{ cpm_scorer_nvidia_smi.stdout_lines }}
+    quiet: true
+  when: not ansible_check_mode
+
+# Keeps the driver initialised between runs, so each lease does not pay the
+# GPU's cold start.
+- name: Enable NVIDIA persistence
+  ansible.builtin.systemd:
+    name: nvidia-persistenced
+    enabled: true
+    state: started

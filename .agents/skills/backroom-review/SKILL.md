@@ -13,9 +13,39 @@ or until the staff session ends, whichever is sooner. `get_backroom_access`
 reports `expires_at`. Signed artifact URLs stay short-lived and are not
 covered by that window.
 
+## Source review is retired (2026-11-07)
+
+Peyton retired the automated screening review layer (Discord #118・ditto,
+2026-11-07). Screening is now build and safety checks only: archive and size
+validation, the deterministic static malicious-source check, the isolated
+image build and health check, copy protection, and banned hotkeys. Nothing
+else holds a submission before or after scoring:
+
+- No L1/L2/L3 source review runs, so no new screening quarantine, no
+  inconclusive hold, and no policy reject comes from the screener.
+- No automatic ATH hold opens at score finalization: the deferred source
+  review, top-five integrity double-check, outlier escalation and
+  transform-audit holds are gone. Copy holds (`review_kind: copy`) still open
+  automatically; they are copy protection, not source review.
+- Review-policy activations, review clocks and scored-policy rescreens are no
+  longer scheduled (Platform answers 410), and leasing no longer waits on a
+  review-policy version.
+
+What this skill is for now:
+
+- **Daily top-five read.** Peyton reads the top five agents' code every day
+  and answers with bench difficulty. Use the source tools below and the
+  review bar to read a scored agent, then act after the fact with the
+  post-hoc tools: `open_ath_review` / batched rulings to reject, the ban that
+  a reject ruling carries, `void_infra_scores` or `replace_validator_score`
+  for scores. These stay operator-only and are never automatic.
+- **Draining legacy holds.** Quarantines and ATH holds opened before the
+  retirement still need an operator ruling. The quarantine court below
+  applies to those rows only, and every write to them is owner-gated.
+
 Two courts, one control plane:
 
-- **Quarantine** — active screening holds. Read
+- **Quarantine** — legacy screening holds opened before 2026-11-07. Read
   [references/review-rules.md](references/review-rules.md).
 - **ATH board** — scored or live high-rank agents. Read
   [references/review-bar.md](references/review-bar.md) and search precedents

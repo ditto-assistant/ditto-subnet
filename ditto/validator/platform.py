@@ -9,8 +9,10 @@ signature. It never touches the platform DB directly.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import logging
+import math
 import re
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
@@ -71,6 +73,10 @@ from ditto.api_models.coding_inference_grants import (
 )
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.generator_round_validator import (
+    DuelingSeasonCommitmentJobRequest,
+    DuelingSeasonCommitmentJobResponse,
+    DuelingSeasonCommitmentReportRequest,
+    DuelingSeasonCommitmentReportResponse,
     GeneratorRoundCaseResult,
     GeneratorRoundCommitmentJobRequest,
     GeneratorRoundCommitmentJobResponse,
@@ -89,6 +95,7 @@ from ditto.api_models.inference import (
     InferenceExchangeRequest,
     InferenceExchangeResponse,
 )
+from ditto.api_models.model_context_ledger import ModelContextLedgerResponse
 from ditto.api_models.private_dataset import PrivateDatasetRequest
 from ditto.api_models.receipt_diagnostics import (
     ReceiptDiagnosticObservation,
@@ -102,6 +109,7 @@ from ditto.api_models.validator import (
     FailJobReason,
     FailJobRequest,
     FailJobResponse,
+    HarnessMemoryTelemetry,
     JobRequest,
     JobResponse,
     LedgerResponse,
@@ -139,6 +147,7 @@ from ditto.validator.errors import (
     PlatformError,
     PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
+    PlatformRetryLaterError,
     WeightReceiptConflictError,
 )
 from ditto.validator.signing import (
@@ -191,6 +200,12 @@ _SCORE_SUBMIT_DEADLINE_MARGIN = timedelta(seconds=30)
 # safe to repeat. A Platform deploy refuses connections for ~6s (SN-426); these
 # delays outlast that before the ticket is handed back as infrastructure.
 _ARTIFACT_FETCH_RETRY_DELAYS = (1.0, 3.0, 8.0)
+# A job claim Platform answers with 503 + delta-seconds ``Retry-After`` (e.g. a
+# bench v16+ dueling slice still being prepared) is retried by the same slot.
+# Bound the wait so a misconfigured or hostile header cannot park a slot, and
+# floor it so ``Retry-After: 0`` cannot turn the retry into a hot loop.
+JOB_RETRY_AFTER_MIN_SECONDS = 1.0
+JOB_RETRY_AFTER_MAX_SECONDS = 120.0
 # Exchange is idempotent for one signed nonce. Keep fast recovery for ordinary
 # blips, but survive a full relay handover window without throwing away a
 # benchmark ticket. This does not spend inference budget: no model request can
@@ -341,6 +356,46 @@ def _cost_ceiling_evidence(response: httpx.Response) -> dict[str, object]:
     return {"cost_ceiling_microusd": ceiling, "cost_ceiling_mode": mode}
 
 
+# Platform names the gate behind each lease-lane 204 in this header. Set in
+# the awaiting task's own context, so concurrent slots never read each other's.
+JOB_DECLINE_REASON_HEADER = "X-Ditto-Decline-Reason"
+_JOB_DECLINE_REASON: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "validator_job_decline_reason", default=None
+)
+_DECLINE_REASON_PATTERN = re.compile(r"[a-z0-9_]{1,64}")
+
+
+def last_job_decline_reason() -> str | None:
+    """Why this task's most recent ``request_job`` 204 was declined, if known.
+
+    ``None`` when the last call was not a 204, or Platform predates the header.
+    """
+    return _JOB_DECLINE_REASON.get()
+
+
+def _decline_reason(resp: httpx.Response) -> str | None:
+    raw = resp.headers.get(JOB_DECLINE_REASON_HEADER, "").strip()
+    return raw if _DECLINE_REASON_PATTERN.fullmatch(raw) else None
+
+
+def _job_retry_after_seconds(response: httpx.Response) -> float | None:
+    """A 503's delta-seconds ``Retry-After``, clamped; ``None`` if unusable.
+
+    HTTP-date values and anything non-numeric, negative, or non-finite are
+    ignored so the caller keeps treating the refusal as a plain failure.
+    """
+    raw = response.headers.get("Retry-After", "").strip()
+    if not raw:
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        return None
+    if not math.isfinite(seconds) or seconds < 0:
+        return None
+    return min(max(seconds, JOB_RETRY_AFTER_MIN_SECONDS), JOB_RETRY_AFTER_MAX_SECONDS)
+
+
 def _is_transient_platform_status(status_code: int) -> bool:
     """Request timeout, rate limit, or server error: retry later, blame nobody."""
     return status_code in (408, 429) or status_code >= 500
@@ -455,8 +510,10 @@ class PlatformClient:
         POST /validator/job issues at most :data:`SCORING_QUORUM` tickets per
         agent to distinct validators, so most calls return 204. A returned ticket
         carries the pinned dataset (``seed`` + ``dataset_sha256`` + ``run_size``)
-        and the ``deadline`` to score by.
+        and the ``deadline`` to score by. After a 204, :func:`last_job_decline_reason`
+        names the gate Platform declined it at, when Platform said.
         """
+        _JOB_DECLINE_REASON.set(None)
         url = f"{self._base}{_PREFIX}/job"
         requested_at = datetime.now(UTC)
         nonce = uuid4()
@@ -480,6 +537,7 @@ class PlatformClient:
         except httpx.HTTPError as e:
             raise PlatformError(f"job request failed: {e}") from e
         if resp.status_code == 204:
+            _JOB_DECLINE_REASON.set(_decline_reason(resp))
             return None
         if resp.status_code == 428:
             # The compatibility gate wants a fresh signed heartbeat. Typed so the
@@ -487,6 +545,17 @@ class PlatformClient:
             raise PlatformHeartbeatRequiredError(
                 f"job request rejected (428): {resp.text[:200]}"
             )
+        if resp.status_code == 503:
+            # Platform is preparing something this claim needs (a v16+ dueling
+            # slice) and said when to ask again. Typed so the slot waits and
+            # re-polls instead of isolating itself for the rest of the sweep.
+            retry_after = _job_retry_after_seconds(resp)
+            if retry_after is not None:
+                raise PlatformRetryLaterError(
+                    f"job request deferred (503, retry after {retry_after:g}s): "
+                    f"{resp.text[:200]}",
+                    retry_after_seconds=retry_after,
+                )
         if resp.status_code != 200:
             raise PlatformError(
                 f"job request rejected ({resp.status_code}): {resp.text[:200]}"
@@ -1915,6 +1984,7 @@ class PlatformClient:
         reason: FailJobReason,
         failure_detail: str | None = None,
         container_log_tail: str | None = None,
+        harness_memory: HarnessMemoryTelemetry | None = None,
     ) -> FailJobResponse:
         """Report one failed ticket so Platform can park the attempt.
 
@@ -1957,6 +2027,7 @@ class PlatformClient:
             reason=reason,
             failure_detail=failure_detail,
             container_log_tail=container_log_tail,
+            harness_memory=harness_memory,
             nonce=nonce,
             requested_at=requested_at,
             signature=sign_job_fail_request(
@@ -1981,10 +2052,11 @@ class PlatformClient:
             return await self._client.post(
                 f"{self._base}{_PREFIX}/job/fail",
                 headers=self._headers,
-                # exclude_none drops only failure_detail — every other field on
-                # this model is required and non-None — so a report with no
-                # detail is byte-identical to what this client sent before the
-                # field existed, and an older platform sees no new key at all.
+                # exclude_none drops only the optional fields (failure_detail,
+                # container_log_tail, harness_memory) — every other field is
+                # required and non-None — so a report without them is
+                # byte-identical to what this client sent before they existed,
+                # and an older platform sees no new key at all.
                 json=payload.model_dump(mode="json", exclude_none=True),
             )
         except httpx.HTTPError as e:
@@ -2024,6 +2096,16 @@ class PlatformClient:
             raise PlatformError(f"top-5 confirmation job request failed: {e}") from e
         if resp.status_code == 204:
             return None
+        if resp.status_code == 503:
+            # Same deferral as ``request_job``: a v16+ confirmation lease also
+            # waits on the season's dueling slice for its seed.
+            retry_after = _job_retry_after_seconds(resp)
+            if retry_after is not None:
+                raise PlatformRetryLaterError(
+                    f"top-5 confirmation job deferred (503, retry after "
+                    f"{retry_after:g}s): {resp.text[:200]}",
+                    retry_after_seconds=retry_after,
+                )
         if resp.status_code != 200:
             raise PlatformError(
                 f"top-5 confirmation job rejected "
@@ -2203,6 +2285,72 @@ class PlatformClient:
             )
         return GeneratorRoundCommitmentReportResponse.model_validate(resp.json())
 
+    async def request_dueling_season_commitment_job(
+        self,
+    ) -> DuelingSeasonCommitmentJobResponse | None:
+        """Ask Platform whether this validator should publish a dueling season
+        commitment (``dds1``). ``None`` (HTTP 204) means nothing needs it."""
+        payload = DuelingSeasonCommitmentJobRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+        )
+        payload.signature = self._keypair.sign(payload.signing_message()).hex()
+        url = f"{self._base}{_PREFIX}/dueling-season-commitment-job"
+        try:
+            async with asyncio.timeout(30):
+                resp = await self._client.post(
+                    url, headers=self._headers, json=payload.model_dump(mode="json")
+                )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            raise PlatformError(f"season commitment job request failed: {exc}") from exc
+        if resp.status_code == 204:
+            return None
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"season commitment job rejected ({resp.status_code}): "
+                f"{resp.text[:200]}"
+            )
+        return DuelingSeasonCommitmentJobResponse.model_validate(resp.json())
+
+    async def report_dueling_season_commitment(
+        self,
+        job: DuelingSeasonCommitmentJobResponse,
+        *,
+        outcome: GeneratorRoundCommitmentOutcome,
+        block_number: int | None = None,
+        extrinsic_hash: str | None = None,
+        detail: str | None = None,
+    ) -> DuelingSeasonCommitmentReportResponse:
+        """Post the signed outcome of one elected season commitment publication."""
+        payload = DuelingSeasonCommitmentReportRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            season_id=job.season_id,
+            season_index=job.season_index,
+            commitment=job.commitment,
+            outcome=outcome,
+            block_number=block_number,
+            extrinsic_hash=extrinsic_hash,
+            detail=(detail or None) and detail[:500],
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+        )
+        payload.signature = self._keypair.sign(payload.signing_message()).hex()
+        url = f"{self._base}{_PREFIX}/dueling-season-commitment-report"
+        try:
+            async with asyncio.timeout(30):
+                resp = await self._client.post(
+                    url, headers=self._headers, json=payload.model_dump(mode="json")
+                )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            raise PlatformError(f"season commitment report failed: {exc}") from exc
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"season commitment report rejected ({resp.status_code}): "
+                f"{resp.text[:200]}"
+            )
+        return DuelingSeasonCommitmentReportResponse.model_validate(resp.json())
+
     async def get_ledger(self) -> LedgerResponse:
         """Pull the best-score-per-payment-coldkey ledger folded into weights.
 
@@ -2352,6 +2500,41 @@ class PlatformClient:
         except (ValidationError, ValueError) as e:
             raise PlatformError("generator ledger response was invalid") from e
 
+    async def get_model_context_ledger(self) -> ModelContextLedgerResponse:
+        """Pull the model_context (CPM) ledger (shadow, best-effort).
+
+        Same signed proof-of-possession as :meth:`get_router_ledger`, against
+        ``GET /scoring/model-context-ledger``.
+        :class:`~ditto.validator.worker.PlatformModelContextLedgerSource` folds
+        any failure to an empty ledger.
+        """
+        url = f"{self._base}{_SCORING_PREFIX}/model-context-ledger"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        proof_headers = {
+            **self._headers,
+            "X-Validator-Ledger-Nonce": str(nonce),
+            "X-Validator-Ledger-Requested-At": requested_at.isoformat(),
+            "X-Validator-Ledger-Signature": sign_ledger_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
+        try:
+            resp = await self._client.get(url, headers=proof_headers)
+        except httpx.HTTPError as e:
+            raise PlatformError(f"model_context ledger fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"model_context ledger rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        try:
+            return ModelContextLedgerResponse.model_validate(resp.json())
+        except (ValidationError, ValueError) as e:
+            raise PlatformError("model_context ledger response was invalid") from e
+
     async def get_private_dataset(
         self, agent_id: UUID, *, dataset_sha256: str, deadline: datetime
     ) -> bytes:
@@ -2468,6 +2651,7 @@ class PlatformClient:
         signature: str,
         report: ScoreReport,
         ticket_deadline: datetime | None = None,
+        harness_memory: HarnessMemoryTelemetry | None = None,
     ) -> SubmitScoreResponse:
         """Report a signed score for ``agent_id``.
 
@@ -2483,8 +2667,13 @@ class PlatformClient:
             ticket_deadline=ticket_deadline,
             signature=signature,
             report=report,
+            harness_memory=harness_memory,
         )
         body = payload.model_dump(mode="json")
+        if harness_memory is None:
+            # SN-500 telemetry is optional and unsigned: without it the body
+            # is byte-identical to what this client sent before the field.
+            body.pop("harness_memory", None)
         attempts = len(_SCORE_SUBMIT_RETRY_DELAYS) + 1
         for attempt in range(attempts):
             try:

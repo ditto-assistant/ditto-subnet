@@ -10,9 +10,14 @@ chain="DITTO-EXEC-EGRESS"
 replacement="${chain}-$$"
 
 iptables -N "$replacement"
-# GCE serves DNS on the metadata IP. DNS is the only permitted link-local use.
-iptables -A "$replacement" -p udp -d 169.254.169.254/32 --dport 53 -j ACCEPT
-iptables -A "$replacement" -p tcp -d 169.254.169.254/32 --dport 53 -j ACCEPT
+# DNS is the only permitted link-local use. GCE serves DNS on the metadata IP;
+# the AWS VPC resolver answers on 169.254.169.253 (its VPC base+2 alias is
+# RFC1918 and stays rejected). Every other port on either address, including
+# instance metadata on 169.254.169.254:80, is rejected below.
+for resolver in 169.254.169.254 169.254.169.253; do
+  iptables -A "$replacement" -p udp -d "$resolver/32" --dport 53 -j ACCEPT
+  iptables -A "$replacement" -p tcp -d "$resolver/32" --dport 53 -j ACCEPT
+done
 for cidr in \
   10.0.0.0/8 \
   100.64.0.0/10 \

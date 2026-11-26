@@ -15,6 +15,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from ditto.api_models.era_change import PublicEraChange
+
 
 class ScreenedImageReadiness(BaseModel):
     complete: bool
@@ -32,6 +34,13 @@ class AgentScoringReadiness(BaseModel):
     agent_name: str
     miner_hotkey: str
     status: str
+    """The stored lifecycle status. A row the queue will never finish can still
+    store ``evaluating``; read ``public_status`` for what the miner sees."""
+    public_status: str | None = None
+    """What the miner sees for this row (SN-483): the miner projection's
+    close-out (``retired``, ``scoring_failed``, ``not_queued``,
+    ``era_changed``) when it closes the row, else the stored status in the
+    public vocabulary."""
     active_bench_version: int
     scoring_bench_version: int
     """Benchmark era this submission is actually queued in — every check below
@@ -54,3 +63,8 @@ class AgentScoringReadiness(BaseModel):
     not authority: the lease path does not consult this endpoint, and this does
     not model attempt budgets or per-slot validator occupancy."""
     blocking_reasons: list[str]
+    era_change: PublicEraChange | None = None
+    """Set when the era boundary refuses the submission at
+    ``scoring_bench_version``: the reason code and next step the miner's
+    ``era_changed`` row shows. The era refusal's blocking reason quotes the
+    same label."""

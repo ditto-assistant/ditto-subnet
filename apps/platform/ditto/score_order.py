@@ -11,10 +11,11 @@ that exist, they live next to each other here, and
 :func:`owner_family_order_terms` / :func:`owner_family_key` are the one
 deliberate variation, and they are not a third copy of the rule: they order
 one owner's own generations against each other, and they differ from the
-canonical comparator in exactly one term (newest upload, not earliest lineage
-arrival). The between-owner order still uses the lineage clock so a later
-tarball that only matches or improves the owner's best score by less than the
-dethrone margin does not lose standing.
+canonical comparator in two terms: newest upload instead of earliest lineage
+arrival, and a leading term that sinks a run superseded by a newer run of the
+same artifact (SN-485). The between-owner order still uses the lineage clock so
+a later tarball that only matches or improves the owner's best score by less
+than the dethrone margin does not lose standing.
 
 It carries no ditto imports on purpose. :mod:`ditto.api_server.koth` mirrors the
 subnet's frozen consensus fold and must be able to read the comparator without
@@ -60,7 +61,7 @@ R = TypeVar("R", bound=RankableRow)
 F = TypeVar("F", bound=FinalizedRow)
 
 ScoreOrderKey = tuple[bool, float, float, datetime, str]
-OwnerFamilyKey = tuple[bool, float, float, timedelta, str]
+OwnerFamilyKey = tuple[bool, bool, float, float, timedelta, str]
 
 # Horizon for inverting upload time inside :func:`owner_family_key`. A later
 # tarball must sort first without a second comparator; this is far beyond any
@@ -143,8 +144,15 @@ def owner_family_order_terms(
     composite: ColumnElement[Any],
     first_seen: ColumnElement[Any],
     agent_id: ColumnElement[Any],
+    superseded: ColumnElement[Any] | None = None,
 ) -> tuple[ColumnElement[Any], ...]:
     """:func:`score_order_terms`, but newest-first on an exact score tie.
+
+    ``superseded`` (SN-485) sinks a run that a newer finalized run of the same
+    artifact has replaced. Repeated runs of identical content are sequential
+    draws, so the latest one represents that content instead of the luckiest.
+    It is a leading term, not a filter, so the owner still has a representative
+    when only an older run survives a caller's registration filter.
 
     Used only to choose which of ONE owner's generations represents it. Between
     owners, the earliest *lineage* arrival still wins a tie
@@ -161,7 +169,8 @@ def owner_family_order_terms(
     wins the tie; a strictly better score still wins outright, so submitting
     something worse can never cost an owner its standing.
     """
-    return (eligible.desc(), composite.desc(), first_seen.desc(), agent_id.asc())
+    terms = (eligible.desc(), composite.desc(), first_seen.desc(), agent_id.asc())
+    return terms if superseded is None else (superseded.asc(), *terms)
 
 
 def owner_family_key(
@@ -174,10 +183,14 @@ def owner_family_key(
 
     Used only to choose which of one owner's generations is *shown*. Between
     owners, :func:`score_order_key` still breaks ties on the lineage clock.
+    A row flagged ``superseded_rerun`` (a newer finalized run of the same
+    artifact exists) sorts behind every current generation, so identical
+    re-rolls are represented by the latest run, never the best one (SN-485).
     """
     primary = row.composite if score is None else score
     secondary = primary if secondary_score is None else secondary_score
     return (
+        bool(getattr(row, "superseded_rerun", False)),
         not bool(getattr(row, "eligible", True)),
         -primary,
         -secondary,
@@ -220,7 +233,10 @@ def select_owner_representative(
 ) -> list[R]:
     """Return one owner's generations, best score first, newest upload on a tie.
 
-    A strictly worse score never wins, so experimenting cannot cost standing.
+    A strictly worse score never wins between distinct artifacts, so
+    experimenting cannot cost standing. Reruns of one identical artifact are
+    the exception: the newest finalized run stands for that content whatever it
+    drew, so buying another seed cannot keep the best of several draws.
     An exact quality (and optional efficiency) tie shows the newest generation;
     :func:`rank_submissions` then orders that winner against other owners on
     the lineage clock.

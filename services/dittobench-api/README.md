@@ -395,7 +395,11 @@ daemon; submit a reachable `harness_url` there instead.
 ### `GET /v1/runs/{id}`
 Fetch the job: `status`, `mode`, and (when `done`) the full `ScoreReport` with
 the per-case breakdown, plus `transcript_sha256` — the digest of the run's
-canonical transcript artifact. Returns `404` if unknown.
+canonical transcript artifact. A sandboxed run that finishes or fails with its
+memory sampled also carries `harness_memory`: the harness cgroup's
+`memory.peak` and time-weighted P50/P95 of `memory.current` (1 MiB buckets),
+which the validator forwards to Platform as unsigned operator telemetry
+(SN-500). Returns `404` if unknown.
 ```sh
 curl localhost:8000/v1/runs/<run_id>
 ```

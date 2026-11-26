@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
+import { duelingColumnAggregateSchema } from './benchmark-canary.schemas'
+import { readmissionActivationSchema } from './readmission.schemas'
 
 // Every Platform response field must have an explicit Backroom validator. Making
 // optional OpenAPI properties required in this mapped shape is deliberate: it
@@ -64,6 +66,9 @@ export const confirmationBenchVersionSchema = z.union([
   z.literal(13),
   z.literal(14),
   z.literal(15),
+  z.literal(16),
+  z.literal(17),
+  z.literal(18),
 ])
 
 // Exact set equality against the contract, checked in BOTH directions. A plain
@@ -299,8 +304,31 @@ export const fanoutShadowOutcomeSchema = z.enum([
   'skipped',
 ])
 export const policyManifestProfileSchema = z.enum(['core', 'l1', 'l1_l2'])
-export const screenerReviewSettingsSchema = z
-  .object({
+
+type WithoutDefaults<T extends z.ZodRawShape> = {
+  [K in keyof T]: T[K] extends z.ZodDefault<infer Inner> ? Inner : T[K]
+}
+
+/**
+ * A whole-policy write shape: every field of a read shape, its read default
+ * removed.
+ *
+ * A settings revision stores the whole policy and Platform appends it
+ * verbatim, so an omitted field is not "leave it alone": it is a write of the
+ * read default. Read defaults exist so an older Platform or revision still
+ * parses; on a write they would let an MCP caller that changes one knob
+ * silently reset every other one it left out (#2979).
+ */
+export function requireEveryField<T extends z.ZodRawShape>(shape: T): WithoutDefaults<T> {
+  return Object.fromEntries(
+    Object.entries(shape).map(([key, field]) => [
+      key,
+      field instanceof z.ZodDefault ? field.unwrap() : field,
+    ]),
+  ) as WithoutDefaults<T>
+}
+
+const screenerReviewSettingsBaseSchema = z.object({
     mode: screenerReviewModeSchema,
     l2_model: screenerReviewModelSchema,
     l2_fallback_models: z.array(screenerReviewModelSchema).max(2),
@@ -349,8 +377,12 @@ export const screenerReviewSettingsSchema = z
     audit_retention_days: z.number().int().min(1).max(365),
     policy_manifest_profile: policyManifestProfileSchema.default('l1'),
     policy_manifest_rotation_id: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/).default('v8-luna-source-review-behavioral-oracle'),
-  })
-  .superRefine((value, context) => {
+})
+
+function checkScreenerReviewSettings(
+  value: z.infer<typeof screenerReviewSettingsBaseSchema>,
+  context: z.RefinementCtx,
+) {
     const chain = [value.l2_model, ...value.l2_fallback_models]
     if (new Set(chain).size !== chain.length) {
       context.addIssue({ code: 'custom', message: 'Model chain cannot contain duplicates' })
@@ -386,7 +418,14 @@ export const screenerReviewSettingsSchema = z
         path: ['fanout_shadow_image_source_sha'],
       })
     }
-  })
+}
+
+export const screenerReviewSettingsSchema =
+  screenerReviewSettingsBaseSchema.superRefine(checkScreenerReviewSettings)
+
+export const screenerReviewSettingsWriteSchema = z
+  .object(requireEveryField(screenerReviewSettingsBaseSchema.shape))
+  .superRefine(checkScreenerReviewSettings)
 
 export const screenerReviewRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
@@ -502,7 +541,7 @@ export const screenerReviewControlSchema = z.object({
 export const applyScreenerReviewSettingsInputSchema = z.object({
   scope: z.string().regex(/^(?:\*|[a-zA-Z0-9._-]{1,63})$/),
   expectedRevision: z.number().int().nonnegative(),
-  settings: screenerReviewSettingsSchema,
+  settings: screenerReviewSettingsWriteSchema,
   reason: auditReasonSchema(8),
   confirmation: z.string(),
 })
@@ -744,9 +783,9 @@ export const screenerFanoutShadowResponseSchema = z.object({
   has_more: z.boolean(),
 })
 
-const screenerProviderSchema = z.enum(['gcp', 'targon', 'hetzner', 'home', 'test'])
-const capacityProviderSchema = z.enum(['hetzner', 'targon', 'gcp'])
-const providerPrioritySchema = z.array(capacityProviderSchema).min(1).max(3).superRefine((value, context) => {
+const screenerProviderSchema = z.enum(['gcp', 'targon', 'hetzner', 'aws', 'home', 'test'])
+const capacityProviderSchema = z.enum(['hetzner', 'aws', 'targon', 'gcp'])
+const providerPrioritySchema = z.array(capacityProviderSchema).min(1).max(4).superRefine((value, context) => {
   if (new Set(value).size !== value.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'Provider priorities must be unique.' })
   }
@@ -766,6 +805,10 @@ export const screenerProviderSettingsSchema = z.object({
   gce_overflow_max_instances: z.number().int().min(0).max(32).default(6),
 })
 
+export const screenerProviderSettingsWriteSchema = z.object(
+  requireEveryField(screenerProviderSettingsSchema.shape),
+)
+
 export const screenerProviderSettingsRevisionSchema = z.object({
   environment: z.string().min(1),
   revision: z.number().int().nonnegative(),
@@ -783,7 +826,7 @@ export const screenerProviderSettingsControlSchema = z.object({
 
 export const setScreenerProviderSettingsInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
-  settings: screenerProviderSettingsSchema,
+  settings: screenerProviderSettingsWriteSchema,
   reason: auditReasonSchema(8),
   confirmation: z.string(),
 })
@@ -1069,7 +1112,7 @@ export const trustedImageBuildSchema = z.object({
     'fallback_required',
     'canceled',
   ]),
-  provider: z.enum(['hetzner', 'targon', 'gcp']).nullable(),
+  provider: z.enum(['hetzner', 'aws', 'targon', 'gcp']).nullable(),
   provider_resource_id: z.string().nullable(),
   image_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/).nullable(),
   error_code: z.string().nullable(),
@@ -1105,7 +1148,7 @@ export const screenerCapacityViewSchema = z.object({
     job_id: z.string().uuid(),
     lane: z.enum(['build', 'runtime', 'source_review']),
     status: z.string().min(1),
-    provider: z.enum(['hetzner', 'targon', 'gcp']).nullable(),
+    provider: z.enum(['hetzner', 'aws', 'targon', 'gcp']).nullable(),
     node_id: z.string().nullable().default(null),
     provider_resource_id: z.string().nullable(),
     image_reference: z.string().nullable(),
@@ -1307,6 +1350,9 @@ export const sourceReleaseGateSchema = z.object({
   collector_cursor_hash: z.string().nullable().optional(),
   collector_runtime_code_hash: z.string().nullable().optional(),
   collector_blocked_reason: z.string().nullable().optional(),
+  collector_cursor_advanced_at: z.string().nullish(),
+  collector_stalled: z.boolean().nullish(),
+  collector_stall_after_seconds: z.number().int().positive().nullish(),
   reveal_plan_shadow: revealPlanShadowSchema.nullish(),
   catch_up: catchUpSchema.nullish(),
   last_payout_block: z.number().nullable().optional(),
@@ -1435,8 +1481,13 @@ export const RAO_PER_TAO = 1_000_000_000
 
 // Competitions that may carry a fee override. memory (agent uploads) is
 // priced by fee_amount_rao itself, the default every other competition
-// inherits; only generator has an upload lane today.
-export const OVERRIDABLE_FEE_COMPETITIONS = ['generator', 'coding', 'router'] as const
+// inherits; generator and model_context have upload lanes.
+export const OVERRIDABLE_FEE_COMPETITIONS = [
+  'generator',
+  'coding',
+  'router',
+  'model_context',
+] as const
 export type OverridableFeeCompetition = (typeof OVERRIDABLE_FEE_COMPETITIONS)[number]
 
 export const competitionFeePolicySchema = z
@@ -1477,6 +1528,9 @@ export const submissionSettingsRevisionSchema = z.object({
   // Per-competition overrides as written. A Platform that predates
   // per-competition fees omits the map; every competition then inherits.
   competition_fees: z.record(z.string(), competitionFeePolicySchema).default({}),
+  // SN-485: null (and a Platform that predates it) keeps readmission
+  // inactive. Read-only here; only the Platform admin API writes it.
+  readmission_announced_at: z.string().nullable().default(null),
   reason: z.string(),
   actor: z.string(),
   created_at: z.string().nullable(),
@@ -1500,6 +1554,8 @@ export const submissionSettingsControlSchema = z.object({
     .max(16)
     .nullable()
     .default(null),
+  // null: Platform predates SN-485 readmission (nothing is charged as one).
+  readmission: readmissionActivationSchema.nullable().default(null),
 })
 
 export const updateSubmissionSettingsInputSchema = z.object({
@@ -1893,7 +1949,13 @@ export type BurnSettingsControl = z.infer<typeof burnSettingsControlSchema>
 // its compiled memory-only split. Mirrors
 // apps/platform/ditto/api_models/track_share_settings.py; Platform stays the
 // authority on every refusal.
-export const TRACK_SHARE_TRACKS = ['memory', 'coding', 'router', 'generator'] as const
+export const TRACK_SHARE_TRACKS = [
+  'memory',
+  'coding',
+  'router',
+  'generator',
+  'model_context',
+] as const
 export const TRACK_SHARE_PAYABLE = new Set<string>(['memory', 'generator'])
 export const TRACK_SHARE_BASIS_POINTS = 10_000
 export const TRACK_SHARES_CLEAR_CONFIRMATION = 'CLEAR TRACK SHARES'
@@ -2351,14 +2413,24 @@ export const MAX_RETEST_ELIGIBILITY_Z = 3
 export const MAX_WAVE_CADENCE_TEMPOS = 24
 export const MAX_WAVE_SEEDS_PER_WINDOW = 16
 export const DEFAULT_WAVE_SEEDS_PER_WINDOW = 3
+// Season title duels (docs/title-duels.md): mirrors MIN_SEASON_DUEL_SEEDS,
+// MAX_SEASON_DUEL_SEEDS and DEFAULT_SEASON_DUEL_SEEDS in the platform.
+export const MIN_SEASON_DUEL_SEEDS = 2
+export const MAX_SEASON_DUEL_SEEDS = 5
+export const DEFAULT_SEASON_DUEL_SEEDS = 3
 export const DEFAULT_RETEST_ELIGIBILITY_Z = 1.64
 // Not `strict`. The platform ships `participants` deliberately, and `strict` is
 // kept as the audited rollback path rather than as the default.
 export const DEFAULT_WAVE_MEMBERSHIP = 'participants'
 // Protocol-34 crown rules, mirroring the platform's shipped defaults and bounds.
-// A challenger cannot hold more shared seeds than the lane retains (15).
+// A challenger cannot hold more shared seeds than the lane retains (the
+// platform's 10-seed continual-retest work cap, TOP5_MAX_CONFIRMATION_SEEDS).
 export const DEFAULT_MIN_DETHRONE_CONFIRMATIONS = 3
-export const MAX_MIN_DETHRONE_CONFIRMATIONS = 15
+export const MAX_MIN_DETHRONE_CONFIRMATIONS = 10
+// Reads stay lenient up to the validator's 15-seed fold ceiling so a Platform
+// still serving a revision written under the former 15-seed cap stays
+// displayable; writes are bounded by MAX_MIN_DETHRONE_CONFIRMATIONS.
+export const MAX_SERVED_MIN_DETHRONE_CONFIRMATIONS = 15
 export const DEFAULT_CHAMPION_STANDING_RANK = 3
 
 // The ceiling can never cut into the cohort the rank cutoff already admitted.
@@ -2373,6 +2445,28 @@ const checkCohortCeiling = (
       code: 'custom',
       path: ['retest_cohort_max_size'],
       message: `retest_cohort_max_size (${settings.retest_cohort_max_size}) cannot be below retest_cohort_size (${settings.retest_cohort_size}): the ceiling would cut into the cohort the fixed rank already admitted`,
+    })
+  }
+}
+
+// A season duel holding fewer seeds than the crown gate asks for could never
+// move the crown; mirrors the platform's write-time check.
+const checkSeasonDuelSeeds = (
+  settings: {
+    retest_mode: string
+    season_duel_seeds: number
+    min_dethrone_confirmations: number
+  },
+  ctx: z.RefinementCtx,
+) => {
+  if (
+    settings.retest_mode === 'season_duel' &&
+    settings.season_duel_seeds < settings.min_dethrone_confirmations
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['season_duel_seeds'],
+      message: `season_duel_seeds (${settings.season_duel_seeds}) cannot be below min_dethrone_confirmations (${settings.min_dethrone_confirmations}): a season duel would then never carry a full dethrone case`,
     })
   }
 }
@@ -2398,11 +2492,14 @@ const continualRetestSettingsBaseSchema = z.object({
   // shared-seed statistic with at least min_dethrone_confirmations shared
   // seeds, and only within the top champion_standing_rank official places.
   crown_gate_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
+  // Fold change behind fleet protocol 35, riding a served crown gate: two
+  // bench v16 rows dethrone on the sequential title duel across seasons.
+  crown_duel_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
   min_dethrone_confirmations: z
     .number()
     .int()
     .min(2)
-    .max(MAX_MIN_DETHRONE_CONFIRMATIONS)
+    .max(MAX_SERVED_MIN_DETHRONE_CONFIRMATIONS)
     .default(DEFAULT_MIN_DETHRONE_CONFIRMATIONS),
   champion_standing_rank: z
     .number()
@@ -2457,6 +2554,19 @@ const continualRetestSettingsBaseSchema = z.object({
     .min(1)
     .max(MAX_WAVE_SEEDS_PER_WINDOW)
     .default(DEFAULT_WAVE_SEEDS_PER_WINDOW),
+  // Season title duels: `continual` walks every cohort member to the elastic
+  // target; `season_duel` runs one K-seed duel per dueling season for the top
+  // five (bench v16+ only; inert below the dueling floor).
+  retest_mode: z.enum(['continual', 'season_duel']).default('continual'),
+  season_duel_seeds: z
+    .number()
+    .int()
+    .min(MIN_SEASON_DUEL_SEEDS)
+    .max(MAX_SEASON_DUEL_SEEDS)
+    .default(DEFAULT_SEASON_DUEL_SEEDS),
+  // Phase B2: season rotation re-scores run on the season's duel seeds and
+  // double as duel evidence (season_duel at v16+ only; off by default).
+  season_duel_rotation_seeds: z.boolean().default(false),
 })
 
 export const continualRetestSettingsSchema =
@@ -2470,28 +2580,14 @@ export const continualRetestSettingsSchema =
 //
 // Refinement is applied after the extend rather than inherited: zod refuses to
 // overwrite keys on a schema that already carries refinements.
-export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSchema
+export const continualRetestSettingsWriteSchema = z
+  .object(requireEveryField(continualRetestSettingsBaseSchema.shape))
   .extend({
-    tie_weighting_mode: z.enum(['disabled', 'fleet_ready']),
-    statistical_band_mode: z.enum(['disabled', 'fleet_ready']),
-    ledger_pin_mode: z.enum(['live', 'epoch']),
-    crown_incumbent_mode: z.enum(['disabled', 'fleet_ready']),
-    crown_gate_mode: z.enum(['disabled', 'fleet_ready']),
+    // Reads stay lenient up to the served ceiling; writes keep the lane's cap.
     min_dethrone_confirmations: z.number().int().min(2).max(MAX_MIN_DETHRONE_CONFIRMATIONS),
-    champion_standing_rank: z.number().int().min(1).max(EMISSION_SET_SIZE),
-    wave_membership: z.enum(['strict', 'participants', 'per_agent']),
-    wave_cadence_tempos: z.number().int().min(0).max(MAX_WAVE_CADENCE_TEMPOS),
-    wave_seeds_per_window: z.number().int().min(1).max(MAX_WAVE_SEEDS_PER_WINDOW),
-    retest_cohort_size: z.number().int().min(EMISSION_SET_SIZE).max(MAX_RETEST_COHORT_SIZE),
-    retest_eligibility_mode: z.enum(['fixed', 'statistical']),
-    retest_eligibility_z: z.number().min(0).max(MAX_RETEST_ELIGIBILITY_Z),
-    retest_cohort_max_size: z
-      .number()
-      .int()
-      .min(EMISSION_SET_SIZE)
-      .max(MAX_RETEST_COHORT_SIZE),
   })
   .superRefine(checkCohortCeiling)
+  .superRefine(checkSeasonDuelSeeds)
 
 export const continualRetestSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
@@ -2566,6 +2662,9 @@ export const effectiveContinualRetestSettingsSchema = z.object({
   crown_gate_fleet_ready: z.boolean().default(false),
   crown_gate_active: z.boolean().default(false),
   crown_gate_required_protocol: z.number().int().positive().default(34),
+  crown_duel_fleet_ready: z.boolean().default(false),
+  crown_duel_active: z.boolean().default(false),
+  crown_duel_required_protocol: z.number().int().positive().default(35),
   crown_incumbent_fleet_ready: z.boolean().default(false),
   crown_incumbent_active: z.boolean().default(false),
   crown_incumbent_required_protocol: z.number().int().positive().default(27),
@@ -2632,6 +2731,13 @@ export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExte
     legacyValue: () => 'disabled',
     legacyBehaviour: () =>
       'any challenger that clears the band takes the crown, even with no shared-seed confirmations',
+  },
+  {
+    field: 'crown_duel_mode',
+    label: 'a sequential title duel',
+    legacyValue: () => 'disabled',
+    legacyBehaviour: () =>
+      'the crown moves on one season of shared seeds under the capped fixed-z band',
   },
   {
     field: 'min_dethrone_confirmations',
@@ -2721,6 +2827,25 @@ export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExte
     label: 'a per-window wave seed budget',
     legacyValue: () => DEFAULT_WAVE_SEEDS_PER_WINDOW,
     legacyBehaviour: () => 'waves are not paced per window',
+  },
+  {
+    field: 'retest_mode',
+    label: 'season title duels',
+    legacyValue: () => 'continual',
+    legacyBehaviour: () =>
+      'the lane walks every cohort member to the elastic shared-seed target',
+  },
+  {
+    field: 'season_duel_seeds',
+    label: 'a season duel seed count',
+    legacyValue: () => DEFAULT_SEASON_DUEL_SEEDS,
+    legacyBehaviour: () => 'there are no season duels',
+  },
+  {
+    field: 'season_duel_rotation_seeds',
+    label: 'season-seeded rotation re-scores',
+    legacyValue: () => false,
+    legacyBehaviour: () => 'rotation re-scores keep their canonical seeds',
   },
 ]
 
@@ -2927,70 +3052,10 @@ export const SIMILARITY_BUDGET_DEFAULT = {
   containment_threshold: 0.95,
 } as const
 
-// Post-score source review is intentionally part of queue policy, not the
-// screener worker's L2/L3 settings. The queue decides when a successfully built
-// submission has enough score evidence to justify the expensive review. Older
-// screeners extra-forbid unknown reviewer settings, while queue-policy reads
-// already have an additive client-first default path.
-export const DEFERRED_SOURCE_REVIEW_DEFAULT = {
-  mode: 'off',
-  integrity_double_check_mode: 'off',
-  min_cohort_size: 8,
-  composite_mad_multiplier: 6,
-  axis_mad_multiplier: 6,
-  min_composite_delta: 0.1,
-  min_axis_delta: 0.15,
-} as const
-
-// `bypass` is the no-source-review mode: build-only admission and no post-score
-// qualification, so an admitted submission goes straight to validator scoring.
-// It is the source-integrity branch only -- copy/plagiarism holds are opened by
-// a separate path that never reads this policy. Note `off` is the HEAVIEST mode
-// (full deep screen on every submission), not the off switch its name suggests.
-export const deferredSourceReviewModeSchema = z.enum([
-  'off',
-  'observe',
-  'enforce',
-  'bypass',
-])
-
-// Second, stronger deep review for every top-five entrant, including rows that
-// already passed the full pre-score screen. Enforce is refused by Platform until
-// screener review scope `integrity-double-check` holds a usable posture.
-export const integrityDoubleCheckModeSchema = z.enum(['off', 'observe', 'enforce'])
+// Screener review scope that held the top-five integrity double-check posture.
+// The queue-policy switch that used it was retired with source review
+// (2026-11-07); revisions already stored in this scope stay readable.
 export const INTEGRITY_DOUBLE_CHECK_SCOPE = 'integrity-double-check'
-
-const deferredSourceReviewSchema = z.object({
-  mode: deferredSourceReviewModeSchema.default(DEFERRED_SOURCE_REVIEW_DEFAULT.mode),
-  integrity_double_check_mode: integrityDoubleCheckModeSchema.default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT.integrity_double_check_mode,
-  ),
-  min_cohort_size: z.number().int().min(5).max(100).default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT.min_cohort_size,
-  ),
-  composite_mad_multiplier: z.number().min(1).max(20).default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT.composite_mad_multiplier,
-  ),
-  axis_mad_multiplier: z.number().min(1).max(20).default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT.axis_mad_multiplier,
-  ),
-  min_composite_delta: z.number().min(0).max(1).default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT.min_composite_delta,
-  ),
-  min_axis_delta: z.number().min(0).max(1).default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT.min_axis_delta,
-  ),
-})
-
-const deferredSourceReviewWriteSchema = deferredSourceReviewSchema.extend({
-  mode: deferredSourceReviewModeSchema,
-  integrity_double_check_mode: integrityDoubleCheckModeSchema,
-  min_cohort_size: z.number().int().min(5).max(100),
-  composite_mad_multiplier: z.number().min(1).max(20),
-  axis_mad_multiplier: z.number().min(1).max(20),
-  min_composite_delta: z.number().min(0).max(1),
-  min_axis_delta: z.number().min(0).max(1),
-})
 
 const similarityBudgetSchema = z.object({
   enabled: z.boolean().default(true),
@@ -3058,12 +3123,9 @@ const queuePolicySettingsBaseSchema = z.object({
   // client-first deployment, but require every nested field on writes so an
   // older Backroom cannot silently reset a live threshold.
   similarity_budget: similarityBudgetSchema.default(SIMILARITY_BUDGET_DEFAULT),
-  // Platform-owned post-score source-review policy. It is stored whole with
-  // the rest of queue policy; read defaults preserve client-first deployment,
-  // while the write schema below requires the complete nested block.
-  deferred_source_review: deferredSourceReviewSchema.default(
-    DEFERRED_SOURCE_REVIEW_DEFAULT,
-  ),
+  // No `deferred_source_review`: it gated only source review, which is
+  // retired. Revisions stored before 2026-11-07 still carry the block, and
+  // `z.object` strips it on read; the platform ignores it on write.
   // `provisional_contender_lane_size` deliberately absent: the platform's
   // policy model does not have that field and forbids extras, so declaring it
   // here (with a default, no less) put a value in every body we sent that the
@@ -3149,7 +3211,6 @@ export const queuePolicySettingsWriteSchema = queuePolicySettingsBaseSchema
       .min(OWNER_CONCURRENT_SUBMISSION_MIN)
       .max(OWNER_CONCURRENT_SUBMISSION_MAX),
     similarity_budget: similarityBudgetWriteSchema,
-    deferred_source_review: deferredSourceReviewWriteSchema,
     prev_gen_carryover: prevGenCarryoverWriteSchema,
     lineage_reference_mode: lineageReferenceModeSchema,
   })
@@ -3309,6 +3370,12 @@ export const inferenceRuntimeMetricsSchema = z.object({
       revision_drift: z.boolean().nullable().optional(),
       process_started_at: z.string().nullable().optional(),
       capacity_declines: z.record(z.string(), z.number().int().nonnegative()).default({}),
+      danilabs_binding: z.object({
+        key_present: z.boolean(),
+        router_competition: z.boolean(),
+        scope: z.enum(['unset_or_invalid', 'canary', 'fleet']),
+        deadline: z.string().nullable().optional(),
+      }).nullable().optional(),
       error: z.string().nullable().optional(),
     }),
   ),
@@ -3529,9 +3596,12 @@ export const MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
 export const MIN_SANDBOX_MEMORY_LIMIT_MIB = 512
 export const MAX_SANDBOX_MEMORY_LIMIT_MIB = 32_768
 export const DEFAULT_SANDBOX_MEMORY_LIMIT_MIB = 6_144
+// SN-500 step 2: the P95 harness-memory factor policy stamped on each lease.
+export const DEFAULT_MEMORY_FACTOR_FREE_MIB = 512
+export const DEFAULT_MEMORY_FACTOR_FLOOR_BPS = 9_000
+export const MIN_MEMORY_FACTOR_FLOOR_BPS = 5_000
 
-export const benchmarkRuntimeSettingsSchema = z
-  .object({
+const benchmarkRuntimeSettingsBaseSchema = z.object({
     case_concurrency: z.number().int().min(1).max(MAX_BENCHMARK_CASE_CONCURRENCY),
     relay_delay_fingerprint_mode: z.enum(['off', 'shadow']),
     relay_delay_fingerprint_min_ms: z.number().int().min(0).max(MAX_RELAY_DELAY_FINGERPRINT_MS),
@@ -3544,14 +3614,44 @@ export const benchmarkRuntimeSettingsSchema = z
       .min(MIN_SANDBOX_MEMORY_LIMIT_MIB)
       .max(MAX_SANDBOX_MEMORY_LIMIT_MIB)
       .default(DEFAULT_SANDBOX_MEMORY_LIMIT_MIB),
-  })
-  .refine(
-    (value) => value.relay_delay_fingerprint_min_ms <= value.relay_delay_fingerprint_max_ms,
-    {
-      message: 'Relay delay minimum may not exceed the maximum',
-      path: ['relay_delay_fingerprint_min_ms'],
-    },
-  )
+    // SN-500 step 2. Shadow records the factor without changing scores;
+    // enforce applies it. Defaults so a Platform that predates the fields
+    // still parses.
+    memory_factor_posture: z.enum(['off', 'shadow', 'enforce']).default('shadow'),
+    memory_factor_free_mib: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_SANDBOX_MEMORY_LIMIT_MIB)
+      .default(DEFAULT_MEMORY_FACTOR_FREE_MIB),
+    memory_factor_floor_bps: z
+      .number()
+      .int()
+      .min(MIN_MEMORY_FACTOR_FLOOR_BPS)
+      .max(10_000)
+      .default(DEFAULT_MEMORY_FACTOR_FLOOR_BPS),
+})
+
+const relayDelayBoundsAreOrdered = (value: {
+  relay_delay_fingerprint_min_ms: number
+  relay_delay_fingerprint_max_ms: number
+}) => value.relay_delay_fingerprint_min_ms <= value.relay_delay_fingerprint_max_ms
+const relayDelayBoundsIssue = {
+  message: 'Relay delay minimum may not exceed the maximum',
+  path: ['relay_delay_fingerprint_min_ms'],
+}
+
+export const benchmarkRuntimeSettingsSchema = benchmarkRuntimeSettingsBaseSchema.refine(
+  relayDelayBoundsAreOrdered,
+  relayDelayBoundsIssue,
+)
+
+// The read defaults above keep a Platform that predates a field parsing; a
+// write that omitted one would reset it (an `enforce` memory factor back to
+// `shadow`), so every field is required here (#2979).
+const benchmarkRuntimeSettingsWriteSchema = z
+  .object(requireEveryField(benchmarkRuntimeSettingsBaseSchema.shape))
+  .refine(relayDelayBoundsAreOrdered, relayDelayBoundsIssue)
 
 export const DEFAULT_BENCHMARK_RUNTIME_SETTINGS = {
   case_concurrency: 4,
@@ -3559,6 +3659,9 @@ export const DEFAULT_BENCHMARK_RUNTIME_SETTINGS = {
   relay_delay_fingerprint_min_ms: 25,
   relay_delay_fingerprint_max_ms: 250,
   sandbox_memory_limit_mib: DEFAULT_SANDBOX_MEMORY_LIMIT_MIB,
+  memory_factor_posture: 'shadow' as const,
+  memory_factor_free_mib: DEFAULT_MEMORY_FACTOR_FREE_MIB,
+  memory_factor_floor_bps: DEFAULT_MEMORY_FACTOR_FLOOR_BPS,
 }
 
 // The dark decision-model lane (TypeSafe Jev via OpenRouter System One). Off by
@@ -3655,6 +3758,8 @@ const inferenceConcurrencySettingsBaseSchema = z.object({
   scored_provider_routing: scoredProviderRoutingSchema
     .nullish()
     .transform((value) => value ?? 'throughput'),
+  danilabs_percent: z.number().int().min(0).max(100)
+    .nullish().transform((value) => value ?? 0),
 })
 
 // The platform enforces this hierarchy with its own model validator and 422s a
@@ -3663,7 +3768,7 @@ const inferenceConcurrencySettingsBaseSchema = z.object({
 const refineInferenceConcurrencyHierarchy = (
   value: Omit<
     z.infer<typeof inferenceConcurrencySettingsBaseSchema>,
-    'decision_lane' | 'scored_provider_routing'
+    'decision_lane' | 'scored_provider_routing' | 'danilabs_percent'
   >,
   context: z.RefinementCtx,
 ) => {
@@ -3746,11 +3851,12 @@ export const inferenceConcurrencySettingsSchema =
 // never silently switch the decision lane off (or on).
 const inferenceConcurrencySettingsWriteSchema = inferenceConcurrencySettingsBaseSchema
   .extend({
-    benchmark_runtime: benchmarkRuntimeSettingsSchema,
+    benchmark_runtime: benchmarkRuntimeSettingsWriteSchema,
     decision_lane: decisionLaneSettingsSchema.optional(),
     // Optional on writes for the same reason: an omitted value keeps the
     // effective route, so a concurrency change never flips provider routing.
     scored_provider_routing: scoredProviderRoutingSchema.optional(),
+    danilabs_percent: z.number().int().min(0).max(100).optional(),
   })
   .superRefine(refineInferenceConcurrencyHierarchy)
 
@@ -5385,6 +5491,10 @@ export const validatorFleetObservabilityMemberSchema = z
     protocol_version: z.number().int().positive().catch(0),
     configured_slots: z.number().int().nonnegative().catch(1),
     allowed_slots: z.number().int().nonnegative().nullish().catch(null),
+    // Host memory admission at the live cap and its fix path (SN-488).
+    memory_admitted_slots: z.number().int().nonnegative().nullish().catch(null),
+    memory_required_mib: z.number().int().nonnegative().nullish().catch(null),
+    memory_note: z.string().nullish().catch(null),
     issuance_paused: z.boolean().catch(false),
     healthy_slots: z.array(z.string()).catch([]),
     admission: z.string().catch('accepting'),
@@ -5454,6 +5564,17 @@ export const validatorFleetObservabilityMemberSchema = z
             software_version: z.string().nullish().catch(null),
             source_revision: z.string().nullish().catch(null),
             supported_bench_versions: z.array(z.number().int()).catch([]),
+            // Bench versions the scorer runs generator rounds at, and runs with
+            // a dueling-slice-v1 generator slice (bench 16+). Platform leases a
+            // v16+ ticket only to a validator forwarding the version here.
+            generator_round_bench_versions: z
+              .array(z.number().int())
+              .nullish()
+              .catch(null),
+            dueling_slice_bench_versions: z
+              .array(z.number().int())
+              .nullish()
+              .catch(null),
           })
           .nullish()
           .catch(null),
@@ -5474,6 +5595,9 @@ export const validatorFleetObservabilityMemberSchema = z
     issuance_paused: member.issuance_paused,
     configured_slots: member.configured_slots,
     allowed_slots: member.allowed_slots,
+    memory_admitted_slots: member.memory_admitted_slots ?? null,
+    memory_required_mib: member.memory_required_mib ?? null,
+    memory_note: member.memory_note ?? null,
     healthy_slot_count: member.healthy_slots.length,
     active_benchmark_count: member.active_benchmarks.length,
     confirmation_benchmark_count: member.confirmation_benchmarks.length,
@@ -6391,6 +6515,11 @@ export const screeningSubmissionSchema = z.object({
   agent_version: z.number().int().positive().nullish().default(null),
   artifact_sha256: z.string(),
   agent_status: z.string(),
+  // SN-483: what the miner sees. A row the queue will never finish can still
+  // store `evaluating`; this carries the miner projection's close-out
+  // (`retired`, `scoring_failed`, `not_queued`, `era_changed`). Nullish for a
+  // platform that predates the field.
+  public_status: z.string().nullish().default(null),
   screening_policy_version: z.number().int().nonnegative(),
   screening_reason: z.string().nullable(),
   screening_reason_code: z.string().nullable().optional(),
@@ -6607,6 +6736,28 @@ export const rejectScreeningSubmissionResponseSchema = z.object({
   idempotent: z.boolean(),
 })
 
+export const AMEND_REJECT_REASON_CONFIRMATION = 'AMEND PUBLIC REJECT REASON'
+
+export const amendQuarantineRejectReasonInputSchema = z.object({
+  quarantineId: z.string().uuid(),
+  expectedAgentId: z.string().uuid(),
+  expectedArtifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  expectedAttemptId: databaseUuidSchema,
+  expectedReason: z.string(),
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(AMEND_REJECT_REASON_CONFIRMATION),
+})
+
+export const amendQuarantineRejectReasonResponseSchema = z.object({
+  quarantine_id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  attempt_id: databaseUuidSchema,
+  previous_reason: z.string(),
+  reason: z.string(),
+  resolved_by: z.string().nullish(),
+  idempotent: z.boolean(),
+})
+
 export const quarantineAgentContextSchema = z.object({
   agent_id: z.string().uuid(),
   miner_hotkey: z.string(),
@@ -6807,7 +6958,9 @@ export const screeningQuarantineBatchExecuteInputSchema = z
 
 export const screeningQuarantineBatchExecuteItemSchema = z.object({
   quarantine_id: z.string().uuid(),
-  status: z.enum(['applied', 'already_applied', 'failed']),
+  // `unconfirmed` is Backroom's own: after a batch request whose answer was
+  // lost, an item the read-back could not show as recorded (#3042).
+  status: z.enum(['applied', 'already_applied', 'failed', 'unconfirmed']),
   agent_status: z.string().nullable().default(null),
   terminal_reconciliation: z.boolean().nullish().default(false),
   terminal_ruling: screeningQuarantineTerminalRulingSchema.nullish().default(null),
@@ -6819,6 +6972,10 @@ export const screeningQuarantineBatchExecuteResponseSchema = z.object({
   applied_count: z.number().int().nonnegative(),
   already_applied_count: z.number().int().nonnegative(),
   failed_count: z.number().int().nonnegative(),
+  unconfirmed_count: z.number().int().nonnegative().default(0),
+  // Set when the batch request's answer was lost and these rows are a
+  // read-back of what Platform recorded, not its answer to the batch.
+  reconciled_after: z.enum(['timeout', 'transport', 'gateway']).nullable().default(null),
 })
 
 export const quarantineContextInputSchema = z.object({
@@ -7136,6 +7293,12 @@ export const validationQueueWithdrawalSchema = z.object({
   // routine cleanup. `nullish` tolerates an older platform where the field is
   // absent rather than null.
   evicted_validator_hotkeys: z.array(z.string()).nullish().default(null),
+  // The agent-attributable code that made scoring quorum unreachable, when
+  // every remaining slot agreed on one. Set on the platform's own close-out
+  // (actor `platform:terminal-artifact-failure`) and on an operator withdrawal
+  // of the same evidence; public surfaces then report `scoring_failed`.
+  // Nullish for a platform that predates the column.
+  terminal_failure_code: z.string().nullish().default(null),
   created_at: z.string(),
   // Set once an eviction has been reversed (ditto-platform reinstatement). A
   // non-null `withdrawal` therefore no longer means "this submission is out of
@@ -7375,6 +7538,15 @@ export const listStuckSubmissionsInputSchema = z.object({
   offset: z.number().int().min(0).default(0),
 })
 
+// The miner-facing `era_changed` reason (SN-485), quoted on operator rows so
+// Backroom names the same cause the dashboard shows. Read-only projection.
+export const eraChangeSchema = z.object({
+  reason: z.literal('not_admitted_to_active_bench'),
+  bench_version: z.number().int().positive(),
+  scored_bench_version: z.number().int().positive().nullish().default(null),
+  next_step: z.literal('resubmit'),
+})
+
 export const stuckSubmissionSchema = z.object({
   agent_id: z.string().uuid(),
   miner_hotkey: z.string(),
@@ -7387,6 +7559,13 @@ export const stuckSubmissionSchema = z.object({
   automatic_retry_available: z.boolean(),
   recovery_allowed: z.boolean(),
   blocking_reason: z.string().nullable(),
+  // Set when the active bench's era boundary refuses the row; its
+  // blocking_reason then quotes the miner's `era_changed` label.
+  era_change: eraChangeSchema.nullish().default(null),
+  // False when nothing this retry state describes can run: its era is older
+  // than the active bench, or the active bench does not admit it. Absent from
+  // an older Platform, which means "unknown", not "serves".
+  serves_active_bench: z.boolean().nullish().default(null),
   recommended_action: z.enum(['retry', 'withdraw']).nullish().default(null),
   dominant_failure_code: z.string().nullish().default(null),
   ...providerOutageRetryFields,
@@ -7533,6 +7712,8 @@ export const agentScoringReadinessSchema = z.object({
   agent_name: z.string(),
   miner_hotkey: z.string(),
   status: z.string(),
+  // SN-483: the status the miner sees, beside the stored `status`.
+  public_status: z.string().nullish().default(null),
   active_bench_version: z.number().int().positive().nullable(),
   screening_policy_version: z.number().int().nonnegative().nullable(),
   required_screening_policy_version: z.number().int().nonnegative().nullable(),
@@ -7541,6 +7722,7 @@ export const agentScoringReadinessSchema = z.object({
   screened_image: scoringReadinessScreenedImageSchema,
   leaseable: z.boolean(),
   blocking_reasons: z.array(z.string()),
+  era_change: eraChangeSchema.nullish().default(null),
 })
 
 export const validatorScoreReplacementLookupInputSchema = z.object({
@@ -8224,6 +8406,13 @@ export const athReviewKindSchema = z.enum([
 
 export type AthReviewKind = z.infer<typeof athReviewKindSchema>
 
+export const copyReviewReferenceReleaseSchema = z.object({
+  reference_agent_id: z.string().uuid(),
+  published_at: z.string().nullable(),
+  public_before_upload: z.boolean(),
+  source: z.enum(['recorded', 'derived']),
+})
+
 export const copyReviewOriginalSchema = z.object({
   review_kind: athReviewKindSchema.default('copy'),
   duplicate_of: z.string().uuid().nullable(),
@@ -8260,6 +8449,14 @@ export const copyReviewOriginalSchema = z.object({
   // Public-safe score trigger and terminal screener evidence only. Source,
   // prompts, responses and private rules never enter this admin projection.
   deferred_review: deferredReviewEvidenceSchema.nullish().default(null),
+  // SN-499: whether duplicate_of was publicly released at or before the held
+  // upload. Queue-priority evidence only; the copy gate's alibi test still
+  // decides whether the release explains the match. `recorded` at hold open,
+  // `derived` at read time for an older hold. Null when the hold names no
+  // reference or the platform predates the field.
+  reference_public_release: copyReviewReferenceReleaseSchema
+    .nullish()
+    .default(null),
 })
 
 export const copyReviewItemSchema = z.object({
@@ -8297,6 +8494,10 @@ export const copyReviewListSchema = z.object({
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
   review_kind: athReviewKindSchema.nullish().default(null),
+  order: z
+    .enum(['oldest', 'public_reference_first'])
+    .nullish()
+    .default('oldest'),
   generation: z.enum(['active', 'rollout', 'history', 'all']),
   active_bench_version: z.number().int().positive(),
   rollout_bench_version: z.number().int().positive().nullable().default(null),
@@ -8355,6 +8556,21 @@ export const resolveCopyReviewResponseSchema = z.object({
   // Active screening quarantines a terminal reject closed in the same
   // transaction (ditto-subnet#2038).
   reconciled_quarantine_ids: z.array(z.string().uuid()).nullish().default([]),
+  // SN-486: a clear that leaves a bench v16+ agent scored with less than a
+  // full quorum in the open dueling season queues one free platform re-test
+  // per accepted score on it, so the hold cannot expire the agent. Null for
+  // a reject or an idempotent replay.
+  season_retest: z.object({
+    queued: z.number().int().nonnegative().default(0),
+    already_current: z.number().int().nonnegative().default(0),
+    busy: z.number().int().nonnegative().default(0),
+    replaced: z.number().int().nonnegative().default(0),
+    bench_version: z.number().int().nullable().default(null),
+    dueling_season_id: z.string().uuid().nullable().default(null),
+    catch_up_source: z.literal('ath_clear').nullable().default(null),
+    skipped: z.string().nullable().default(null),
+    error: z.string().nullable().default(null),
+  }).nullish().default(null),
 })
 
 export const getAthReviewInputSchema = z.object({
@@ -8459,7 +8675,7 @@ export const athRulingActionSchema = z.enum(['open', 'clear', 'reject'])
 
 // What execute performs for one ruling. `attest` is a clear on an unheld
 // scored or live agent: the terminal clear is recorded without holding the row.
-export const athRulingStepSchema = z.enum(['open', 'clear', 'attest', 'reject'])
+export const athRulingStepSchema = z.enum(['open', 'clear', 'attest', 'reject', 'close_terminal'])
 
 export const athRulingDispositionSchema = z.enum([
   'ready',
@@ -9126,6 +9342,12 @@ export const retestClaimabilitySchema = z.object({
   provider_gate_closed: z.boolean().default(false),
   // Tempo-aligned wave pacing: the window this lane is in and whether its
   // fresh-seed budget is spent. Counts only; seed values stay server-side.
+  // Season title duels: the mode, the season's K, the champion its family is
+  // anchored on (the season opener) and how many duel seeds this agent holds.
+  retest_mode: z.enum(['continual', 'season_duel']).default('continual'),
+  season_duel_seed_count: z.number().int().positive().nullable().default(null),
+  season_duel_anchor_champion_id: z.string().uuid().nullable().default(null),
+  season_duel_held_seed_count: z.number().int().nonnegative().nullable().default(null),
   wave_cadence_tempos: z.number().int().nonnegative().default(0),
   wave_seeds_per_window: z.number().int().positive().nullable().default(null),
   wave_window_epoch: z.number().int().nonnegative().nullable().default(null),
@@ -9150,6 +9372,19 @@ const emptyRetestCutoff = {
   within_tie_band: null,
 }
 
+
+// SN-486: why an expired bench v16+ agent is or is not being re-scored.
+export const seasonRetestSchema = z.object({
+  state: z.enum(['queued', 'not_queued']),
+  reason: z.enum([
+    'rotation', 'board', 'board_overflow', 'off_board', 'ath_clear',
+    'retested', 'over_budget', 'board_cap', 'below_board_floor',
+    'owner_has_better_agent', 'superseded_rerun', 'already_retested', 'unranked',
+    'catchup_disabled', 'not_considered',
+  ]),
+  dueling_season_id: z.string().uuid().nullable().default(null),
+  note: z.string(),
+})
 export const continualRetestDiagnosticSchema = z.object({
   generated_at: z.string(),
   agent_id: z.string().uuid(),
@@ -9188,13 +9423,30 @@ export const continualRetestDiagnosticSchema = z.object({
   seed_anchor_pinned: z.boolean().nullable(),
   admission_reason: z.enum([
     'in_cohort', 'same_owner_challenger', 'owner_suppressed',
-    'outside_cohort', 'not_current_finalized_ledger',
+    'outside_cohort', 'expired_dueling_season', 'not_current_finalized_ledger',
   ]),
   ledger_eligible: z.boolean().default(false),
+  // Bench v16+: the agent's score seasons against the live two-season window.
+  // expired_dueling_season means the quorum aged out by design (no re-score).
+  score_dueling_season_ids: z.array(z.string().uuid()).default([]),
+  window_dueling_season_ids: z.array(z.string().uuid()).default([]),
+  in_window_score_count: z.number().int().nonnegative().nullable().default(null),
+  last_valid_composite: z.number().min(0).max(1).nullable().default(null),
+  // SN-486, expired_dueling_season only: whether a free platform re-test on
+  // the open season is queued (season catch-up or an ATH clear) and, if not,
+  // the recorded reason -- the label miners see on the board and agent card.
+  season_retest: seasonRetestSchema.nullish().default(null),
+  in_current_pin: z.boolean().nullable().default(null),
   canonical_sample_count: z.number().int().nonnegative().default(0),
   completed_wave_depth: z.number().int().nonnegative().default(0),
   official_sample_count: z.number().int().nonnegative().default(0),
   raw_confirmation_depth: z.number().int().nonnegative().default(0),
+  // The lane's seed budget: minimum before variance may stop it, the work cap
+  // (and active fold window), and the variance-sized target it plans toward
+  // now. 0/0/null against a platform that predates the fields.
+  confirmation_seed_floor: z.number().int().nonnegative().default(0),
+  confirmation_seed_cap: z.number().int().nonnegative().default(0),
+  confirmation_seed_target: z.number().int().nonnegative().nullable().default(null),
   composite_stderr: z.number().nonnegative().nullable().default(null),
   aggregate_mode: z.enum(['disabled', 'fleet_ready', 'enabled']).default('fleet_ready'),
   wave_membership: z.enum(['strict', 'participants', 'per_agent']).default('participants'),
@@ -9205,7 +9457,7 @@ export const continualRetestDiagnosticSchema = z.object({
   representative_margin: z.number().nullable().default(null),
   representative_selection: z.enum([
     'self', 'official_composite', 'efficiency_tiebreak',
-    'newest_generation', 'agent_id_tiebreak', 'none',
+    'newest_generation', 'agent_id_tiebreak', 'superseded_rerun', 'none',
   ]).default('none'),
   cohort_cutoff: retestCutoffComparisonSchema.default(() => emptyRetestCutoff),
   emission_cutoff: retestCutoffComparisonSchema.default(() => emptyRetestCutoff),
@@ -9306,7 +9558,7 @@ export const publicDethroneDecisionSchema = z.object({
   required_lead: z.number().nonnegative(),
   margin_lead: z.number().nonnegative(),
   statistical_lead: z.number().nonnegative().nullable().optional(),
-  method: z.enum(['flat', 'unpaired', 'paired']),
+  method: z.enum(['flat', 'unpaired', 'paired', 'duel']),
   dethrones: z.boolean(),
   paired_standard_error: z.number().nonnegative().nullable().optional(),
   shared_seed_count: z.number().int().nonnegative().nullable().optional(),
@@ -9553,6 +9805,41 @@ export const inferenceCostSummarySchema = z.object({
   mean_factor_bps: gateBpsSchema.nullish().default(null),
 })
 
+// Bench v16+ priced inference cost (`details.priced_cost`): whole-run tokens
+// priced at the contract's locked public rates, the 350-case-normalised cost,
+// and the factor the composite carries (inside `details.dueling.datagen_gate`).
+// `rule_consistent` is Platform's own recomputation of the factor.
+export const pricedCostSummarySchema = z.object({
+  contract_id: z.string().nullish().default(null),
+  posture: gatePostureSchema.nullish().default(null),
+  applied: z.boolean().default(false),
+  result: z.enum(['priced', 'insufficient_evidence']).nullish().default(null),
+  window: z.string().nullish().default(null),
+  source: z.string().nullish().default(null),
+  cases: gateCountSchema,
+  prompt_tokens: gateCountSchema,
+  completion_tokens: gateCountSchema,
+  embedding_tokens: gateCountSchema,
+  decision_calls: gateCountSchema,
+  decision_input_tokens: gateCountSchema,
+  decision_output_tokens: gateCountSchema,
+  prompt_cost_nano_usd: gateCountSchema,
+  completion_cost_nano_usd: gateCountSchema,
+  embedding_cost_nano_usd: gateCountSchema,
+  decision_cost_nano_usd: gateCountSchema,
+  cost_nano_usd: gateCountSchema,
+  normalization_cases: gateCountSchema,
+  normalized_cost_nano_usd: gateCountSchema,
+  reference_nano_usd: gateCountSchema,
+  ratio_bps: z.number().int().min(0).max(100_000).default(0),
+  floor_bps: gateBpsSchema.nullish().default(null),
+  factor_bps: gateBpsSchema.nullish().default(null),
+  applied_factor_bps: gateBpsSchema.nullish().default(null),
+  cost_usd: z.number().nonnegative().nullish().default(null),
+  normalized_cost_usd: z.number().nonnegative().nullish().default(null),
+  rule_consistent: z.boolean().nullish().default(null),
+})
+
 export const publicGateEvidenceSchema = z.object({
   bench_version: z.number().int().positive(),
   // The most severe posture any gate ran under: `enforce` means a gate moved
@@ -9562,6 +9849,7 @@ export const publicGateEvidenceSchema = z.object({
   claim_provenance: claimProvenanceSummarySchema.nullish().default(null),
   twin_post_pass: twinPostPassSummarySchema.nullish().default(null),
   inference_cost: inferenceCostSummarySchema.nullish().default(null),
+  priced_cost: pricedCostSummarySchema.nullish().default(null),
   catalog_suppression_rate: gateUnitSchema.nullish().default(null),
   // Cases a gate would zero at enforce (or did), plus cases the shadow cost
   // factor would discount, and that count over the cases the run scored.
@@ -9577,6 +9865,46 @@ export const publicAuditPairCountsSchema = z.object({
   base_only: z.number().int().nonnegative(),
   transform_only: z.number().int().nonnegative(),
   both_wrong: z.number().int().nonnegative(),
+})
+
+// Bench v16+ dueling arithmetic Platform projects from the stored
+// `scores.dueling` aggregates and `priced_cost` gate evidence. Columns extend
+// the canary read's disclosure (no owner key, no generator submission id) with
+// the derived mean, grading version, public-default and self-mask flags.
+const gateBps = z.number().int().min(0).max(10_000)
+export const publicDuelingBreakdownSchema = z.object({
+  formula: z.string(),
+  season_id: z.string(),
+  season_index: z.number().int().nonnegative(),
+  datagen_raw: z.number().min(0).max(1),
+  datagen_gate: z.number().min(0).max(1),
+  column_weight: z.number().min(0).max(1),
+  // Bench v19+: min(1, datagen_raw / 0.8), a factor on the whole composite.
+  datagen_qualifier: z.number().min(0).max(1).nullish().default(null),
+  counted_columns: z.number().int().nonnegative(),
+  datagen_share: z.number().min(0).max(1),
+  generator_sum: z.number().min(0).max(1),
+  pre_gate_composite: z.number().min(0).max(1),
+  composite: z.number().min(0).max(1),
+  composite_stderr: z.number().nonnegative().nullish().default(null),
+  priced_cost_applied_factor_bps: gateBps.nullish().default(null),
+  priced_cost_factor_bps: gateBps.nullish().default(null),
+  priced_cost_factor: z.number().min(0).max(1).nullish().default(null),
+  priced_cost_posture: z.string().nullish().default(null),
+  priced_cost_result: z.string().nullish().default(null),
+  priced_cost_window: z.string().max(32).nullish().default(null),
+  // SN-500: present only once a P95 memory factor changed the score.
+  memory_factor_applied_factor_bps: gateBps.nullish().default(null),
+  memory_factor: z.number().min(0).max(1).nullish().default(null),
+  memory_factor_p95_bytes: z.number().int().nonnegative().nullish().default(null),
+  other_gate_factor: z.number().min(0).max(1).nullish().default(null),
+  columns: z.array(duelingColumnAggregateSchema.extend({
+    grading_bench_version: z.number().int().positive().nullish().default(null),
+    mean: z.number().min(0).max(1),
+    public_default: z.boolean(),
+    self_masked: z.boolean(),
+    contribution: z.number().min(0).max(1),
+  })).max(16),
 })
 
 export const publicValidatorScoreSchema = z.object({
@@ -9610,6 +9938,8 @@ export const publicValidatorScoreSchema = z.object({
   signature: z.string().nullable().optional(),
   // Null below bench v13 and for a scorer that emitted no gate telemetry.
   gate_evidence: publicGateEvidenceSchema.nullable().optional(),
+  // Omitted below bench v16; a malformed block drops only itself.
+  dueling_breakdown: publicDuelingBreakdownSchema.optional().catch(undefined),
 })
 
 export const publicAgentScoresSchema = z.object({
@@ -9737,6 +10067,8 @@ export const publicProvisionalScoreSchema = z.object({
   bench_version: z.number().int().positive().nullable().optional(),
   accepted_at: z.string(),
   transcript_sha256: z.string().nullable().optional(),
+  // Bench v16+ only (omitted below), as on settled rows.
+  dueling_breakdown: publicDuelingBreakdownSchema.optional().catch(undefined),
 })
 
 export const publicSubmissionPipelineSchema = z.object({
@@ -9775,6 +10107,10 @@ export const agentScoreHistoryVersionSchema = z.object({
   // share of cases the gates would zero. Null for versions below v13.
   gate_posture: gatePostureSchema.nullable().default(null),
   median_flagged_case_share: z.number().min(0).max(1).nullable().default(null),
+  // Bench v16+: median 350-case-normalised priced inference cost (USD) and
+  // median applied priced-cost factor (bps) over the rows that priced a run.
+  median_priced_cost_usd: z.number().nonnegative().nullable().default(null),
+  median_priced_cost_factor_bps: z.number().min(0).max(10_000).nullable().default(null),
 })
 
 export const agentScoreHistorySchema = z.object({
@@ -9951,19 +10287,15 @@ export const tracePeekResponseSchema = z.object({
   scan_complete: z.boolean(),
 })
 
-// Future screening-policy activation.
+// Screening-policy activation (read-only; scheduling retired with source
+// review on 2026-11-07).
 //
-// The platform keeps the live policy in force and holds ONE pending activation
-// that flips the policy version at a scheduled instant. Revisions are
-// append-only: scheduling a new activation supersedes the pending one but the
-// old rows stay readable as audit. `state` is computed by the platform at read
-// time ("due" once now >= activate_at), so it is never stored and never
-// defaulted here.
-export const SCREENER_POLICY_ACTIVATION_CONFIRMATION = 'SCHEDULE SCREENER POLICY ACTIVATION'
+// The platform keeps the live policy in force. Revisions are append-only and
+// stay readable as audit. `state` is computed by the platform at read time
+// ("due" once now >= activate_at), so it is never stored and never defaulted
+// here.
 export const RESTORE_SCORED_SCREENING_SNAPSHOT_CONFIRMATION =
   'RESTORE SCORED SCREENING SNAPSHOT'
-export const ADVANCE_SCORED_POLICY_RESCREEN_CONFIRMATION =
-  'ADVANCE SCORED POLICY RESCREEN'
 export const MAX_SCREENER_POLICY_ACTIVATION_REVISIONS = 200
 
 export const screenerPolicyActivationRevisionSchema = z.object({
@@ -10002,21 +10334,6 @@ export const screenerPolicyActivationViewSchema = z.object({
     .max(MAX_SCREENER_POLICY_ACTIVATION_REVISIONS),
   // Absent from platforms older than heartbeat protocol v7.
   fleet: screenerFleetPolicyReadinessSchema.nullish().transform((value) => value ?? null),
-})
-
-// The offset requirement is what makes the schedule unambiguous: a naive
-// "2026-08-29T09:00:00" would be the platform's UTC wall clock, not the
-// operator's, and the 422 that catches it should never have to.
-export const scheduleScreenerPolicyActivationInputSchema = z.object({
-  expectedRevision: z.number().int().nonnegative(),
-  // The platform bounds this to [floor..builtin] and answers 422 out of range;
-  // it stays the authority, so this only rejects nonsense a positive int catches.
-  targetPolicyVersion: z.number().int().positive(),
-  activateAt: z.string().datetime({ offset: true }),
-  rescreenScored: z.boolean().default(true),
-  canaryOnly: z.boolean().default(false),
-  reason: auditReasonSchema(8),
-  confirmation: z.literal(SCREENER_POLICY_ACTIVATION_CONFIRMATION),
 })
 
 export const restoreScoredScreeningSnapshotInputSchema = z.object({
@@ -10072,16 +10389,6 @@ export const scoredPolicyRescreenViewSchema = z.object({
 })
 
 void (scoredPolicyRescreenViewSchema satisfies z.ZodType<GeneratedScoredPolicyRescreenView>)
-
-export const advanceScoredPolicyRescreenInputSchema = z.object({
-  expectedActivationRevision: z.number().int().positive(),
-  expectedAgentId: z.string().uuid(),
-  retryPaused: z.boolean().default(false),
-  maxActiveReleases: z.number().int().min(1).max(4).default(1),
-  reviewSettingsRevision: z.number().int().positive().nullable().default(null),
-  reason: auditReasonSchema(8),
-  confirmation: z.literal(ADVANCE_SCORED_POLICY_RESCREEN_CONFIRMATION),
-})
 
 export type ScreenerPolicyActivationView = z.infer<typeof screenerPolicyActivationViewSchema>
 
@@ -10206,8 +10513,10 @@ export type CopyCourtRecommendationList = z.infer<
 >
 
 // Bench v13+ finalized-block confirmation seed anchors: one row per
-// (champion, bench_version) reign, pinned or still in its finality wait. The
-// ledger serves pinned rows only, so this read is where a waiting reign shows.
+// (champion, bench_version) reign, pinned or still in its finality wait. From
+// bench v16 a reign restarts per dueling season (dueling_season_id). The
+// ledger serves pinned rows only (current season only at v16+), so this read
+// is where a waiting reign shows.
 
 export const confirmationSeedAnchorSchema = z.object({
   champion_agent_id: z.string().uuid(),
@@ -10220,6 +10529,7 @@ export const confirmationSeedAnchorSchema = z.object({
   pinned: z.boolean(),
   pinned_at: z.string().nullable(),
   created_at: z.string(),
+  dueling_season_id: z.string().uuid().nullable().optional().default(null),
 })
 
 export const confirmationSeedAnchorListSchema: z.ZodType<GeneratedConfirmationSeedAnchorList> =
@@ -10244,8 +10554,9 @@ export type ConfirmationSeedAnchorList = z.infer<
 >
 
 // Ordinary (pre-score) source-review queue-age SLO, ditto-subnet#2042 slice 1.
-// Read-only observability: overdue_count and p95_exceeds_threshold are null
-// until an operator configures a threshold, and this board enforces nothing.
+// Read-only observability. Platform ships thresholds (SN-499), so
+// overdue_count and p95_exceeds_threshold are null only when an operator turns
+// a threshold off. This board enforces nothing.
 // Copy, ATH, and top-five double-check review report through
 // athReviewQueueSloSchema below; human escalation is a later clock.
 export const sourceReviewQueueSloSchema = z.object({
@@ -10277,7 +10588,7 @@ export type SourceReviewQueueSlo = z.infer<typeof sourceReviewQueueSloSchema>
 
 // ATH-hold queue-age SLO, ditto-subnet#2042 slice 2: every pending ath_reviews
 // hold, one clock per class (copy review included), and stranded-hold ghosts.
-// Read-only; thresholds report null until an operator configures them.
+// Read-only; each clock ships its own threshold (SN-499), null when turned off.
 type GeneratedAthReviewQueueStats = PlatformComponents['schemas']['AthReviewQueueStats']
 type GeneratedAthReviewQueueSlo = PlatformComponents['schemas']['AthReviewQueueSlo']
 
@@ -10336,6 +10647,12 @@ type GeneratedValidatorCapacityAssignment =
   PlatformComponents['schemas']['ValidatorCapacityAssignment']
 type GeneratedValidatorCapacityEntry = PlatformComponents['schemas']['ValidatorCapacityEntry']
 type GeneratedRequestOutcomeCount = PlatformComponents['schemas']['RequestOutcomeCount']
+type GeneratedValidatorCapacitySlot = PlatformComponents['schemas']['ValidatorCapacitySlot']
+type GeneratedDispatchFenceHolder = PlatformComponents['schemas']['DispatchFenceHolder']
+type GeneratedDispatchFenceValidatorHolds =
+  PlatformComponents['schemas']['DispatchFenceValidatorHolds']
+type GeneratedDispatchFenceBusyPair = PlatformComponents['schemas']['DispatchFenceBusyPair']
+type GeneratedDispatchFenceSnapshot = PlatformComponents['schemas']['DispatchFenceSnapshot']
 type GeneratedValidatorRequestOutcomes =
   PlatformComponents['schemas']['ValidatorRequestOutcomes']
 type GeneratedValidatorRequestOutcomeSummary =
@@ -10385,6 +10702,27 @@ const validatorCapacityAssignmentSchema = z.object({
   inference_idle_seconds: z.number().int().nonnegative().nullable().default(null),
 } satisfies PlatformResponseShape<GeneratedValidatorCapacityAssignment>)
 
+// One configured slot: what it is doing or, when unusable, why. Reasons mirror
+// Platform's SlotUnusableReason; add a new one here in the same change.
+const validatorCapacitySlotSchema = z.object({
+  slot_id: z.string(),
+  state: z.enum(['claimed', 'free', 'reserved_round', 'unusable']),
+  reason: z
+    .enum([
+      'admission_draining',
+      'admission_paused',
+      'admission_resource_constrained',
+      'host_memory_admission',
+      'validator_unhealthy',
+      'bench_scorer_unverified',
+      'bench_software_obsolete',
+      'issuance_paused',
+      'platform_slot_cap',
+    ])
+    .nullable()
+    .default(null),
+} satisfies PlatformResponseShape<GeneratedValidatorCapacitySlot>)
+
 export const validatorCapacityEntrySchema = z.object({
   validator_hotkey: z.string(),
   seen_at: z.string(),
@@ -10398,6 +10736,15 @@ export const validatorCapacityEntrySchema = z.object({
   reserved_round_slots: z.number().int().nonnegative().default(0),
   claimed_slots: z.number().int().nonnegative(),
   assignments: z.array(validatorCapacityAssignmentSchema),
+  // Per-slot breakdown: defaulted so a Backroom deployed ahead of Platform
+  // still reads capacity, just without the reasons.
+  memory_admitted_slots: z.number().int().nonnegative().nullable().default(null),
+  // Host memory that admits every configured slot, and the operator-facing
+  // reason plus fix path when memory admits fewer (SN-488).
+  memory_required_mib: z.number().int().nonnegative().nullable().default(null),
+  memory_note: z.string().nullable().default(null),
+  unusable_slots: z.number().int().nonnegative().default(0),
+  slots: z.array(validatorCapacitySlotSchema).default([]),
 } satisfies PlatformResponseShape<GeneratedValidatorCapacityEntry>)
 
 const relayLaneSaturationSchema = z.object({
@@ -10413,7 +10760,12 @@ export const validatorCapacitySummarySchema = z.object({
   online_window_seconds: z.number().int().positive(),
   live_validator_count: z.number().int().nonnegative(),
   serviceable_validator_count: z.number().int().nonnegative(),
+  configured_slots: z.number().int().nonnegative().default(0),
+  // The most slots the fleet's hosts can run at the live cap (SN-488).
+  memory_admitted_slots: z.number().int().nonnegative().default(0),
   serviceable_slots: z.number().int().nonnegative(),
+  unusable_slots_by_reason: z.record(z.string(), z.number().int().nonnegative()).default({}),
+  sandbox_memory_limit_mib: z.number().int().positive().nullable().default(null),
   claimed_slots: z.number().int().nonnegative(),
   active_assignment_count: z.number().int().nonnegative(),
   estimated_remaining_slot_minutes: z.number().nonnegative(),
@@ -10724,6 +11076,7 @@ const requestOutcomeCountSchema = z.object({
   outcome: z.string(),
   total: z.number().int().nonnegative(),
   recent_15m: z.number().int().nonnegative(),
+  recent_15m_by_slot: z.record(z.string(), z.number().int().nonnegative()).default({}),
   first_at: z.string().nullable(),
   last_at: z.string().nullable(),
   last_detail: z.string().nullable(),
@@ -10738,13 +11091,113 @@ const validatorRequestOutcomesSchema = z.object({
   outcomes: z.array(requestOutcomeCountSchema),
 } satisfies PlatformResponseShape<GeneratedValidatorRequestOutcomes>)
 
+const dispatchFenceSnapshotSchema = z.object({
+  observed_at: z.string(),
+  tracking_since: z.string(),
+  recent_window_seconds: z.number().int().positive(),
+  holder: z
+    .object({
+      validator_hotkey: z.string(),
+      slot_id: z.string(),
+      acquired_at: z.string(),
+      held_seconds: z.number().nonnegative(),
+    } satisfies PlatformResponseShape<GeneratedDispatchFenceHolder>)
+    .nullable(),
+  recent_holds: z.number().int().nonnegative(),
+  recent_held_seconds: z.number().nonnegative(),
+  recent_utilization: z.number().min(0).max(1),
+  hold_p50_seconds: z.number().nonnegative().nullable(),
+  hold_p95_seconds: z.number().nonnegative().nullable(),
+  hold_max_seconds: z.number().nonnegative().nullable(),
+  hold_outcomes: z.record(z.string(), z.number().int().nonnegative()),
+  recent_busy_declines: z.number().int().nonnegative(),
+  recent_busy_same_validator: z.number().int().nonnegative(),
+  recent_busy_untracked_holder: z.number().int().nonnegative(),
+  holds_by_validator: z.array(
+    z.object({
+      validator_hotkey: z.string(),
+      holds: z.number().int().nonnegative(),
+      held_seconds: z.number().nonnegative(),
+      max_hold_seconds: z.number().nonnegative(),
+    } satisfies PlatformResponseShape<GeneratedDispatchFenceValidatorHolds>),
+  ),
+  busy_by_validator: z.array(
+    z.object({
+      validator_hotkey: z.string(),
+      holder_hotkey: z.string().nullable(),
+      busy_declines: z.number().int().nonnegative(),
+      same_validator: z.boolean(),
+      by_slot: z.record(z.string(), z.number().int().nonnegative()),
+    } satisfies PlatformResponseShape<GeneratedDispatchFenceBusyPair>),
+  ),
+} satisfies PlatformResponseShape<GeneratedDispatchFenceSnapshot>)
+
 export const validatorRequestOutcomeSummarySchema = z.object({
   observed_at: z.string(),
   tracking_since: z.string(),
   recent_window_seconds: z.number().int().positive(),
   unauthenticated: z.record(z.string(), z.number().int().nonnegative()),
   validators: z.array(validatorRequestOutcomesSchema),
+  // What the dispatch fence behind allocator_busy is busy with. Null on a
+  // Platform that predates the monitor.
+  allocator: dispatchFenceSnapshotSchema.nullable().default(null),
 } satisfies PlatformResponseShape<GeneratedValidatorRequestOutcomeSummary>)
+
+// Per-agent harness memory (SN-500 step 1). Operator-only: peak and
+// time-weighted P50/P95 of the harness cgroup per run and per agent version.
+// Never shown to miners; there is no data from before the telemetry shipped.
+type GeneratedHarnessMemoryRollupView = PlatformComponents['schemas']['HarnessMemoryRollupView']
+type GeneratedHarnessMemoryRunView = PlatformComponents['schemas']['HarnessMemoryRunView']
+type GeneratedHarnessMemoryList = PlatformComponents['schemas']['HarnessMemoryList']
+type GeneratedAgentHarnessMemory = PlatformComponents['schemas']['AgentHarnessMemory']
+
+const harnessMemoryBytes = z.number().int().nonnegative()
+
+const harnessMemoryRollupViewSchema = z.object({
+  agent_id: z.string(),
+  agent_name: z.string().nullable().optional(),
+  miner_hotkey: z.string().nullable().optional(),
+  runs: z.number().int().nonnegative(),
+  scored_runs: z.number().int().nonnegative(),
+  failed_runs: z.number().int().nonnegative(),
+  oom_runs: z.number().int().nonnegative(),
+  peak_bytes_max: harnessMemoryBytes,
+  p50_bytes_median: harnessMemoryBytes,
+  p95_bytes_median: harnessMemoryBytes,
+  p95_bytes_max: harnessMemoryBytes,
+  limit_bytes_max: harnessMemoryBytes.nullable().optional(),
+  last_recorded_at: z.string(),
+} satisfies PlatformResponseShape<GeneratedHarnessMemoryRollupView>)
+
+const harnessMemoryRunViewSchema = z.object({
+  validator_hotkey: z.string(),
+  bench_version: z.number().int(),
+  lease_issued_at: z.string(),
+  outcome: z.enum(['scored', 'failed']),
+  failure_reason: z.string().nullable().optional(),
+  failure_detail: z.string().nullable().optional(),
+  peak_bytes: harnessMemoryBytes,
+  p50_bytes: harnessMemoryBytes,
+  p95_bytes: harnessMemoryBytes,
+  samples: z.number().int().nonnegative(),
+  sampled_seconds: z.number().nonnegative(),
+  limit_bytes: harnessMemoryBytes.nullable().optional(),
+  recorded_at: z.string(),
+} satisfies PlatformResponseShape<GeneratedHarnessMemoryRunView>)
+
+export const harnessMemoryListSchema = z.object({
+  generated_at: z.string(),
+  agents: z.array(harnessMemoryRollupViewSchema),
+  offset: z.number().int().nonnegative().default(0),
+  has_more: z.boolean().default(false),
+  note: z.string(),
+} satisfies PlatformResponseShape<GeneratedHarnessMemoryList>)
+
+export const agentHarnessMemorySchema = z.object({
+  agent_id: z.string(),
+  rollup: harnessMemoryRollupViewSchema.nullable(),
+  runs: z.array(harnessMemoryRunViewSchema),
+} satisfies PlatformResponseShape<GeneratedAgentHarnessMemory>)
 
 // Unreleased-copy signal (shadow). Evidence carries normalized source text
 // from two submissions, so the per-agent read is gated on the artifact scope.
@@ -10942,7 +11395,7 @@ export const unreleasedCopyOverviewSchema = z.object({
 export const applyUnreleasedCopySettingsInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   mode: unreleasedCopyModeSchema,
-  threshold: z.number().positive().max(100000).default(40),
+  threshold: z.number().positive().max(100000),
   reason: auditReasonSchema(8),
   confirmation: z.string(),
 })

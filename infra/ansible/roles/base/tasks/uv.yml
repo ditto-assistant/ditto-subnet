@@ -17,5 +17,6 @@
     cp "$HOME/.local/bin/uv" /usr/local/bin/uv
     chmod 755 /usr/local/bin/uv
   args:
+    executable: /bin/bash
     creates: /usr/local/bin/uv
   when: not uv_stat.stat.exists

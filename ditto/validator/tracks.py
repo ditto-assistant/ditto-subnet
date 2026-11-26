@@ -38,6 +38,7 @@ from ditto.validator.config import BASIS_POINT_SCALE
 from ditto.validator.weights import (
     CrownGate,
     compute_generator_weights,
+    compute_model_context_weights,
     compute_router_weights,
     compute_weights,
     reassign_unclaimed_shares,
@@ -45,6 +46,7 @@ from ditto.validator.weights import (
 
 if TYPE_CHECKING:
     from ditto.api_models.generator_ledger import GeneratorLedgerEntry
+    from ditto.api_models.model_context_ledger import ModelContextLedgerEntry
     from ditto.api_models.router_ledger import RouterLedgerEntry
     from ditto.api_models.validator import LedgerEntry
 
@@ -60,6 +62,7 @@ TRACK_MEMORY = "memory"
 TRACK_CODING = "coding"
 TRACK_ROUTER = "router"
 TRACK_GENERATOR = "generator"
+TRACK_MODEL_CONTEXT = "model_context"
 
 
 class TrackState(StrEnum):
@@ -108,6 +111,8 @@ class TrackFoldInputs:
     router_rank_shares: tuple[float, ...] = ()
     generator_entries: Sequence[GeneratorLedgerEntry] = ()
     generator_rank_shares: tuple[float, ...] = ()
+    model_context_entries: Sequence[ModelContextLedgerEntry] = ()
+    model_context_rank_shares: tuple[float, ...] = ()
 
 
 TrackFold = Callable[[TrackFoldInputs], dict[str, float]]
@@ -148,6 +153,14 @@ def generator_fold(inputs: TrackFoldInputs) -> dict[str, float]:
     """Fold the generator track: rank hotkeys by latest fresh run score."""
     return compute_generator_weights(
         inputs.generator_entries, rank_shares=inputs.generator_rank_shares
+    )
+
+
+def model_context_fold(inputs: TrackFoldInputs) -> dict[str, float]:
+    """Fold the model_context (CPM) track: rank eligible context models by
+    season score, then by commitment block (earlier first)."""
+    return compute_model_context_weights(
+        inputs.model_context_entries, rank_shares=inputs.model_context_rank_shares
     )
 
 
@@ -264,6 +277,8 @@ def _build_registry(
     coding_weight_eligible: bool,
     generator_state: TrackState,
     generator_weight_eligible: bool,
+    model_context_state: TrackState,
+    model_context_weight_eligible: bool,
 ) -> TrackRegistry:
     return TrackRegistry(
         (
@@ -302,6 +317,15 @@ def _build_registry(
                 fold=generator_fold,
                 unclaimed_share_to=TRACK_MEMORY,
             ),
+            Track(
+                track_id=TRACK_MODEL_CONTEXT,
+                name="Context models",
+                state=model_context_state,
+                emission_share_bps=track_shares_bps.get(TRACK_MODEL_CONTEXT, 0),
+                weight_eligible=model_context_weight_eligible,
+                fold=model_context_fold,
+                unclaimed_share_to=TRACK_MEMORY,
+            ),
         )
     )
 
@@ -314,6 +338,7 @@ _SAFE_TRACK_SHARES_BPS = {
     TRACK_CODING: 0,
     TRACK_ROUTER: 0,
     TRACK_GENERATOR: 0,
+    TRACK_MODEL_CONTEXT: 0,
 }
 
 
@@ -326,16 +351,21 @@ def build_default_registry(
     coding_weight_eligible: bool = False,
     generator_state: TrackState = TrackState.SHADOW,
     generator_weight_eligible: bool = False,
+    model_context_state: TrackState = TrackState.SHADOW,
+    model_context_weight_eligible: bool = False,
 ) -> TrackRegistry:
-    """The shipped four-track registry.
+    """The shipped five-track registry.
 
     Memory is ``ACTIVE`` and eligible (the existing competition); coding,
     router, and generator default to ``SHADOW`` / not-eligible here so a bare
     registry touches no emissions. The validator config promotes the generator
     track (protocol 33); it still pays only a governed share, only to
     weight-eligible ledger entries, and hands an unclaimed share to memory. The
-    per-track bps come from the resolved ``track_shares_bps`` (compiled fallback
-    or, later, the platform governance field).
+    model_context (CPM) track stays ``SHADOW`` and not eligible in the config
+    too (contract ``docs/research/cpm/competition-v1.md`` section 7): it is
+    folded and logged at 0 bps. The per-track bps come from the resolved
+    ``track_shares_bps`` (compiled fallback or, later, the platform governance
+    field).
 
     ``resolve_track_shares`` already rejects a malformed whole map, but a
     *well-formed partial* map (e.g. governance sets ``router`` eligible without
@@ -355,6 +385,8 @@ def build_default_registry(
             coding_weight_eligible=coding_weight_eligible,
             generator_state=generator_state,
             generator_weight_eligible=generator_weight_eligible,
+            model_context_state=model_context_state,
+            model_context_weight_eligible=model_context_weight_eligible,
         )
     except ValueError:
         logger.warning(
@@ -371,6 +403,8 @@ def build_default_registry(
             coding_weight_eligible=coding_weight_eligible,
             generator_state=generator_state,
             generator_weight_eligible=generator_weight_eligible,
+            model_context_state=model_context_state,
+            model_context_weight_eligible=model_context_weight_eligible,
         )
 
 
@@ -379,6 +413,7 @@ __all__ = [
     "TRACK_CODING",
     "TRACK_GENERATOR",
     "TRACK_MEMORY",
+    "TRACK_MODEL_CONTEXT",
     "TRACK_ROUTER",
     "MemoryFoldParams",
     "Track",
@@ -388,6 +423,7 @@ __all__ = [
     "build_default_registry",
     "generator_fold",
     "memory_fold",
+    "model_context_fold",
     "reserved_fold",
     "router_fold",
 ]

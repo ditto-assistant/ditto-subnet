@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from ditto.api_server.endpoints.admin_airdrops import (
+    router as admin_airdrops_router,
+)
 from ditto.api_server.endpoints.admin_artifact_release_settings import (
     router as admin_artifact_release_settings_router,
 )
@@ -50,6 +53,9 @@ from ditto.api_server.endpoints.admin_database_backup import (
 from ditto.api_server.endpoints.admin_dueling import (
     router as admin_dueling_router,
 )
+from ditto.api_server.endpoints.admin_edge_lane_settings import (
+    router as admin_edge_lane_settings_router,
+)
 from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
     router as admin_efficiency_bonus_settings_router,
 )
@@ -64,6 +70,9 @@ from ditto.api_server.endpoints.admin_generator_competition import (
 )
 from ditto.api_server.endpoints.admin_generator_rounds import (
     router as admin_generator_rounds_router,
+)
+from ditto.api_server.endpoints.admin_harness_memory import (
+    router as admin_harness_memory_router,
 )
 from ditto.api_server.endpoints.admin_hotkey_bans import (
     router as admin_hotkey_bans_router,
@@ -89,6 +98,9 @@ from ditto.api_server.endpoints.admin_lease_revocations import (
 from ditto.api_server.endpoints.admin_miner_fees import (
     router as admin_miner_fees_router,
 )
+from ditto.api_server.endpoints.admin_model_context import (
+    router as admin_model_context_router,
+)
 from ditto.api_server.endpoints.admin_outlier_escalation import (
     router as admin_outlier_escalation_router,
 )
@@ -103,6 +115,9 @@ from ditto.api_server.endpoints.admin_quarantine import (
 )
 from ditto.api_server.endpoints.admin_queue_policy_settings import (
     router as admin_queue_policy_settings_router,
+)
+from ditto.api_server.endpoints.admin_registration_freshness import (
+    router as admin_registration_freshness_router,
 )
 from ditto.api_server.endpoints.admin_retirement import (
     router as admin_retirement_router,
@@ -161,6 +176,9 @@ from ditto.api_server.endpoints.admin_treasury_settings import (
 from ditto.api_server.endpoints.admin_unreleased_copy import (
     router as admin_unreleased_copy_router,
 )
+from ditto.api_server.endpoints.admin_upload_payments import (
+    router as admin_upload_payments_router,
+)
 from ditto.api_server.endpoints.admin_v13_private_generation import (
     router as admin_v13_private_generation_router,
 )
@@ -207,8 +225,15 @@ from ditto.api_server.endpoints.miner_ditto_link import (
 )
 from ditto.api_server.endpoints.miner_mcp import router as miner_mcp_router
 from ditto.api_server.endpoints.miner_me import router as miner_me_router
+from ditto.api_server.endpoints.model_context import router as model_context_router
+from ditto.api_server.endpoints.model_context_scorer import (
+    router as model_context_scorer_router,
+)
 from ditto.api_server.endpoints.name_claims import router as name_claims_router
 from ditto.api_server.endpoints.public import router as public_router
+from ditto.api_server.endpoints.public_dueling import (
+    router as public_dueling_router,
+)
 from ditto.api_server.endpoints.retrieval import router as retrieval_router
 from ditto.api_server.endpoints.scoring import router as scoring_router
 from ditto.api_server.endpoints.screener import router as screener_router
@@ -220,8 +245,10 @@ from ditto.api_server.endpoints.validator_confirmation import (
 
 __all__ = [
     "admin_database_backup_router",
+    "admin_registration_freshness_router",
     "health_router",
     "inference_router",
+    "admin_airdrops_router",
     "admin_artifact_release_settings_router",
     "admin_transcript_mirror_settings_router",
     "admin_ath_review_queue_slo_router",
@@ -229,6 +256,7 @@ __all__ = [
     "admin_attestation_router",
     "admin_benchmark_rollout_router",
     "admin_burn_settings_router",
+    "admin_edge_lane_settings_router",
     "admin_track_share_settings_router",
     "admin_emission_allocation_router",
     "admin_emission_eligibility_router",
@@ -240,10 +268,14 @@ __all__ = [
     "admin_inference_observability_router",
     "admin_generator_competition_router",
     "admin_dueling_router",
+    "public_dueling_router",
     "admin_generator_rounds_router",
     "admin_scoring_lease_settings_router",
     "generator_router",
     "generator_scorer_router",
+    "admin_model_context_router",
+    "model_context_router",
+    "model_context_scorer_router",
     "admin_traces_router",
     "admin_queue_policy_settings_router",
     "admin_efficiency_bonus_settings_router",
@@ -255,6 +287,7 @@ __all__ = [
     "admin_confirmation_seed_anchors_router",
     "admin_copy_court_router",
     "admin_unreleased_copy_router",
+    "admin_upload_payments_router",
     "admin_competition_improvement_router",
     "admin_screening_review_cost_router",
     "admin_copy_review_router",
@@ -280,6 +313,7 @@ __all__ = [
     "admin_confirmation_score_voids_router",
     "admin_provider_outages_router",
     "admin_validation_retry_router",
+    "admin_harness_memory_router",
     "admin_validator_capacity_router",
     "admin_validator_request_outcomes_router",
     "admin_validator_slot_settings_router",

@@ -70,6 +70,19 @@ type Options struct {
 	// A dueling slice uses it to drop a case another column already claimed
 	// (challenge.SliceExecutionCases).
 	Include func(packCaseID string) bool
+	// Admit, when set, is asked before each included case starts, in pack
+	// order on the dispatching goroutine (never from a worker), so the cases
+	// it admits are a prefix of the dispatch order. A case it refuses is not
+	// sent to the harness and comes back BudgetExhausted (bench v18 per-run
+	// cost budget). Rounds and qualification leave it nil.
+	Admit func() bool
+	// RefusalNote, when set, is the note a refused case carries (the
+	// specific reason: a spent budget or a lost cost meter).
+	RefusalNote func() string
+	// Exhausted, when set, reports that Admit refuses every later case: a
+	// wave is then not seeded (it would only spend embeddings), and its cases
+	// still dispatch so they come back BudgetExhausted.
+	Exhausted func() bool
 }
 
 // CaseOutcome is one graded case: the panel result the scorer submits plus the
@@ -77,6 +90,8 @@ type Options struct {
 type CaseOutcome struct {
 	challenge.PanelCaseResult
 	Notes []string `json:"notes,omitempty"`
+	// BudgetExhausted marks a case Options.Admit refused: it never ran.
+	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
 }
 
 // ErrHarnessUnavailable wraps a failure that prevents grading any case: the
@@ -95,6 +110,31 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 	if r := challenge.Validate(p); !r.Valid {
 		return nil, fmt.Errorf("challenge pack is invalid (%d issues)", len(r.Issues))
 	}
+	return execute(ctx, harnessURL, p, opts)
+}
+
+// ExecuteOracle runs the frontier oracle on a validated source pack: it
+// derives challenge.OraclePack for caseIDs (one memory graph per case, seeded
+// with only that case's challenge.OracleContext) and executes it exactly like
+// Execute, graded at the source pack's declared policy. The derived pack is a
+// trusted derivation of a valid pack, so it is executed without re-running
+// pack validation (it holds one user and wave per case by design). Outcomes
+// are in caseIDs order and carry the source pack's case ids.
+func ExecuteOracle(ctx context.Context, harnessURL string, source challenge.Pack, caseIDs []string, opts Options) ([]CaseOutcome, error) {
+	if r := challenge.Validate(source); !r.Valid {
+		return nil, fmt.Errorf("challenge pack is invalid (%d issues)", len(r.Issues))
+	}
+	if opts.Include != nil {
+		return nil, errors.New("oracle execution selects cases by caseIDs, not Include")
+	}
+	oracle, _, err := challenge.OraclePack(source, caseIDs)
+	if err != nil {
+		return nil, fmt.Errorf("oracle pack: %w", err)
+	}
+	return execute(ctx, harnessURL, oracle, opts)
+}
+
+func execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Options) ([]CaseOutcome, error) {
 	nonce := opts.Nonce
 	if len(nonce) == 0 {
 		nonce = make([]byte, 32)
@@ -120,6 +160,9 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 	}
 	err := runner.RunStagedWaves(ctx, waves, buckets,
 		func(ctx context.Context, _ int, wave protocol.SeedRequest) error {
+			if opts.Exhausted != nil && opts.Exhausted() {
+				return nil
+			}
 			_, err := runner.SeedForVersion(ctx, harnessURL, wave, opts.BenchVersion)
 			return err
 		},
@@ -130,8 +173,20 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 					run = append(run, i)
 				}
 			}
-			runBounded(len(run), concurrency, func(j int) {
+			runBoundedAdmitted(len(run), concurrency, opts.Admit, func(j int, admitted bool) {
 				i := run[j]
+				if !admitted {
+					note := protocol.RunBudgetExhaustedReason
+					if opts.RefusalNote != nil {
+						note = opts.RefusalNote()
+					}
+					outcomes[i] = CaseOutcome{
+						PanelCaseResult: challenge.PanelCaseResult{CaseID: p.Cases[i].ID},
+						Notes:           []string{note},
+						BudgetExhausted: true,
+					}
+					return
+				}
 				outcomes[i] = runCase(ctx, harnessURL, p.Cases[i], p.GradingCase(i), proj, opts)
 			})
 			return ctx.Err()
@@ -226,16 +281,24 @@ func (p *projection) waves(in []protocol.SeedRequest) []protocol.SeedRequest {
 }
 
 func runBounded(n, limit int, fn func(i int)) {
+	runBoundedAdmitted(n, limit, nil, func(i int, _ bool) { fn(i) })
+}
+
+// runBoundedAdmitted asks admit for case i on the dispatching goroutine after
+// its slot is acquired and before its worker starts, so admission follows
+// case order whatever order the workers finish in. A nil admit admits all.
+func runBoundedAdmitted(n, limit int, admit func() bool, fn func(i int, admitted bool)) {
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(i int) {
+		admitted := admit == nil || admit()
+		go func(i int, admitted bool) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			fn(i)
-		}(i)
+			fn(i, admitted)
+		}(i, admitted)
 	}
 	wg.Wait()
 }

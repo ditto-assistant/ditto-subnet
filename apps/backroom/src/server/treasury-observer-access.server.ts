@@ -1,6 +1,7 @@
 import '@tanstack/react-start/server-only'
 
 export const BACKROOM_TREASURY_OBSERVE_SCOPE = 'backroom:treasury:observe'
+export const MAX_OBSERVER_BODY_BYTES = 65_536
 export const OBSERVER_TOOL_NAMES = new Set(['get_treasury_settings', 'record_treasury_receipt'])
 
 /** Dedicated grants must never inherit the ordinary read/write floors. */
@@ -23,7 +24,7 @@ export async function observerRequestAllowed(request: Request) {
       const next = await reader.read()
       if (next.done) break
       size += next.value.length
-      if (size > 65_536) return false
+      if (size > MAX_OBSERVER_BODY_BYTES) return false
       chunks.push(next.value)
     }
     const bytes = new Uint8Array(size)

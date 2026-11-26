@@ -1,0 +1,68 @@
+{
+  "accepting": true,
+  "competition": "model_context",
+  "mode": "shadow",
+  "payment_required": false,
+  "upload_cooldown_seconds": 60,
+  "retry_at": null,
+  "blockers": [],
+  "signature_payload": "ditto-model-context-v1:{hotkey}:{hf_repo}:{revision}:{manifest_sha256}:{ts}:{nonce}",
+  "commitment_format": "dcpm1:{manifest_sha256}",
+  "manifest_schema": "ditto-cpm-manifest-v1",
+  "manifest_filename": "cpm-manifest.json",
+  "licenses": [
+    "apache-2.0",
+    "mit"
+  ],
+  "bases": [
+    {
+      "base_id": "qwen3.5-0.8b",
+      "hf_repo": "Qwen/Qwen3.5-0.8B",
+      "revision": "2fc06364715b967f1860aea9cf38778875588b17",
+      "parameters": 873441376,
+      "architectures": [
+        "Qwen3_5ForConditionalGeneration"
+      ],
+      "lora_target_modules": [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+        "in_proj_qkv",
+        "in_proj_z",
+        "in_proj_a",
+        "in_proj_b",
+        "out_proj"
+      ]
+    },
+    {
+      "base_id": "qwen3.5-2b",
+      "hf_repo": "Qwen/Qwen3.5-2B",
+      "revision": "15852e8c16360a2fea060d615a32b45270f8a8fc",
+      "parameters": 2274072416,
+      "architectures": [
+        "Qwen3_5ForConditionalGeneration"
+      ],
+      "lora_target_modules": [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+        "in_proj_qkv",
+        "in_proj_z",
+        "in_proj_a",
+        "in_proj_b",
+        "out_proj"
+      ]
+    }
+  ],
+  "max_lora_rank": 64,
+  "max_total_bytes": 6442450944,
+  "cpm_score_version": 1
+}

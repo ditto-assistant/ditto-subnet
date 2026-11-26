@@ -67,6 +67,25 @@ describe('public subnet Backroom boundary', () => {
     }
   })
 
+  // SN118 airdrop runs (SN-490) are Platform-owned. They must stay on the
+  // Platform admin API and never pick up the private Backroom's product
+  // airdrop dispatch, which holds a GitHub token for the product backend.
+  it('keeps SN118 airdrop runs on Platform, never the product airdrop dispatch', () => {
+    const service = readFileSync(join(appRoot, 'src', 'server', 'admin.service.ts'), 'utf8')
+    const airdrop = service.slice(service.indexOf('export async function previewAirdrop'))
+
+    expect(airdrop).toContain("'/api/v1/admin/airdrops/preview'")
+    expect(airdrop).toContain("'/api/v1/admin/airdrops/execute'")
+    for (const forbidden of [
+      'GITHUB_AIRDROP_TOKEN',
+      'prod-airdrop',
+      'dispatchProductionAirdrop',
+      'api.github.com',
+    ]) {
+      expect(service).not.toContain(forbidden)
+    }
+  })
+
   it('authenticates independently of the private Ditto app', () => {
     const sourceFiles = [
       'src/server/oauth.server.ts',

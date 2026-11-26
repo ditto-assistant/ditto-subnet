@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/challengerun"
+	"github.com/ditto-assistant/dittobench-api/internal/llm"
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
 	"github.com/ditto-assistant/dittobench-api/internal/store"
@@ -23,6 +25,20 @@ import (
 // endpoint; the report never enters the agent score ledger.
 const generatorRoundMode = "generator-round-v1"
 
+// generatorFrontierOracleMode runs the frontier oracle (a subnet-run
+// reference harness) on a round dataset's frontier candidates: the cases the
+// panel left unsolved, named by OracleCaseIDs. Each case is answered from
+// only its challenge.OracleContext (challengerun.ExecuteOracle) and graded
+// like a panel case. It is advertised under its own name, so Platform leases
+// an oracle job only to a validator whose scorer runs it.
+const generatorFrontierOracleMode = "generator-frontier-oracle-v1"
+
+// isGeneratorRoundMode reports whether a private dataset mode carries a round
+// dataset: a panel run or a frontier oracle run.
+func isGeneratorRoundMode(mode string) bool {
+	return mode == generatorRoundMode || mode == generatorFrontierOracleMode
+}
+
 // generatorRoundMaxCasesFeature advertises the largest round column (cases
 // per pack) this scorer runs: the pack contract's challenge.MaxCases. The
 // validator forwards it to Platform as generator_round_max_cases, and Platform
@@ -30,6 +46,16 @@ const generatorRoundMode = "generator-round-v1"
 // scorer without the feature is assumed to run the legacy 32-case column.
 func generatorRoundMaxCasesFeature() string {
 	return fmt.Sprintf("generator-round-max-cases-%d", challenge.MaxCases)
+}
+
+// generatorFrontierOracleModelFeaturePrefix names the model this scorer lets
+// a frontier oracle run answer on (llm.FrontierOracleModel). The validator
+// forwards it as generator_frontier_oracle_models; Platform mints an oracle
+// grant on a non-contract model only for a validator that advertises it.
+const generatorFrontierOracleModelFeaturePrefix = "generator-frontier-oracle-model:"
+
+func generatorFrontierOracleModelFeature() string {
+	return generatorFrontierOracleModelFeaturePrefix + llm.FrontierOracleModel
 }
 
 // generatorRoundBenchFeaturePrefix names one bench version this scorer runs a
@@ -45,6 +71,9 @@ func generatorRoundBenchFeatures() []string {
 	versions := challenge.SupportedGradingBenchVersions()
 	out := make([]string, 0, len(versions))
 	for _, v := range versions {
+		if !generatorRoundCatalogReady(v) {
+			continue
+		}
 		out = append(out, fmt.Sprintf("%s%d", generatorRoundBenchFeaturePrefix, v))
 	}
 	return out
@@ -54,7 +83,14 @@ func generatorRoundBenchFeatures() []string {
 // round at v runs packs graded at any supported policy through v, and v itself
 // must be a supported policy so the round's newest columns can use it.
 func runsGeneratorRoundAt(v int) bool {
-	return challenge.SupportsGradingBenchVersion(v)
+	return challenge.SupportsGradingBenchVersion(v) && generatorRoundCatalogReady(v)
+}
+
+// generatorRoundCatalogReady is the capability rule supportedBenchVersions
+// applies: a v18+ round needs the pinned catalog snapshot, so a build without
+// it neither advertises nor admits one.
+func generatorRoundCatalogReady(v int) bool {
+	return v < protocol.BenchVersionV18 || catalog.V18SnapshotReady() == nil
 }
 
 func validateGeneratorRoundRequest(req submitRequest, enabled bool) error {
@@ -64,7 +100,50 @@ func validateGeneratorRoundRequest(req submitRequest, enabled bool) error {
 	if len(req.PrivateDatasetBytes) == 0 || len(req.PrivateDatasetBytes) > challenge.MaxRoundDatasetBytes || !canonicalSHA256(req.ExpectedDatasetSHA256) {
 		return errors.New("generator round dataset bytes and canonical digest required")
 	}
+	if req.PrivateDatasetMode != generatorFrontierOracleMode {
+		if len(req.OracleCaseIDs) != 0 {
+			return errors.New("oracle_case_ids are only valid in " + generatorFrontierOracleMode)
+		}
+		return nil
+	}
+	if req.InferenceSessionID == "" {
+		// The oracle answers only on its Platform grant's pinned model and
+		// route (claimRunForMode). A sessionless run would answer through the
+		// legacy gateway on the contract model instead, and Platform would
+		// record that as the oracle's evidence (SN-496).
+		return errors.New("a frontier oracle run requires a ticket inference session")
+	}
+	if len(req.OracleCaseIDs) == 0 || len(req.OracleCaseIDs) > challenge.MaxRoundColumns*challenge.MaxCases {
+		return fmt.Errorf("a frontier oracle run needs 1..%d oracle_case_ids", challenge.MaxRoundColumns*challenge.MaxCases)
+	}
+	seen := make(map[string]bool, len(req.OracleCaseIDs))
+	for _, id := range req.OracleCaseIDs {
+		if id == "" || seen[id] {
+			return errors.New("oracle_case_ids must be distinct round case ids")
+		}
+		seen[id] = true
+	}
 	return nil
+}
+
+// oracleCasesByColumn groups a frontier oracle run's round case ids by
+// column, in request order, refusing an id the dataset does not hold.
+func oracleCasesByColumn(columns []challenge.RoundColumnPack, ids []string) (map[string][]string, error) {
+	known := map[string]bool{}
+	for _, col := range columns {
+		for _, c := range col.Pack.Cases {
+			known[challenge.RoundCaseID(col.ColumnID, c.ID)] = true
+		}
+	}
+	out := map[string][]string{}
+	for _, id := range ids {
+		if !known[id] {
+			return nil, fmt.Errorf("oracle case %q is not in the round dataset", id)
+		}
+		columnID, caseID, _ := strings.Cut(id, "/")
+		out[columnID] = append(out[columnID], caseID)
+	}
+	return out, nil
 }
 
 // runGeneratorRoundJob executes every column of a round dataset against one
@@ -102,9 +181,19 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 		s.store.Fail(runID, err.Error())
 		return
 	}
+	oracle := req.PrivateDatasetMode == generatorFrontierOracleMode
+	var oracleCases map[string][]string
 	total := 0
-	for _, col := range columns {
-		total += len(col.Pack.Cases)
+	if oracle {
+		if oracleCases, err = oracleCasesByColumn(columns, req.OracleCaseIDs); err != nil {
+			s.store.Fail(runID, err.Error())
+			return
+		}
+		total = len(req.OracleCaseIDs)
+	} else {
+		for _, col := range columns {
+			total += len(col.Pack.Cases)
+		}
 	}
 	s.store.Update(runID, func(j *store.Job) { j.N = total })
 
@@ -148,6 +237,13 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 			return
 		}
 		s.broker.setHarnessBase(sessionID, env["DITTOBENCH_INFERENCE_BASE_URL"])
+	}
+	if oracle && sessionID != "" {
+		if snapshot, snapErr := s.broker.snapshot(sessionID); snapErr == nil && snapshot.FrontierOracleRun {
+			// Platform serves the grant's pinned model whatever the harness
+			// names; tell it the one it actually answers on.
+			env["DITTOBENCH_MODEL"] = llm.FrontierOracleModel
+		}
 	}
 	gateway := env["DITTOBENCH_INFERENCE_BASE_URL"]
 	handle, err = s.sandbox.Run(req.BenchmarkRuntime.sandboxContext(ctx), image, env)
@@ -200,7 +296,13 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 	// observed tool_endpoint. A harness built for the scored path rejects a
 	// /run without them. Each case's fixture is registered just before its
 	// /run, under the opaque ID the harness sees.
-	tools := catalog.CatalogForSeed(req.BenchVersion, seed)
+	tools, err := catalog.CatalogForSeedChecked(req.BenchVersion, seed)
+	if err != nil {
+		// The catalog is scorer-owned: a retryable infrastructure failure,
+		// never the miner's.
+		s.store.FailWith(runID, "tool catalog unavailable: "+err.Error(), toolEndpointInfrastructureFailure())
+		return
+	}
 	toolSrv := toolexec.NewServer()
 	toolEndpoint, stopToolSrv, err := s.startToolServerForSession(
 		toolSrv, handle.SourceIP, req.BenchVersion, sessionID, concurrency,
@@ -223,7 +325,7 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 	started := time.Now()
 	perCase := make([]protocol.CaseScore, 0, total)
 	for _, col := range columns {
-		outcomes, execErr := challengerun.Execute(ctx, handle.BaseURL, col.Pack, challengerun.Options{
+		opts := challengerun.Options{
 			Concurrency: concurrency,
 			InferenceBaseURL: func(opaqueCaseID string) string {
 				return v13CaseInferenceBaseURL(req.BenchVersion, gateway, opaqueCaseID)
@@ -234,7 +336,18 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 			Tools:         tools,
 			ToolEndpoint:  prepareCase,
 			ObservedCalls: toolSrv.Observed,
-		})
+		}
+		var outcomes []challengerun.CaseOutcome
+		var execErr error
+		if oracle {
+			ids := oracleCases[col.ColumnID]
+			if len(ids) == 0 {
+				continue
+			}
+			outcomes, execErr = challengerun.ExecuteOracle(ctx, handle.BaseURL, col.Pack, ids, opts)
+		} else {
+			outcomes, execErr = challengerun.Execute(ctx, handle.BaseURL, col.Pack, opts)
+		}
 		if execErr != nil {
 			if errors.Is(execErr, challengerun.ErrHarnessUnavailable) {
 				s.store.FailWith(runID, fmt.Sprintf("column %s: %v", col.ColumnID, execErr), toolEndpointInfrastructureFailure())
@@ -266,7 +379,7 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 	s.store.SetStage(runID, store.StatusScoring, len(perCase), total)
 	report := generatorRoundReport(runID, seed, req, perCase, tokenUsage)
 	s.store.Finish(runID, report)
-	log.Printf("generator round %s done: columns=%d cases=%d memory_mean=%.3f elapsed=%s", runID, len(columns), len(perCase), report.MemoryMean, time.Since(started).Round(time.Second))
+	log.Printf("generator round %s done: oracle=%t columns=%d cases=%d memory_mean=%.3f elapsed=%s", runID, oracle, len(columns), len(perCase), report.MemoryMean, time.Since(started).Round(time.Second))
 }
 
 // generatorRoundReport shapes round results as a score report. Composite is

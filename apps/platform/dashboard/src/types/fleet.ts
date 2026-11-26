@@ -156,7 +156,7 @@ export interface ConfirmationSubject {
 export interface ConfirmationProgress {
   bundle_id: string;
   slot_id: string;
-  bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+  bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
   mode: "shadow" | "enforce";
   profile_revision: string;
   attempt: number;
@@ -212,6 +212,12 @@ export interface FleetEntry {
   claimed_slots?: Array<{ slot_id: string; agent_id: string }>;
   healthy_slots?: string[];
   configured_slots?: number | null;
+  /** Slots this host's memory admits at the live harness cap; null when unannounced. */
+  memory_admitted_slots?: number | null;
+  /** Least host memory (MiB) that admits every configured slot at the live cap. */
+  memory_required_mib?: number | null;
+  /** Why memory admits fewer slots than configured, with the fix path. */
+  memory_note?: string | null;
   /** Backroom refuses new work for this exact validator; live leases may drain. */
   issuance_paused?: boolean;
   /** Ordinary slots currently funded by Platform policy. Confirmation slots are separate. */

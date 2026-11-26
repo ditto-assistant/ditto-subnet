@@ -125,6 +125,11 @@ WORKER_LEASE_ORPHANED: Final = "worker-lease-orphaned"
 SCREENING_LEASE_EXPIRED: Final = "screening-lease-expired"
 SOURCE_REVIEW_INCONCLUSIVE: Final = "source-review-inconclusive"
 REPEATEDLY_INCONCLUSIVE: Final = "repeatedly-inconclusive"
+STATIC_MALICIOUS_SOURCE: Final = "static-malicious-source"
+"""The deterministic static malicious-source preflight found a decisive,
+reachable match before any submission-controlled build or runtime started. With
+model source review retired (2026-11-07) the mechanical lane rejects it outright
+with file and line locations; no reviewer resolves it and nothing is held."""
 SOURCE_REVIEW_CONFIRMED_VIOLATION: Final = "source-review-confirmed-violation"
 """A policy v13 invariant breach whose causal proof is complete and which the
 independent L3 violation adjudicator confirmed after it could have refuted it.
@@ -133,6 +138,11 @@ VERIFICATION_INCOMPLETE_UNREVIEWABLE: Final = "verification-incomplete-unreviewa
 """Historical platform verification rejection, retained for existing records.
 Repeated inconclusive, infrastructure, and provider failures now stay parked for
 manual review or retry; they do not produce this policy reason code."""
+TOOL_CATALOG_CONTEXT_OVERFLOW: Final = "tool-catalog-context-overflow"
+"""Handed a full-size benchmark tool catalog, the harness forwarded a model
+request whose provable token lower bound exceeds the locked scoring model's
+context window. Every provider refuses that request on every scored case that
+serves such a catalog, so the miner owns it."""
 V2_COMPLETE_STATIC_REVIEWS: Final = 2
 """Historical threshold retained for compatibility; no longer a rejection rule."""
 
@@ -217,6 +227,8 @@ _REGISTRY: Final[tuple[ScreeningReasonCode, ...]] = (
     ScreeningReasonCode("docker-build", _A, _WORKER),
     ScreeningReasonCode("docker-build-timeout", _A, _WORKER),
     ScreeningReasonCode("container-harness-contract", _A, _WORKER),
+    # The static malicious-source safety preflight (mechanical lane).
+    ScreeningReasonCode(STATIC_MALICIOUS_SOURCE, _A, _WORKER),
     # The Rust-only harness contract was replaced by the container contract.
     ScreeningReasonCode("rust-harness-contract", _A, _RETIRED),
     ScreeningReasonCode("exact-cross-miner-duplicate", _A, _WORKER),
@@ -230,6 +242,9 @@ _REGISTRY: Final[tuple[ScreeningReasonCode, ...]] = (
     ScreeningReasonCode("seed-http-error", _A, _WORKER),
     ScreeningReasonCode("seed-oversized-response", _A, _WORKER),
     ScreeningReasonCode("seed-unreachable", _A, _WORKER),
+    # Tool-catalog probe rejection: the forwarded model request cannot fit the
+    # scoring model's context window once the catalog is full size.
+    ScreeningReasonCode(TOOL_CATALOG_CONTEXT_OVERFLOW, _A, _WORKER),
     # --- POLICY: held without a fault finding.
     ScreeningReasonCode(SOURCE_REVIEW_INCONCLUSIVE, _POLICY, _WORKER),
     # Platform's exhaustion hold after repeated inconclusive attempts.
@@ -305,3 +320,10 @@ SEED_PROBE_REASON_CODES: Final[tuple[str, ...]] = tuple(
     if code.startswith("seed-")
 )
 """Seeding-probe rejections, each with its own public guidance in Platform."""
+
+TOOL_CATALOG_PROBE_REASON_CODES: Final[tuple[str, ...]] = tuple(
+    code
+    for code in reason_codes(ReasonCodeClass.AGENT_FAULT)
+    if code.startswith("tool-catalog-")
+)
+"""Tool-catalog probe rejections, each with its own public guidance in Platform."""

@@ -138,7 +138,12 @@ platform_pg_user: ditto
 # caused the 2026-07-16 prod outage; 5/30 matches the live hotfix. Postgres
 # max_connections is 100 on the shared pg VM, so dev+prod at 30 each still
 # leave headroom.
-platform_pg_pool_min_size: 5
+#
+# The minimum is 20 (2026-11): with 5 kept the pool burst to 30 under normal
+# load, and SQLAlchemy closes every overflow connection on check-in, so the API
+# spent 3-4% of its CPU opening and closing connections. The ceiling, and so
+# the max_connections budget, is unchanged.
+platform_pg_pool_min_size: 20
 platform_pg_pool_max_size: 30
 
 # GCS S3-interop object storage. The access key is the HMAC access id
@@ -235,6 +240,11 @@ secret_screener_controller_api_token: ""
 # Bearer for the generator competition scorer (generator_scorer role). Empty
 # leaves every /api/v1/generator-scorer endpoint disabled.
 secret_generator_scorer_token: ""
+# Bearer for the CPM (model_context) scorer (cpm_scorer role), rendered as
+# DITTO_MODEL_CONTEXT_SCORER_TOKEN. Empty leaves every /model-context-scorer
+# endpoint answering 503. Naming the secret (model-context-scorer-token-prod,
+# gcp-platform/cpm-scorer.tf) in host_vars is what turns the lane on.
+secret_model_context_scorer_token: ""
 
 # Platform-owned inference stays dark until the coordinated rollout enables it.
 # Re-dispatch a provably receipt-free confirmation 429/503 once instead of
@@ -244,7 +254,7 @@ platform_confirmation_backpressure_retry: false
 platform_inference_proxy_enabled: false
 platform_inference_proxy_required: false
 secret_platform_openrouter_key: validator-openrouter-key
-platform_inference_allowed_models: qwen/qwen3-32b,openai/gpt-oss-20b
+platform_inference_allowed_models: qwen/qwen3-32b,openai/gpt-oss-20b,z-ai/glm-5.3-flash
 platform_inference_provider: nebius
 # Initial v7 mode: one reviewed logical route, OpenRouter speed sorting, and
 # healthy fallback. The DB-backed per-provider optimizer remains dark.

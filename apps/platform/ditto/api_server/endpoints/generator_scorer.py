@@ -81,6 +81,13 @@ from ditto.api_server.generator_competition import (
     record_result,
     record_scorer_fault,
 )
+from ditto.api_server.generator_prescreens import (
+    is_prescreen_index,
+    lease_prescreen_work,
+    record_prescreen_fault,
+    record_prescreen_generation,
+    record_prescreen_score,
+)
 from ditto.api_server.generator_rounds import (
     RoundResultRejected,
     lease_round_work,
@@ -95,7 +102,7 @@ from ditto.api_server.generator_scorer_capability import (
     record_heartbeat,
     refusal,
 )
-from ditto.db.models import GeneratorProbeEpoch
+from ditto.db.models import GeneratorPrescreen, GeneratorProbeEpoch, GeneratorRound
 from ditto.db.queries.generator import get_run, get_submission
 
 logger = logging.getLogger(__name__)
@@ -313,22 +320,29 @@ async def post_fault(
         )
     if payload.work == "round":
         try:
-            row = await record_round_fault(session, payload, now=now)
+            if payload.round_index is not None and is_prescreen_index(
+                payload.round_index
+            ):
+                prescreen = await record_prescreen_fault(session, payload, now=now)
+                index, status = prescreen.prescreen_index, prescreen.status
+            else:
+                row = await record_round_fault(session, payload, now=now)
+                index, status = row.round_index, row.status
         except RoundResultRejected as exc:
             await session.rollback()
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         await session.commit()
         logger.warning(
             "generator scorer fault round=%s kind=%s status=%s scorer=%s",
-            row.round_index,
+            index,
             payload.error_kind,
-            row.status,
+            status,
             payload.scorer_version,
         )
         return GeneratorScorerFaultAck(
             work="round",
-            action="voided" if row.status == "void" else "released",
-            round_status=row.status,
+            action="voided" if status == "void" else "released",
+            round_status=status,
         )
     if payload.submission_id is None or payload.run_id is None:
         raise HTTPException(
@@ -364,7 +378,8 @@ async def post_fault(
 async def lease_round(
     _scorer: ScorerDep, session: SessionDep, capability: CapabilityDep
 ) -> GeneratorRoundWorkResponse:
-    """Lease the oldest round needing generation or scoring, if any.
+    """Lease the oldest round needing generation or scoring, if any, else the
+    oldest pre-screen batch (its index rides in ``round_index``).
 
     A generating round whose ``cases_per_column`` the polling scorer refuses
     is voided with an ``infra:`` reason instead of leased.
@@ -376,54 +391,81 @@ async def lease_round(
         lease = await lease_round_work(
             session, resolved=resolved, now=now, capability=capability
         )
+        prescreen = (
+            await lease_prescreen_work(
+                session, resolved=resolved, now=now, capability=capability
+            )
+            if lease is None
+            else None
+        )
     except RoundResultRejected as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await session.commit()
-    if lease is None:
-        return GeneratorRoundWorkResponse()
-    logger.info(
-        "generator round leased round=%s kind=%s attempt=%d",
-        lease.row.round_index,
-        lease.work.kind,
-        lease.row.lease_attempts,
-    )
-    return GeneratorRoundWorkResponse(work=lease.work)
+    if lease is not None:
+        logger.info(
+            "generator round leased round=%s kind=%s attempt=%d",
+            lease.row.round_index,
+            lease.work.kind,
+            lease.row.lease_attempts,
+        )
+        return GeneratorRoundWorkResponse(work=lease.work)
+    if prescreen is not None:
+        logger.info(
+            "generator pre-screen leased prescreen=%s kind=%s attempt=%d",
+            prescreen.row.prescreen_index,
+            prescreen.work.kind,
+            prescreen.row.lease_attempts,
+        )
+        return GeneratorRoundWorkResponse(work=prescreen.work)
+    return GeneratorRoundWorkResponse()
 
 
 @router.post("/round-results", response_model=GeneratorRoundAck)
 async def post_round_results(
     payload: GeneratorRoundGenerateResult, _scorer: ScorerDep, session: SessionDep
 ) -> GeneratorRoundAck:
-    """Store a round's generated dataset for the current generation lease."""
+    """Store a round's (or a pre-screen batch's) generated dataset for the
+    current generation lease."""
+    now = datetime.now(UTC)
     try:
-        row = await record_generation(session, payload, now=datetime.now(UTC))
+        row: GeneratorRound | GeneratorPrescreen
+        if is_prescreen_index(payload.round_index):
+            row = await record_prescreen_generation(session, payload, now=now)
+        else:
+            row = await record_generation(session, payload, now=now)
     except RoundResultRejected as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await session.commit()
     logger.info(
         "generator round generated round=%s status=%s dataset=%s",
-        row.round_index,
+        payload.round_index,
         row.status,
         row.dataset_sha256,
     )
-    return GeneratorRoundAck(round_index=row.round_index, status=row.status)  # type: ignore[arg-type]
+    return GeneratorRoundAck(round_index=payload.round_index, status=row.status)  # type: ignore[arg-type]
 
 
 @router.post("/round-score", response_model=GeneratorRoundAck)
 async def post_round_score(
     payload: GeneratorRoundScoreResult, _scorer: ScorerDep, session: SessionDep
 ) -> GeneratorRoundAck:
-    """Store a round's scored matrix for the current scoring lease."""
+    """Store a round's (or a pre-screen batch's) scored matrix for the current
+    scoring lease."""
+    now = datetime.now(UTC)
     try:
-        row = await record_round_score(session, payload, now=datetime.now(UTC))
+        row: GeneratorRound | GeneratorPrescreen
+        if is_prescreen_index(payload.round_index):
+            row = await record_prescreen_score(session, payload, now=now)
+        else:
+            row = await record_round_score(session, payload, now=now)
     except RoundResultRejected as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await session.commit()
-    logger.info("generator round scored round=%s", row.round_index)
-    return GeneratorRoundAck(round_index=row.round_index, status=row.status)  # type: ignore[arg-type]
+    logger.info("generator round scored round=%s", payload.round_index)
+    return GeneratorRoundAck(round_index=payload.round_index, status=row.status)  # type: ignore[arg-type]
 
 
 @router.get("/dueling-work", response_model=DuelingWorkResponse)

@@ -31,7 +31,7 @@ stamp is absent.
 
 | Dimension | Limit | Notes |
 |---|---|---|
-| Memory | **8192 MiB** (live) | `--memory`, with `--memory-swap` set equal, so no swap. Files in `/tmp` are tmpfs pages and count against this cap |
+| Memory | **2048 MiB** (live) | `--memory`, with `--memory-swap` set equal, so no swap. Files in `/tmp` are tmpfs pages and count against this cap: a full 512 MiB `/tmp` leaves 1,536 MiB for everything else. The cap in force is `sandbox_memory_limit_mib` on `GET /api/v1/public/validators` |
 | CPU | 2 | `--cpus 2` |
 | PIDs | 512 | Fork-bomb bound |
 | `/tmp` | 512 MiB tmpfs, `noexec` | The only writable path. The root filesystem is read-only |
@@ -52,6 +52,16 @@ The scorer applies the envelope's 64 MiB peak tolerance and 1024 MiB host
 floor when it judges an OOM kill. Validators hold back a 1024 MiB host
 reserve (`VALIDATOR_HOST_MEMORY_RESERVE_MIB`) from harness caps.
 
+The memory cap was lowered from 8192 MiB to 2048 MiB on 2026-11-22 (SN-488).
+Eight is the most any one validator runs, so the fleet can run at most 8 times
+the number of validators. Memory is one limit; the operator's per-validator
+slot cap (below) is another, and a validator runs the smaller of the two. At
+2048 MiB the current hosts' memory admits 7, 3, 7, 8 and 8 slots: 33 of the 40
+the five validators advertise. Keep harnesses lightweight.
+
+Platform stamps the live value on every lease, so a lease issued before a
+change keeps the cap it was issued with.
+
 ## Who pays for a resource failure
 
 The scorer decides from physical evidence alone, before it removes the
@@ -61,15 +71,16 @@ samples taken before the kernel removes a killed cgroup are still available.
 
 | Code | Charged to | Rule |
 |---|---|---|
-| `harness_oom` | **Agent** (attempt consumed, 6 h cooldown) | Three conditions must all hold. (1) The kernel recorded an OOM kill: `OOMKilled`, or `memory.events` `oom_kill > 0`. (2) The harness reached its own cap: `memory.events` `oom > 0`, or `memory.peak` ≥ cap − 64 MiB. (3) The lowest host `MemAvailable` in the samples before the kill stayed above 1024 MiB. Sent as terminal `sandbox_failure`, so the wire kind matches the charge |
-| `host_memory_pressure` | Validator (no fault; slot blocked 10 min) | An OOM kill where condition 2 or 3 fails, or the evidence is missing |
+| `harness_oom` | **Agent**: a failed agent run (attempt consumed, 6 h cooldown), never retried as infrastructure, on leases issued from **Wed 2026-11-25 12:00 America/Toronto**. On earlier leases it is parked as no-fault infrastructure with detail `harness_oom_grace` | The kernel recorded an OOM kill (`OOMKilled`, or `memory.events` `oom_kill > 0`) and one of two proofs holds. **Proven:** `memory.events` counted an `oom`, which the kernel records only when the harness's own cgroup reached its own cap. How much memory the host had left does not matter. **Inferred:** `memory.peak` ≥ cap − 64 MiB, and the lowest host `MemAvailable` in the samples before the kill stayed above 1024 MiB. Sent as terminal `sandbox_failure`, so the wire kind matches the charge |
+| `host_memory_pressure` | Validator (no fault; retried; slot blocked 10 min) | An OOM kill with neither proof: the harness's own cgroup never reached its cap, and its peak was below the cap or the host was short of memory (or unobserved) at the kill. This is the host's OOM killer, not the harness's cap |
 | `harness_killed_137` | Validator on the first validator. Agent if a second validator reports the same | Exit 137 (SIGKILL) with no OOM flag. Nothing shows who sent the signal. It never overrides a verdict the scored path already reached |
 | `sandbox_tmpfs_exhausted` | Validator (no fault) | `/tmp` reached its declared size |
 | `inference_allowance_exhausted` | Agent | The harness spent its request or token wall |
 | `seed_deadline_exceeded` | Not attributed; retried inside the ordinary budget | A loaded host and a slow harness look the same |
 
 Platform charges a `sandbox_oom` hand-back only when its detail is
-`harness_oom`. A validator that predates this rule cannot prove the
+`harness_oom` and the lease was issued at or after the effective time above;
+a run already under way at that time is not charged. A validator that predates this rule cannot prove the
 conditions, so its plain `sandbox_oom` is parked as `infrastructure`.
 
 ## Host-memory admission
@@ -88,17 +99,31 @@ host's only healthy slot: the reservation is sized against
 `min(allowed, healthy) − 1`, so a one-slot host serves ordinary work and keeps
 the canonical quorum at three distinct validators.
 
-With the 8192 MiB cap and the 1024 MiB reserve:
+Running `N` slots takes at least `N × cap + reserve` of host memory. One slot
+needs `cap + 1024`. With the 2048 MiB cap and the 1024 MiB reserve:
 
-| Host RAM | Slots |
+| Slots | Host memory needed |
 |---|---|
-| 8 GiB | 0 |
-| 16 GiB | 1 |
-| 32 GiB | 3 |
-| 64 GiB | 7 |
+| 1 | 3,072 MiB |
+| 4 | 9,216 MiB |
+| 8 | 17,408 MiB |
 
-The worker logs the narrowing. The heartbeat's `healthy_slots`, and with it
-`serviceable_slots` in Backroom `get_validator_capacity`, reflect it.
+A nominal 8 GiB host reports about 7,934 MiB, so memory admits 3 of its slots;
+a 16 GiB host admits 7, and 32 GiB or more admits all 8. The operator's
+per-validator slot cap (Backroom slot settings) is a separate limit, and
+dispatch funds the smaller of the two per validator.
+
+The worker logs the narrowing on every change, with the memory it would need
+for one slot (when none fit) and for every configured slot. A host that fits no
+harness logs at error level. The heartbeat reply carries the live cap, so a host
+re-sizes as soon as the operator changes it, without waiting for a lease.
+
+The heartbeat's `healthy_slots`, and with it `serviceable_slots` in Backroom
+`get_validator_capacity`, reflect it. The public `/validators` view and the
+operations dashboard show each host's `memory_admitted_slots`,
+`memory_required_mib` and a `memory_note` with that fix path, and mark the
+slots past it `Memory-limited`. A host whose memory admits no slot reads
+`critical` there.
 
 ## Practising against the envelope
 
@@ -110,3 +135,23 @@ peak above 85% prints a warning.
 
 A host process is not a cgroup, so treat the number as an estimate. Leave
 headroom.
+
+## Your agent's measured memory
+
+Every validator run of your agent reports what its scorer measured inside the
+sandbox. The figures are published on your agent's public pipeline
+(`GET /api/v1/public/agent/{agent_id}/pipeline`, field `harness_memory`) and
+in the dashboard's **Harness memory** section:
+
+- **Peak:** the harness cgroup's `memory.peak`, the kernel's high-water mark.
+- **P50 and P95:** time-weighted percentiles of the cgroup's `memory.current`,
+  sampled every 2 s (every 0.5 s once the peak passes 85% of the cap) at
+  1 MiB resolution. Each sample counts for the time until the next one, so the
+  faster sampling near the cap does not inflate P95.
+- **Per run:** the validator, bench version, lease time and outcome (scored or
+  failed), with the cap the run ran under. Failure details stay private.
+
+Measurement started with v0.502.0, and a validator reports it only once it
+runs that release. An agent with few or no measured runs was not measured; it
+is not reported as light. Each run is measured separately, and the same agent
+can read tens of MiB apart on different validators.

@@ -152,7 +152,13 @@ in it (`wave_window_opened_seed_count`, a count) and `wave_growth_paused`, true
 when the window's `wave_seeds_per_window` budget is spent. A paused window
 withholds only fresh shared seeds; catch-up and open waves still lease. Null
 window fields at a positive cadence mean no ledger pin anchors a window, and
-pacing fails open. A
+pacing fails open. `retest_mode` names the lane's mode. Under `season_duel`
+(bench v16+, `docs/title-duels.md`) `season_duel_seed_count` is the season's
+K, `season_duel_anchor_champion_id` the champion the season's family is
+anchored on (the season opener, which a mid-season crown change does not
+move) and `season_duel_held_seed_count` how many of the K duel seeds this
+agent already ran; all three are null under `continual` or below the dueling
+floor. A
 `chain_unavailable` decision means the block read failed, not that the lane is
 idle. The tool also returns ticket counts and the latest ticket and accepted
 result. Outstanding work is only a count, `pending_seed_count`. Pending seed
@@ -182,6 +188,23 @@ epoch pin, and the seed re-runs at the next `void_generation`. Validators fold
 the served `confirmation_history`, so no protocol change is involved.
 `list_infra_voids` reads them back with the re-run composite once it lands.
 
+The same tool voids a canonical quorum score (SN-489). Copy the validator,
+seed, `run_id` and composite from `get_agent_scores` or a `canonical_flagged`
+row; `sampleKind: auto` resolves a key's canonical run by its run id. The
+guards and evidence gate are the same, read off the score's own serving grant.
+A canonical score is one signed, upserted row per validator, so it cannot be
+set aside in place: `applied` queues a same-validator replacement re-test
+(basis `provider_outage_void`, `retest_request_id` derived from the voided
+run) on the same seed. It is leased ahead of ordinary quorum work on any free
+slot and does not spend the miner's retry budget. The score stays canonical
+until the replacement lands; then the score path appends `score_invalidated`
+(with the contaminated score) and swaps the row, and every median read
+recomputes. An agent still accumulating its quorum cannot finalize on the
+outage run, because its ticket is live again. A replacement that fails or
+expires closes (`retest_closed` on a repeat) and leaves the score as it was;
+retry with `replace_validator_score`. `get_validator_score_replacement` shows
+the pending request.
+
 `get_provider_outages` (`backroom:read`) reads the relay-owned
 `provider_outage_circuits` rows and the post-outage sweep. The circuit closes
 on any successful call, so in a low-balance flap a retest can still finish with
@@ -195,9 +218,11 @@ grant's first and last outage-class failure as the outage window. Each
 append-only run (`outage_sweep_runs`) records its watermark range, counts,
 voids, outage windows, per-row errors, and `canonical_flagged`. Those are
 canonical scores accepted in the same range whose grant shows the same
-evidence. The sweep never replaces them; review each with
-`replace_validator_score`. A row that errors is listed and skipped, not
-retried. `withFindings` keeps only runs that voided, flagged or errored.
+evidence. The sweep voids each one through the canonical path above (source
+`outage_sweep`, at most 2 automatic re-tests per agent, version and validator)
+and records `void_disposition`, `void_request_id` and `void_detail` on the flag.
+Anything other than `applied` or `already_queued` needs operator review. A row
+that errors is listed and skipped, not retried. `withFindings` keeps only runs that voided, flagged or errored.
 
 The shadow DittoBench generator competition has its own operator surface.
 Miners submit CPU-only Go generator source. The scorer qualifies each upload:
@@ -230,9 +255,34 @@ opens, once it is scored or void.
     `false`.
   - `list_generator_submissions` and `get_generator_submission` return
     identity, status, qualification and latest round score, never source.
+  - `list_generator_source_files`, `search_generator_source` and
+    `read_generator_source_file` (`backroom:artifact:read`) read one
+    generator's stored source archive, the exact upload the miner signed:
+    the manifest, a regex or literal search, and a bounded excerpt. They work
+    for any status, so a hand-built case file (for example `data/world1.json`)
+    can be audited before a round runs it. Platform re-checks the archive
+    against `source_sha256` and records every read in the artifact fetch
+    audit under the operator's actor, keyed on the generator submission id
+    (`get_artifact_fetch_audit`). See "Reading miner source".
   - `get_generator_run` returns a qualification run's evaluation. Seeds appear
     only after the run finished, so an operator can regenerate its packs.
   - `get_generator_probe` returns probe epochs. The probe seed is never served.
+  - `list_generator_prescreens` pages pre-screen batches, newest first, with
+    counts by status. A pre-screen runs up to `prescreen_columns`
+    never-scored generators from the head of the challenger queue (one per
+    owner, each never pre-screened), `prescreen_cases` cases each on a fresh
+    secret seed, on the top `prescreen_panel_size` runnable ledger owners. It
+    opens only while no round and no other batch is in flight and the next
+    round opens more than an hour later, and a batch not scored within an hour
+    is void with its generators re-queued, so a batch always closes before the
+    next round opens. A panel agent banned or held mid-batch is dropped
+    (`dropped_reason` on its slot) and its results are not scored; with fewer
+    eligible agents than the batch's scoring `min_panel` left, the batch is
+    void at once. Its index
+    is at or above 2**40, apart from round indexes. A pre-screen is never paid
+    and never on the ledger: it only orders the challenger queue. The lane
+    ships off (`prescreen_enabled`) because it spends inference; enable it only
+    with explicit approval.
   - `get_generator_scorer` returns what each generator scorer advertised on
     its last work poll (version, min/max cases, grading versions, build
     revision, last seen) and whether the live one accepts the governing
@@ -244,6 +294,33 @@ opens, once it is scored or void.
     `min_round_validators` (the switch quorum, default 3) and the live
     scorer's `scorer_grading_versions`; `reason` names a quorum or scorer
     shortfall that keeps rounds on the previous version.
+  - `preview_generator_round` `challenger_queue` lists every never-scored
+    qualified miner generator in pick order, with its template `family`,
+    `family_position` and `status` (what a round opened now would do with
+    it: `challenger` or `counted` column, `in_flight`, `owner_has_column`
+    or `waiting`). A family is one owner key, joined with builds of one
+    template under other owners (same Go module and file count, archive size
+    within 1%). Families are interleaved: a family's next unmeasured build
+    waits until every other family has been measured as often, so one
+    coldkey's batch of near-identical builds no longer holds a challenger
+    column every round. Within a family position a pre-screen result comes
+    first (`prescreen_score`: a positive score, best first, then generators
+    not pre-screened yet, then a zero), which is how pre-screens promote the
+    best mini-scorers into challenger columns. Then the queue takes the
+    highest `novelty`: the share of a generator's probe cases (its case
+    fingerprints on the epoch's shared probe seed) that no measured generator
+    and no generator ahead of it emitted. A partial or mosaic copy of measured
+    cases, or a twin of a build already ahead, waits behind new cases.
+    Novelty is computed on emitted cases, not source, so padding an archive
+    cannot raise it. A generator whose column in an earlier round is
+    still in flight is skipped as a challenger. While `challenger_columns` is
+    above zero, every family with a build waiting gets one challenger column,
+    past `challenger_columns` up to the round's 8 columns, so a generator
+    qualified before a round opens is measured in that round unless the round
+    is full; queue order decides who waits then. Spare challenger columns go
+    on down the queue, then re-measure scored generators. The grouping only orders the
+    queue; it never rejects a generator. The public default generator is
+    never in the queue.
   - `list_generator_rounds`, `get_generator_round`, `preview_generator_round`
     and `get_generator_round_loop` expose the following:
     - the schedule;
@@ -286,10 +363,45 @@ opens, once it is scored or void.
     publish the on-chain commitment of a round that has not opened.
   - `release_generator_round_lease` (`RELEASE GENERATOR ROUND LEASE`) frees a
     quiet validator's round lease.
+  - Frontier cases. A round case no two independent panel owners solved is
+    `unsolved`, but every agent failing a case does not prove it broken.
+    With `frontier_weight > 0` and `frontier_oracle_agent_id` set, a scored
+    round's unsolved miner-column cases go to the frontier oracle (that
+    reference agent, answering each case from a bounded context derived from
+    its answer key) on a validator whose scorer runs
+    `generator-frontier-oracle-v1`. Cases it passes are attested, and each
+    column's secret-seed audit sample waits for a ruling.
+    `list_generator_frontier_audits` is the queue and
+    `get_generator_round_frontier` the round's lane (candidates, oracle
+    results, attestations, audits, applied credit, pre-frontier scores).
+    `get_generator_frontier_audit` (`backroom:artifact:read`, private case
+    content) shows each sampled case's question, gold, declared competitors,
+    cited evidence, panel and oracle scores, and the user's visible memory
+    with a `q` search for a contradicting fact. `rule_generator_frontier_audit`
+    (`RULE FRONTIER AUDIT {round} {column} VALID|INVALID`) keeps the
+    column's attestations or, naming the invalid sampled cases, voids all of
+    its frontier credit for the round; the round settles once every audit is
+    ruled, after `frontier_audit_grace_hours`, or when the oracle times out.
+    `settle_generator_round_frontier` (`SETTLE GENERATOR FRONTIER {round}`)
+    settles it now. Until a round settles it pays its unattested score.
+    With `frontier_escalation_agent_id` set (off by default), the oracle's
+    report does not open the audits yet: a stronger escalation agent
+    re-checks a capped, secret-seed sample of the cases the oracle failed,
+    and its passes join the attestations and the same audit.
+    `get_generator_round_frontier` shows it as `escalation` (selected cases,
+    skipped columns and why, outcome, results); the knobs are in
+    `get_generator_competition_settings`.
   - `rotate_dueling_season` (`ROTATE DUELING SEASON`, audited reason) closes
     the open dueling season at the next round boundary, or on the next
     round-driver tick with `immediate: true`; the next season opens at the
     following boundary on a fresh battery. Columns are never swapped in place.
+  - `retry_dueling_slice_preparation` (`RETRY DUELING SLICE {id}`, audited
+    reason, `expectedStatus: failed` plus the exact `expectedError`) re-queues
+    one failed slice preparation of an open season (attempts kept, error
+    cleared). A scorer-refused request (`infra: unsupported_request`, such as
+    a digest mismatch on the pinned source) needs a rotation instead unless
+    `force: true`. `list_dueling_slices` shows `retryable`, `retry_refusal`
+    and the last retry.
   - `set_generator_competition_settings` also carries `dueling_enabled`
     (ships `false`) and `rounds_per_season` (default 1); Platform refuses to
     enable dueling with `rounds_per_season x epochs_per_round < 2`.
@@ -318,6 +430,45 @@ Activating the lane in shadow takes four steps:
 
 There is no enforcing mode: ledger entries stay `weight_eligible=false`.
 
+The model_context (CPM) competition (contract
+`docs/research/cpm/competition-v1.md`, section 8) has its own operator
+surface. Miners submit small open-weight models pinned at a Hugging Face
+revision; Platform screens them, opens seasons whose three seeds come from the
+season-open block hash, and leases runs to the CPM scorer. Weights and season
+seeds are public by contract, so every read is `backroom:read`.
+
+- **Reads (`backroom:read`):**
+  - `get_model_context_settings` returns the policy (`mode`, base allowlist,
+    LoRA rank and size caps, cooldown, season length, `floor_margin`, the
+    scorer task, `rank_shares`, `bench_version`, lease TTL and attempts).
+  - `list_model_context_submissions` pages every hotkey's submissions with
+    `counts_by_status`; `get_model_context_submission` adds the committed
+    manifest, the screening detail, every run and the operator audit (each
+    rescore and rejection with actor and reason).
+  - `get_model_context_run` reads one submission or reference run (score,
+    components, per-seed results with exact uint64 seeds, fault) with its
+    season and base floor. The run lease id is never served.
+  - `get_model_context_board` returns the public board and the open season it
+    ranks (open block and hash, seeds, floors, close time).
+  - `get_model_context_scorer` returns scorer heartbeats, the run and
+    screening backlog, and this process's season loop with its last error.
+- **Writes (`backroom:write`, audited under the operator's email):**
+  - `set_model_context_settings` stores a whole-object revision with
+    `expectedRevision` and `APPLY MODEL CONTEXT COMPETITION <MODE>`.
+    `upload_fee_required` must stay `false` in v1.
+  - `rescore_model_context_submission` (`RESCORE MODEL CONTEXT SUBMISSION`,
+    `expectedStatus` queued or scored) queues one more run in the open
+    season; the standing score stays until it lands.
+  - `reject_model_context_submission` (`REJECT MODEL CONTEXT SUBMISSION`,
+    `expectedStatus`) removes a submission from the board and ledger and
+    abandons its open runs.
+  - `rotate_model_context_season` (`ROTATE MODEL CONTEXT SEASON`) opens the
+    next season on the finalized head now.
+
+Platform appends every rescore, rejection and forced rotation to
+`model_context_operator_actions`. The track is known but not payable: no mode
+moves emission until a validator release pays model_context.
+
 `https://backroom.dittobench.ai/mcp` is an OAuth-protected Streamable HTTP MCP
 server exposing the same operations as the console: screening quarantines and
 disputes, validator queue/slot/inference policy, the scoring lease TTL,
@@ -329,9 +480,15 @@ gate diagnostics. `release_gate.archive_provider`, when present, reports the
 running Platform's configured archive host, authentication mode (`none`,
 `query`, or `path`), and credential presence. It never returns the
 provider URL or key. This is configuration evidence, not a provider health or
-authentication result; older responses without the field mean unknown. Use
-the durable collector cursor and exact-agent payout receipts to verify source
-release recovery. Requires `backroom:read` and changes nothing.
+authentication result; older responses without the field mean unknown.
+`release_gate.collector_stalled` is true once the collector cursor has not
+committed a block for `collector_stall_after_seconds` (one hour), whether or
+not `collector_blocked_reason` says why; `collector_cursor_advanced_at` is when
+it last did. A blocked sweep never moves that time, so a stall reads the same
+on every call rather than flickering with the reason. It is an age signal and
+reads no chain state, so a paused chain reads as a stall too. Null means
+unknown, not current. Use the durable collector cursor and exact-agent payout receipts to
+verify source release recovery. Requires `backroom:read` and changes nothing.
 
 `get_scoring_lease_settings` / `set_scoring_lease_settings` (#1156) read and
 revise the deadline stamped on new canonical and score-retest replacement
@@ -368,7 +525,7 @@ Three scopes, in ascending sensitivity:
 |---|---|
 | `backroom:read` | Every read. Required for any connection. |
 | `backroom:artifact:read` | Miner-submitted source and sensitive diagnostics: tarball URLs, file listings, source search, copy/lineage/baseline diffs, and sanitized private screening failure details. |
-| `backroom:write` | Mutations, including `set_emission_allocation` and `set_burn_settings`, which move TAO, and `queue_treasury_manual_transfer`, which moves SN118 alpha. |
+| `backroom:write` | Mutations, including `set_emission_allocation` and `set_burn_settings`, which move TAO, `queue_treasury_manual_transfer`, which moves SN118 alpha, and `execute_airdrop`, which settles an airdrop run (rehearsal-only today). |
 
 Two independent gates apply to every privileged call. The grant must carry the
 scope, **and** the operator's account must still resolve to `write` through
@@ -467,6 +624,56 @@ confirmation. Custody re-verifies balances, reserve, destination and the
 previous claim before signing. One unresolved claim blocks another, and an
 unresolved request is never resent automatically.
 
+### Airdrop runs (SN-490)
+
+`preview_airdrop`, `execute_airdrop`, `get_airdrop_run` and `list_airdrop_runs`
+drive Platform's airdrop run ledger (`/api/v1/admin/airdrops`). Preview and
+execute need `backroom:write`; the reads need `backroom:read`. The signed-in
+operator is the audit actor on every call.
+
+A run pays one `asset` to 1-1000 recipients `{kind, address, amount}`.
+Amounts are integers in the asset's base unit:
+
+| Asset | Recipient kind | Unit | Payee |
+|---|---|---|---|
+| `alpha` | `wallet` (SS58 coldkey) | rao | the coldkey |
+| `ditto_credits` | `account` (SN118 miner hotkey) | credit | the Ditto account bound by that hotkey's active Sign in with Ditto link |
+
+Preview writes nothing. It refuses bad rows: the wrong kind for the asset, an
+invalid SS58 address, a duplicate recipient, an unlinked hotkey, or two hotkeys
+that resolve to one Ditto account. It also applies the per-run cap (200
+recipients, plus a per-asset total pinned in Platform code) and reports the
+funding balance check. Each row carries `prior_amount`, what that payee
+already received or is being paid for this asset and mode under other keys,
+and `warnings` names any such rows, so a retry under a new key is visible.
+Preview returns `blockers`, `ready`,
+`confirmation_digest` and the exact `confirmation` phrase, for example
+`AIRDROP 1.5 ALPHA TO 2 RECIPIENTS AS REHEARSAL`.
+
+`execute_airdrop` is a dry run unless `dry_run: false` is passed with the
+preview's digest and phrase. Platform re-derives the preview and refuses any
+difference. It then records the run and every recipient as `pending` before
+settling anything, and claims each row (`dispatching`) before its executor
+runs. The `idempotency_key` names the run forever:
+
+- The same key with the same inputs resumes the run and only settles rows
+  still `pending`.
+- A row that has left `pending` is never sent again. A crash mid-send leaves
+  it `dispatching`, and an executor error leaves it `uncertain`; both wait for
+  reconciliation. A row still `dispatching` after ten minutes is counted in
+  `stale_dispatching` and puts the run in `needs_attention`. Reconciling a row
+  needs evidence from the asset's settlement system, so the reconcile tool
+  ships with the first live executor (SN-490).
+- The same key with different inputs is refused.
+
+After a timeout, retry with the same key, never a new one.
+
+Only simulated rehearsal executors exist, so every run is a rehearsal and
+nothing moves. A `live` run is refused for every asset until SN-490 decides
+what an airdrop pays and a reviewed live executor and funding source are
+wired in. `list_airdrop_runs` reports the caps, executors and funding source
+in force.
+
 ## Bindings
 
 Beyond the console's own secrets (`docs/oauth.md`), the MCP needs:
@@ -525,16 +732,18 @@ a scan that hit its own match cap — so no later offset recovers what it covers
 and any total it accompanies is a lower bound. The two are not interchangeable,
 and neither one substitutes for the other.
 
-Where the window is resolved differs by tool. `search_screening_source` pages on
-the platform, which holds the whole ordered match list, so the Worker must not
-re-slice a window it never had. A collection the platform returns whole is paged
-here by `paginateLocalCollection`, which is what emits `returned` and `has_more`.
+Where the window is resolved differs by tool. `search_screening_source` and
+`search_generator_source` page on the platform, which holds the whole ordered
+match list, so the Worker must not re-slice a window it never had. A collection
+the platform returns whole is paged here by `paginateLocalCollection`, which is
+what emits `returned` and `has_more`.
 
 Default page sizes are bounded so one call cannot flood model context, but a
 manifest an operator reads to decide *what exists* — today
-`list_screening_source_files` — defaults to the platform's whole listing rather
-than a page, because a row silently missing from page one is evidence the
-reviewer never learns to ask for. `mcp.server.test.ts` pins each tool's bound.
+`list_screening_source_files` and `list_generator_source_files` — defaults to
+the platform's whole listing rather than a page, because a row silently missing
+from page one is evidence the reviewer never learns to ask for.
+`mcp.server.test.ts` pins each tool's bound.
 
 ## Independent V13 replay process identity
 
@@ -702,6 +911,69 @@ false makes uploads free, null leaves it to the generator
 (the Backroom panel does this). An upload must pay its competition's fee
 exactly, and one transfer funds one upload across both lanes.
 
+### Readmission activation (SN-485, read-only)
+
+A readmission is the owner re-entering an existing agent lineage: opting it
+into a new benchmark era, or re-running it unchanged after one of its
+evaluations completed. `get_submission_cooldown` reports each revision's
+`readmission_announced_at` (null by default) and `readmission`, the computed
+activation state. It is `active` only when the announcement is set, the active
+benchmark is at least `min_bench_version` (19), and `effective_at` (the
+announcement plus a seven-day `notice_period_seconds`) has passed.
+`inactive_reasons` names every unmet condition: `announcement_unset`,
+`bench_version_below_minimum`, `notice_period`. The price is always the upload
+default fee (`fee_source: upload_default`). The memory entry of
+`get_competition_submission_terms` carries the same state plus the rules
+miners read.
+
+Backroom cannot write the announcement. It is an operator write through the
+Platform admin API (`POST /api/v1/admin/submission-settings` with
+`readmission_announced_at`, which appends `; READMISSION ANNOUNCED
+<UTC>Z` to the phrase). Omitting it or sending `null` carries it forward, so
+`set_submission_cooldown` never changes it. Clearing it
+(`clear_readmission_announcement: true`, `; READMISSION ANNOUNCEMENT CLEARED`)
+is the kill switch.
+
+### Readmission records (`list_readmissions`)
+
+`list_readmissions` reads every SN-485 readmission, newest first:
+
+- `paid`: the readmission payment lane. `outcome: admitted` is a paid
+  readmission of one stranded agent into the active era (`funding` `fresh`,
+  or `credit` with the spent credit's history in `credit_audit`).
+  `outcome: credited` is a readmission refused after payment and banked as a
+  30-day upload credit (`refusal_reason`, `credit_spent`,
+  `credit_expires_at`). Ditto never refunds on chain.
+- `uploads`: accepted uploads classified as readmissions of the owner's own
+  lineage: `identical_rescore` or `near_duplicate`, with `lineage_agent_id`.
+  They paid the ordinary upload fee.
+- `totals`, `free_admissions_by_category` (the active era's stranded
+  admissions by audited category: free `ditto_fault`, `owner_policy`,
+  `unspecified`, against `paid`), `activation` and `cost_basis`.
+
+Platform-caused re-tests (`dueling_season_rotation`: rotation, catch-up, ATH
+clear) never pass through `/upload` or a payment, so they are never
+readmissions and never appear here. `get_stranded_admissions` shows each
+admission's `origin` (`operator_stranded_admission` or `paid_readmission`),
+`category` and `payment_ref`; `admit_stranded_submission` takes an optional
+`category`. The miner-fee panel and `/admin/miner-fees` report the readmission
+lane beside the upload totals, counting each proof once.
+
+## Upload payment proofs
+
+When a miner reports a 3201, 3207 or 3208 after paying, call
+`get_upload_payment_proof` with the block hash and extrinsic index the CLI
+printed. It reads Platform's payment records only and answers in one `state`:
+`funded_agent` (the upload it paid for), `reusable_credit` (left by a
+byte-identical upload, or by a readmission refused after payment; spendable by
+the same hotkey until `recovery_expires_at`, 24 hours or 30 days for a
+readmission credit), `funded_generator`, `funded_readmission` (it paid the
+SN-485 readmission in `readmission`), or `unrecorded` (no upload consumed
+it). `readmission` carries the readmission lane's record (outcome, funding,
+refusal reason, and `credit_audit` when a credit paid). A funded proof is spent: do not grant a second credit for it. The tool
+never re-reads the chain, so check an unrecorded proof's block, signer,
+destination, amount and `ExtrinsicSuccess` on chain before advising a retry.
+
 ## Per-owner submission cooldown overrides
 
 The global cooldown (`get_submission_cooldown`) is one interval per payment
@@ -775,6 +1047,11 @@ hides behind an offset. `opaque_skipped` counts the members no search can
 reach — a `.onnx` or `.bin` weights file is never searched, and a search that
 never opened one cannot clear it.
 
+Generator source has the same three tools, keyed on a generator submission id:
+`list_generator_source_files`, `search_generator_source` (a case id, a
+question phrase, or where the generator builds its pack) and
+`read_generator_source_file`. They follow the same order and paging rules.
+
 ## Unreleased-copy signal (shadow)
 
 `list_unreleased_copy_signals` pages the Platform sentinel's recorded scores,
@@ -799,6 +1076,27 @@ copy court always escalates to an operator; nothing rejects automatically,
 and earlier flags stay on the review list. `get_copy_court_settings` also
 returns the posture, coverage and top flags under `unreleased_copy`. Design and calibration live in
 `apps/platform/docs/unreleased-copy-signal.md`.
+
+## Ditto Edge shadow lane (SN-481)
+
+Opt-in Mac nodes hold content-addressed public objects and answer Platform's
+challenges, measured into a ledger that pays nothing. Four tools read it; all
+need `backroom:read` and none writes:
+
+- `get_edge_lane_settings` returns the policy (`mode` is `off` or `shadow`),
+  the governing revision and the default, with opt-in history. Opening the lane
+  is a Platform settings write that Backroom does not offer.
+- `get_edge_lane_overview` returns node and object counts, assignments and the
+  recently scored windows.
+- `list_edge_lane_nodes` pages Platform's capped read of up to 1000 nodes,
+  most recent poll first. `may_be_truncated` is true when that read came back
+  full, so more nodes may exist beyond it.
+- `get_edge_lane_ledger(windowIndex?, nodeId?)` returns one row per node and
+  window. Platform first scores any window that has closed since the last poll,
+  the same insert-once scoring a node poll runs; `closed_now` lists them.
+
+Every response pins `weight_eligible` to `false`. A row claiming otherwise is
+a tool error, never data.
 
 ## Competition improvement metrics
 
@@ -834,6 +1132,19 @@ on the active board, and `owner_outside_cohort` otherwise. `ownerBestOnly`
 keeps one row per owner. The payload also names the admission rollout and
 whether `prev_gen_carryover` is enabled. The tool changes nothing and needs
 `backroom:read`.
+
+Miners see every listed row as public status `era_changed` with
+`era_change.next_step: "resubmit"` and `scored_bench_version` naming the
+previous era, whose scores stay visible (SN-485). The same status covers
+earlier-era work still waiting for scores that the active bench never
+admitted. `list_stuck_submissions(generation=all)` and
+`agent_scoring_readiness` return the same `era_change` object, and their
+blocking reason quotes the miner's label (`Era changed · resubmit for vN`)
+rather than "not enough expired tickets" or "operator-authorized validator
+retry is queued". A stuck row whose retry era is older than the active bench
+also reads `serves_active_bench: false` and a blocking reason that starts with
+`bench vN is no longer served`. The status is computed when it is read, so
+admitting the row clears it.
 
 ### Admitting one stranded submission
 
@@ -1127,6 +1438,11 @@ the result includes unknown grants and dollars explicitly. Accepted score
 receipts do not distinguish initial quorum from every repair/rollout path.
 Historical timestamp encodings not matching the canonical signed representation
 remain unknown. No prompt, answer, API key or actor credential is returned.
+
+`get_benchmark_canary` also returns the v18 `run_budget` aggregate when the
+signed diagnostic report contains a valid budget block. It distinguishes an
+exhausted budget from a lost meter and reports admitted and unrun case counts
+by phase. It never returns the raw case report or prompt content.
 
 Reconcile this operational view to provider key/model exports with matching
 service periods before claiming realized savings. Do not reduce seeds, panel

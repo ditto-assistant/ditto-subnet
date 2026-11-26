@@ -15,6 +15,7 @@ import {
   RescreenNotice,
 } from "../components/operations/PipelineBoard";
 import type { FleetReportExt } from "../components/operations/fleet";
+import { SeasonNotice } from "../components/pipeline/SeasonNotice";
 import { PipelineTheater } from "../components/theater/PipelineTheater";
 import type { PipelineEntryExt } from "../components/operations/pipeline";
 import { operationsResource } from "../data/operations";
@@ -50,6 +51,7 @@ export function PipelinePage(
       <p class="atlas-note theater-snapshot" id="operations-snapshot" aria-live="polite">
         {snap.snapshotNote()}
       </p>
+      <SeasonNotice />
       <PipelineTheater
         entries={pipelineEntries()}
         statusCounts={statusCounts()}

@@ -156,3 +156,41 @@ async def test_generator_runs_accept_up_to_eighty_cases(engine: AsyncEngine) -> 
     finally:
         await _clear(engine)
         _alembic("upgrade", "head")
+
+
+async def test_skipped_rounds_round_trip_the_status_migration(
+    engine: AsyncEngine,
+) -> None:
+    """``skipped`` is a valid opened status at head; the downgrade reads every
+    skipped round as void and narrows the check again."""
+    skipped_sql = (
+        "INSERT INTO generator_rounds (round_index, status, epochs_per_round, "
+        "first_epoch_index, secret, commitment, committed_at, "
+        "committed_epoch_index, commitment_publication, seed) "
+        "VALUES (:idx, 'skipped', 4, 4, decode(repeat('ab', 32), 'hex'), "
+        "repeat('c', 64), now(), 1, 'disabled', repeat('d', 64))"
+    )
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(text(skipped_sql), {"idx": 1})
+        _alembic("downgrade", "6b3f9d2e8a17")
+        async with engine.begin() as connection:
+            row = (
+                await connection.execute(
+                    text(
+                        "SELECT status, void_reason FROM generator_rounds "
+                        "WHERE round_index = 1"
+                    )
+                )
+            ).one()
+        assert tuple(row) == ("void", "skipped_unchanged (downgraded)")
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as connection:
+                await connection.execute(text(skipped_sql), {"idx": 2})
+        _alembic("upgrade", "head")
+        async with engine.begin() as connection:
+            await connection.execute(text(skipped_sql), {"idx": 3})
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(text("DELETE FROM generator_rounds"))
+        _alembic("upgrade", "head")

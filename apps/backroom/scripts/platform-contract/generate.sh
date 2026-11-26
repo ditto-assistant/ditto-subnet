@@ -18,7 +18,8 @@ mkdir -p src/generated .contract-sync
   # rollout regenerated `bench_version: 9 | 10` back down to `9` in a diff that
   # otherwise read as a clean additive change. Deployment already reinstalls for
   # this same reason (apps/platform/scripts/update.sh, workers/screener/scripts).
-  uv sync --reinstall-package ditto-screening-protocol >/dev/null
+  uv sync --reinstall-package ditto-screening-protocol \
+    --reinstall-package ditto-edge-protocol >/dev/null
   uv run python - <<'PY' > "${OLDPWD}/.contract-sync/platform-openapi.json"
 import json
 

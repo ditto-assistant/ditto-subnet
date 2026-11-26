@@ -7,7 +7,8 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import InvalidRequestError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.db.errors import IntegrityError as DbIntegrityError
@@ -20,12 +21,15 @@ from ditto.db.models import (
     Score,
 )
 from ditto.db.queries.confirmation_scores import confirmation_composites_by_seed
-from ditto.db.queries.score_ranking import official_composites
+from ditto.db.queries.score_ranking import dedupe_owner_rows, official_composites
 from ditto.db.queries.scores import (
     MIN_ELIGIBLE_CASES,
     count_ranked_quorum_agents,
+    get_submission_scores,
     list_eligible_ledger,
     list_provisional_ledger,
+    list_public_agent_scores,
+    list_public_submissions,
     list_scores_for_agent,
     quorum_composites,
     quorum_ledger_proof_rows,
@@ -258,13 +262,20 @@ async def _seed_scored(
     coldkey: str | None = None,
     name: str = "agent",
     shadow: bool = False,
+    sha256: str | None = None,
 ) -> Agent:
-    """Seed one agent + its score row, in the given lifecycle state."""
+    """Seed one agent + its score row, in the given lifecycle state.
+
+    Each agent gets its own artifact unless ``sha256`` is given: two seeded
+    generations are distinct versions, and only an explicit shared hash
+    models an ``--allow-identical-rescore`` rerun of the same bytes.
+    """
+    agent_id = uuid4()
     agent = Agent(
-        agent_id=uuid4(),
+        agent_id=agent_id,
         miner_hotkey=miner,
         name=name,
-        sha256="ab" * 32,
+        sha256=sha256 if sha256 is not None else agent_id.hex * 2,
         size_bytes=size_bytes,
         status=status,
         created_at=created_at,
@@ -395,6 +406,175 @@ class TestListEligibleLedger:
         ledger = await list_eligible_ledger(session)
 
         assert [row.agent_id for row in ledger] == [best.agent_id]
+
+    async def test_identical_rerun_replaces_the_earlier_draw_not_the_max(
+        self, session: AsyncSession
+    ) -> None:
+        """SN-485: re-rolling the same bytes is the latest run, never the best.
+
+        ``--allow-identical-rescore`` buys another seeded run of the same
+        tarball as a new ``agent_id``. If the owner-best selection compared
+        those runs on score, paying for reruns would keep the luckiest draw.
+        """
+        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+        coldkey = "5ColdkeyOwner"
+        artifact = "c0" * 32
+        lucky = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.95,
+            created_at=t0,
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+        rerun = await _seed_scored(
+            session,
+            miner=_MINER_B,
+            coldkey=coldkey,
+            composite=0.90,
+            created_at=t0 + timedelta(hours=1),
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+
+        ledger = await list_eligible_ledger(session)
+        internal = {
+            row.agent_id: row
+            for row in await list_eligible_ledger(session, dedupe_owners=False)
+        }
+
+        assert [(row.agent_id, row.official_composite) for row in ledger] == [
+            (rerun.agent_id, pytest.approx(0.90))
+        ]
+        assert not ledger[0].superseded_rerun
+        assert internal[lucky.agent_id].superseded_rerun
+        assert not internal[rerun.agent_id].superseded_rerun
+        # The Python owner reduction every ranking surface applies to the
+        # undeduplicated read lands on the same row as the SQL reduction.
+        reduced = dedupe_owner_rows(
+            list(internal.values()),
+            scores={row.agent_id: row.composite for row in internal.values()},
+        )
+        assert [row.agent_id for row in reduced] == [rerun.agent_id]
+
+    async def test_distinct_version_still_beats_a_lower_identical_rerun(
+        self, session: AsyncSession
+    ) -> None:
+        """Only reruns of one artifact are collapsed; versions compete on score."""
+        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+        coldkey = "5ColdkeyOwner"
+        artifact = "c1" * 32
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.97,
+            created_at=t0,
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+        distinct = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.93,
+            created_at=t0 + timedelta(hours=1),
+            n=MIN_ELIGIBLE_CASES,
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.91,
+            created_at=t0 + timedelta(hours=2),
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+
+        ledger = await list_eligible_ledger(session)
+
+        # The 0.97 draw is superseded by its own 0.91 rerun, so the distinct
+        # 0.93 version is the owner's best current artifact.
+        assert [row.agent_id for row in ledger] == [distinct.agent_id]
+
+    async def test_unranked_rerun_does_not_replace_a_ranked_run(
+        self, session: AsyncSession
+    ) -> None:
+        """A failed rerun (0.000 or partial profile) is not a new draw."""
+        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+        coldkey = "5ColdkeyOwner"
+        artifact = "c2" * 32
+        ranked = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.92,
+            created_at=t0,
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+        zero = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.0,
+            created_at=t0 + timedelta(hours=1),
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+        partial = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.99,
+            created_at=t0 + timedelta(hours=2),
+            n=MIN_ELIGIBLE_CASES - 1,
+            sha256=artifact,
+        )
+
+        ledger = await list_eligible_ledger(session)
+        internal = {
+            row.agent_id: row
+            for row in await list_eligible_ledger(session, dedupe_owners=False)
+        }
+
+        assert [row.agent_id for row in ledger] == [ranked.agent_id]
+        assert ledger[0].eligible
+        assert not internal[ranked.agent_id].superseded_rerun
+        # The two unranked runs supersede each other only, never the ranked one.
+        assert internal[zero.agent_id].superseded_rerun
+        assert not internal[partial.agent_id].superseded_rerun
+
+    async def test_identical_artifacts_of_different_owners_stay_separate(
+        self, session: AsyncSession
+    ) -> None:
+        """Superseding is per owner family. Another owner's copy is moderation's."""
+        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+        artifact = "c3" * 32
+        first = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey="5ColdkeyA",
+            composite=0.95,
+            created_at=t0,
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+        second = await _seed_scored(
+            session,
+            miner=_MINER_B,
+            coldkey="5ColdkeyB",
+            composite=0.90,
+            created_at=t0 + timedelta(hours=1),
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+
+        ledger = await list_eligible_ledger(session)
+
+        assert [row.agent_id for row in ledger] == [first.agent_id, second.agent_id]
+        assert not any(row.superseded_rerun for row in ledger)
 
     async def test_official_score_can_replace_a_lucky_family_incumbent(
         self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
@@ -1762,3 +1942,126 @@ class TestQuorumScoreRows:
             details_keys=("token_usage", "v9_base"),
         )
         assert rows[agent.agent_id][0].details is None
+
+
+_DIGEST = "d" * 64
+_FULL_CASE = {
+    "category": "tool",
+    "kind": "single",
+    "score": 1.0,
+    "correct": True,
+    "latency_ms": 12,
+    "notes": ["wrong_tool"],
+    "expected": "ANSWER-KEY",
+    "case_id": "seed-derived-id",
+    "called": ["lookup"],
+    "catalog": [{"name": f"tool_{i}", "schema": "x" * 64} for i in range(40)],
+}
+
+
+async def _seed_public_agent(session: AsyncSession) -> Agent:
+    agent = await _seed_agent(session)
+    async with session.begin():
+        await session.execute(
+            update(Agent)
+            .where(Agent.agent_id == agent.agent_id)
+            .values(status=AgentStatus.SCORED)
+        )
+    return agent
+
+
+class TestPublicScoreProjection:
+    """Public score reads never ship the per-case answer key or tool catalog."""
+
+    async def test_cases_keep_only_published_fields_in_order(
+        self,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent = await _seed_public_agent(session)
+        details = {
+            "bench_version": _BENCH_VERSION,
+            "transcript_sha256": _DIGEST,
+            "token_usage": {"prompt_tokens": 10, "completion_tokens": 2},
+            "raw_composite": 0.71,
+            "per_case": [
+                _FULL_CASE,
+                "not-a-case",
+                {"category": "memory", "score": 0.5},
+            ],
+        }
+        await _upsert(session, agent.agent_id, details=details)
+
+        async with session_maker() as fresh:
+            row = await get_submission_scores(fresh, agent_id=agent.agent_id)
+            assert row is not None
+            (score,) = row.scores
+            projected = score.details
+            # A loaded value, not a pending change: nothing is written back.
+            assert not fresh.dirty
+            await fresh.commit()
+
+        assert projected == {
+            **{k: v for k, v in details.items() if k != "per_case"},
+            "per_case": [
+                {
+                    "category": "tool",
+                    "kind": "single",
+                    "score": 1.0,
+                    "correct": True,
+                    "latency_ms": 12,
+                    "notes": ["wrong_tool"],
+                },
+                "not-a-case",
+                {
+                    "category": "memory",
+                    "kind": None,
+                    "score": 0.5,
+                    "correct": None,
+                    "latency_ms": None,
+                    "notes": None,
+                },
+            ],
+        }
+        async with session_maker() as fresh:
+            stored = await fresh.scalar(
+                select(Score.details).where(Score.agent_id == agent.agent_id)
+            )
+        assert stored == details
+
+    @pytest.mark.parametrize(
+        "details",
+        [None, {"per_case": "not-a-list"}, {"bench_version": _BENCH_VERSION}],
+        ids=["null", "per-case-not-array", "no-per-case"],
+    )
+    async def test_details_without_a_case_array_pass_through(
+        self,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+        details: dict | None,
+    ) -> None:
+        agent = await _seed_public_agent(session)
+        await _upsert(session, agent.agent_id, details=details)
+
+        async with session_maker() as fresh:
+            (score,) = await list_public_agent_scores(fresh, agent_id=agent.agent_id)
+        assert score.details == details
+
+    async def test_submission_index_never_loads_score_details(
+        self,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent = await _seed_public_agent(session)
+        await _upsert(
+            session,
+            agent.agent_id,
+            details={"bench_version": _BENCH_VERSION, "per_case": [_FULL_CASE]},
+        )
+
+        async with session_maker() as fresh:
+            (row,) = await list_public_submissions(fresh, limit=10)
+            (score,) = row.scores
+            assert score.composite == pytest.approx(0.7)
+            with pytest.raises(InvalidRequestError):
+                _ = score.details

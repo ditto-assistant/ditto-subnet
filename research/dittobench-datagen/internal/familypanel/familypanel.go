@@ -79,14 +79,16 @@ func LabelDataset(seed int64, runSize string, benchVersion int) (Labels, error) 
 	if err != nil {
 		return Labels{}, err
 	}
-	env, ok := gen.V13EnvelopeForRunSize(runSize)
+	// The slot table is the contract's own: the v13 tables through v15, the
+	// dueling tables from v16 (four family slots, not sixteen), v18's from v18.
+	env, ok := gen.MemoryEnvelopeForRunSize(runSize, benchVersion)
 	if !ok {
-		return Labels{}, fmt.Errorf("run size %q has no v13 envelope", runSize)
+		return Labels{}, fmt.Errorf("run size %q has no memory envelope at bench v%d", runSize, benchVersion)
 	}
 	labels := Labels{Seed: seed, DatasetSHA256: sha, Family: map[string]string{}}
 	// The envelope spends its first business slots on the enterprise slice;
 	// the rest are the open programs whose group index carries the family.
-	legacy := env.BusinessPrograms - min(12, env.BusinessPrograms)
+	legacy := env.BusinessPrograms - env.EnterpriseCount()
 	business := map[string]string{}
 	if legacy > 0 {
 		cases, err := universe.GenerateV13ProgramsForVersion(seed, legacy, benchVersion)

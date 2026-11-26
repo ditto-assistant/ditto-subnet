@@ -145,10 +145,10 @@ strong new generator does not wait a day:
 
 1. **Qualify.** The upload passes probe qualification (generator-competition.md
    "Qualification").
-2. **Next round.** It takes the next round's challenger column
-   (`challenger_columns`, which goes to qualified generators that never held a
-   column), or a counted column if one is free. `select_columns` already does
-   this. The round opens at the next epoch boundary and is scored when it
+2. **Next round.** It takes a challenger column in the next round, or a
+   counted column if one is free. `challenger_columns` is a minimum: every
+   template family with a never-scored generator waiting gets one challenger
+   column, up to the round's 8 columns. `select_columns` already does this. The round opens at the next epoch boundary and is scored when it
    closes.
 3. **Next season boundary.** If that scored column meets eligibility rules 2-3
    and its ledger score places it in the top 5 eligible owners, it is pinned at
@@ -278,6 +278,8 @@ v16 adds a third work kind beside `generate` and `score` in `round.go`:
   1-3 MiB) are kept in Platform-owned private storage until every contributing
   generator's source is released and the score-dispute window has passed. After
   that, only digests are kept, because anyone can regenerate the bytes.
+  Platform prunes on the season tick, 7 days after the later of the reveal
+  and the last pinned source release.
 
 ### Transport
 
@@ -382,8 +384,79 @@ Agents scored against different generator sets are not comparable, so the
   (`db/queries/confirmation_seed_anchors.py`). Previous-season scores stay
   visible as provisional for one season, then expire from the authoritative
   ledger. The crown carries over until a same-season challenger beats it.
+  While a benchmark rollout is open, a rotation re-score that cannot add a
+  quorum score waits on any validator that could instead lease a missing score
+  for an activation-blocking priority member. Re-scores that restore an expired
+  quorum row for such a member go first (`db/queries/score_retests.py`).
+- **Season catch-up** (`season_catchup_enabled`, on by default;
+  `season_catchup_max_agents`, default 5). An agent scored after a season's
+  opening cohort was picked holds scores only in that season, and neither
+  opening cohort re-scores it before they expire. So at each open, before the
+  window advances, Platform reads the paid set and the public top five and
+  queues one rotation re-score on the new set for every member with no score
+  in the season that just closed and not already in the opening cohort, in
+  board order, behind the cohort. It is recorded on the season as
+  `detail.catchup`. A shadow season of an open rollout's desired version
+  reads its board from that version's ranked quorum instead (agents with a
+  ranked 3/3 quorum in the season window, best median first, one per owner
+  family; `detail.catchup.source = rollout_ranked_quorum`). Its opening
+  cohort is the rollout's frozen members, so without this a new submission
+  that reached a desired-version quorum would expire at the next open and
+  drop out of the activation count (`MIN_DESIRED_AUTHORITY_AGENTS`). A
+  canary-only shadow season (no rollout at its version) has no catch-up. The admin seasons read reports `rotation_spend`: metered
+  grant cost of rotation leases, opening and catch-up apart, per season and
+  over the last 24 hours (`db/queries/dueling_rotation_spend.py`).
+- **Catch-up overflow, bounded by budget** (`season_catchup_budget_usd`,
+  default 10; `season_catchup_run_cost_usd`, default 0.5; SN-486). The first
+  `season_catchup_max_agents` board agents always queue. The overflow queues
+  in order while its estimated cost fits the budget: board agents past that
+  cap, then scored agents off the board (an authoritative season only) whose
+  quorum leaves the window at this open or already left it, best last median
+  first. The estimate is runs (accepted scores) times the metered cost per
+  priced rotation run over the last 24 hours, or the run-cost setting when
+  nothing was metered. An off-board agent is passed over, with the reason
+  recorded, when its last median is below the lowest in-window median on the
+  board, when its owner family has a better agent on the board or earlier in
+  the list, when its last quorum was not a full positive run, or when it
+  already had its one off-board catch-up at this bench version. Agents that
+  do not fit are recorded `over_budget` and reconsidered at the next open.
+  `detail.catchup` records `agents`, `capped`, `overflow` (with runs and the
+  estimate), `over_budget`, `off_board_skipped` (at most 200, best first) and
+  `off_board_skipped_counts`.
+- **An ATH clear re-scores what the hold let expire** (SN-486). A hold keeps
+  an agent off the board, so no catch-up covers it, and a hold longer than
+  about two seasons lets every score it holds leave the window. A clear
+  (`resolve_ath_review`, `execute_ath_rulings_batch`, the copy-hold court)
+  that leaves the agent scored or live at the active dueling version, with
+  less than a full quorum in the open season, queues one rotation re-test per
+  accepted score on that season (`catch_up_source = ath_clear`), after the
+  ruling commits. A re-test that did not land is caught by the next open's
+  off-board catch-up.
+- **Every platform re-test is free to the miner** (rotation, catch-up,
+  overflow, off-board, ATH clear). The public board and agent summary label
+  an expired agent with `season_expiry.retest` (queued, or why not), and the
+  continual-retest diagnostic carries the same label (`season_retest`).
 - A ban or copy ruling against a pinned generator mid-season triggers an early
   rotation, not an in-place swap.
+- **Idle seasons extend instead of rotating** (`skip_unchanged_rounds`, on by
+  default). At a due boundary the open season is extended by
+  `rounds_per_season` when all of these hold:
+  1. the waiting season would pin the same generators (submission, source
+     digest, grading policy and default flag);
+  2. the rotation cohort is the one the season re-scored when it opened;
+  3. no agent created since the season opened is scored or live;
+  4. no rotation was requested.
+
+  No season opens, so the two-season window does not advance: no score
+  expires and nobody is re-tested. The skip is all or nothing for the cohort,
+  and the fold reads exactly the rows it read before. The waiting season is
+  voided and recommitted at the new boundary, because its commitment binds its
+  index. `detail.idle_extensions` records every extension
+  (`get_dueling_season`). The privacy window counts from the extended close,
+  so the secret is never revealed early. An agent uploaded after the first
+  extension owes no season duel seeds in that season, because those seeds
+  have been public since the anchor. It joins at the next rotation, which its
+  upload triggers.
 
 ### Rotation cost at 4.8 h, and the minimum safe season
 
@@ -431,7 +504,7 @@ cohort above 10 needs at least 4 epochs. At 25 it needs a longer season or
 - **Composite.** As in section 1. `composite_stderr` treats columns as strata:
   `SE_G^2 = (1/k^2) x sum_c(s_c^2 / n_c)` over the k unmasked columns, and
   `SE^2 = 0.25 x SE_datagen^2 + 0.25 x SE_G^2`. Both are then scaled by the
-  datagen gate, as today.
+  datagen gate, as today. Bench v19 reweights both halves (section 9).
 - **KOTH and crown.** The dethrone test is pair-masked (section 3). Generator
   cases are built to be discriminating, so composites will drop and spread
   out. `KOTH_MARGIN`, `KOTH_BAND_DECAY_START_COMPOSITE` and the statistical band
@@ -446,6 +519,19 @@ cohort above 10 needs at least 4 epochs. At 25 it needs a longer season or
   calibration, because 35-case columns are noisier per seed.
 - **LongMem confirmation.** An instrument, not a per-epoch contract. The
   existing profile confirms v16 unchanged (bench-version-bump skill, section 1b).
+  **Decided 2026-11-03: the v9 confirmation-bundle lane carries no dueling
+  slice.** A bundle is one LongMem and ablation execution per artifact,
+  profile and generation, with no run seed and no datagen half, so there is
+  nothing to slice. A v16 bundle needs no dueling fields; the lane admits 16
+  once the shared evidence set (`V9EvidenceBenchVersion`) includes it.
+- **Priced inference cost.** The one input that reads the whole run. The
+  scorer prices the run's chat, embedding and decision-lane tokens at locked
+  public rates and multiplies the composite by a factor floored at 0.6. The
+  factor rides inside `details.dueling.datagen_gate`, so it scales both halves
+  and leaves the column statistics raw. A generator's column means never move
+  with the agent's spend, and no generator case feeds a zeroing gate. See
+  `services/dittobench-api/PROTOCOL.md`, "Bench v16 priced inference cost
+  factor".
 - **Efficiency, outlier escalation, deferred source review, ATH anomaly.**
   Efficiency and gates use the datagen half only in v16.0. Outlier and anomaly
   thresholds are recalibrated on the v16 shadow distribution before
@@ -523,7 +609,9 @@ ships OFF and additive; nothing here changes v2-v15 bytes or behaviour.
   `protocol.DuelingMinBenchVersion = 16`; every dueling gate is a floor on it.
 - `protocol.DuelingSliceColumns = 5`, `protocol.DuelingSliceCasesPerColumn = 35`,
   `protocol.DuelingColumnWeight = 0.1`. Changing any of them is a new bench
-  version.
+  version. Bench v19 raises the column weight to 0.15 and adds the datagen
+  qualifier (section 9); every layer reads the weight through
+  `protocol.DuelingColumnWeightForVersion`.
 - `gen.ProfileForVersion(run_size, 16)` returns the **datagen half**:
   `full` is 50 tool + 125 memory (`small`/`medium` scale down the same way).
   The v16 datagen surface is the v15 surface plus section 8.1.
@@ -577,8 +665,9 @@ consumer dedupes identically.
 
 ### 7.3 Composite math (`challenge/dueling_score.go`, mirrored in Python)
 
-`DuelingComposite(datagenRaw, datagenGate, columns, mask)` implements section
-1 exactly: float64, columns in `column_id` order, no fused multiply-add
+`DuelingComposite(weighting, datagenRaw, datagenGate, columns, mask)`
+implements section 1 exactly, with `weighting =
+DuelingWeightingForVersion(bench_version, datagenRaw)` (section 9 from v19): float64, columns in `column_id` order, no fused multiply-add
 reordering. A column aggregate is `{column_id, owner_key, n, sum, sum_sq,
 substituted}`; `col_c = sum / n` (`n = 0` scores 0). Owner keys equal to `""`
 (public default or substituted) are never masked. Shared vectors live in
@@ -634,7 +723,8 @@ slice byte for byte.
   opaque ID nonce derived from `slice_seed`.
 - Gates, efficiency, outlier and canary checks see the datagen half only.
 - The report gains `details.dueling`: `{season_id, season_index,
-  slice_sha256, owner_key, datagen_raw, datagen_gate, column_weight, columns:
+  slice_sha256, owner_key, datagen_raw, datagen_gate, column_weight,
+  datagen_qualifier (v19+ only, section 9), columns:
   [{column_id, owner_key, submission_id, grading_bench_version, n, sum,
   sum_sq, substituted}], composite_stderr}`. `composite` is
   `composite(A, {owner(A)})`. Per-case rows for slice cases use
@@ -730,3 +820,86 @@ the queue-policy setting `previous_era_backfill` (`enabled: false`,
 best stranded agent per owner (one per coldkey, by previous-era composite),
 capped at `max_agents`, queued behind every current-era item. It ships **off**;
 enabling it is an operator decision.
+
+## 9. Bench v19 held-out weighting (DITTO-2739)
+
+Bench v19 (epic DITTO-2736) moves rank from the public datagen half to the
+held-out generator columns. Every change is gated on `bench_version >= 19`
+(`protocol.DuelingHeldOutMinBenchVersion`), so v16-v18 reports, composites and
+goldens are byte-identical.
+
+### 9.1 Why
+
+On v18 the public datagen half spreads the top four agents by only .014
+(.955-.969). The generator columns spread the same agents three to four times
+more. The public half is a fixed generator whose habits can be learned and
+memorized, and policy allows routing on its public phrasings (I5, 2026-10-23).
+The columns come from private miner generators whose cases stay secret until
+the source is released, so they cannot be memorized. v19 therefore lets the
+columns, not the public half, decide the order at the top.
+
+### 9.2 Formula
+
+```
+q         = min(1, datagen_raw / 0.80)                    # datagen qualifier
+composite = gate x q x ((1 - w x |U|) x datagen_raw + w x sum_{c in U} col_c)
+w         = 0.15                                          # 0.1 on 16..18
+```
+
+- **Column weight.** `protocol.DuelingColumnWeightForVersion(v)` is 0.1 for
+  16-18 and `DuelingHeldOutColumnWeight = 0.15` from 19. Five counted columns
+  carry 75% of the composite and the datagen half 25%. A masked column's weight
+  still returns to the datagen half: with the agent's own column masked the
+  datagen half carries 40%, and with both owners masked in the paired dethrone
+  test it carries 55%.
+- **Datagen qualifier.** `protocol.DuelingDatagenQualifier(v, raw) =
+  min(1, raw / DuelingDatagenQualifierFloor)`, with the floor at 0.80, and 1
+  below v19. Above the floor the public half adds only its 25% share. Below
+  it the whole composite is scaled down, the columns included, so an agent
+  cannot skip the public bench and live on the columns. `q` depends on the
+  datagen half alone, so every mask (self, pair) shares it.
+- **Where it lives.** `challenge.DuelingWeighting{ColumnWeight, Qualifier}`,
+  built by `challenge.DuelingWeightingForVersion(v, raw)`, is the first
+  argument of `DuelingComposite` and `DuelingCompositeStderr`. The product
+  is `float64(gate x q) x inner`; `gate x 1` is exact, so v16-v18 are
+  unchanged to the bit. `ditto_screening_protocol.dueling.DuelingWeighting`
+  mirrors it bit for bit (v19 vectors in
+  `challenge/testdata/dueling_composite_vectors.json`).
+
+### 9.3 Wire
+
+`details.dueling` carries `column_weight: 0.15` and a new
+`datagen_qualifier` field from v19. It is a pointer in Go and is omitted
+(`exclude_if None` in Python) below v19, so older reports and stored rows keep
+their bytes. `datagen_gate` stays the product of the gate factors and never
+absorbs `q`. `DuelingReport` accepts only the contract weights. At the 0.15
+weight it requires `datagen_qualifier` to equal `min(1, datagen_raw / 0.8)`
+bit for bit, and at 0.1 it refuses the field. Platform ingestion
+(`dueling_score_evidence`), the validator (`verify_dueling_report`) and the
+public breakdown each call `DuelingReport.check_bench_version` against the
+row's bench version. Every fold (validator `weights.py`, Platform `koth.py`)
+recomputes masks with `DuelingReport.composite(mask)`, which reads the
+report's own weighting, never a constant. The public breakdown adds
+`datagen_qualifier` and the formula
+`gate x q x ((1 - w x |U|) x datagen + w x sum col)` from v19.
+
+### 9.4 Standard error
+
+The stderr form is unchanged (section 4), with `w = 0.15` and scaled by
+`gate x q`. The error treats `q` as fixed, exactly as it treats the gate.
+Unmasked, it is `0.0625 x SE_datagen^2 + 0.5625 x SE_G^2`. A 35-case column
+has a per-column SE of about +-.07. At the top of the board, where the datagen
+half is precise, the column strata dominate, and composite SE rises from about
+.016 (v16-v18) to about .023 (v19). The KOTH band, which reads
+`composite_stderr`, widens with it. Recalibrate `KOTH_MARGIN` and the band cap
+on the v19 shadow distribution before activation.
+
+### 9.5 Tradeoff to accept before activation
+
+Every generator column today is memory-only, so the tool half lives only in the
+datagen half (50 tool + 125 memory cases, `0.5 x tool_mean + 0.5 x
+memory_mean`). With the datagen half at 25%, tool calling carries about 12.5%
+of the v19 composite, down from 25% on v16-v18. This must be accepted
+explicitly before v19 activates. The alternative is tool-bearing columns, which
+are a generator-pack contract change and are not part of this item.
+

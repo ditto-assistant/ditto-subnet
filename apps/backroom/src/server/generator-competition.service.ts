@@ -10,6 +10,8 @@ import {
   generatorRoundTickSchema,
   generatorScorerStatusSchema,
   listGeneratorRoundsInputSchema,
+  generatorPrescreenListSchema,
+  listGeneratorPrescreensInputSchema,
   registerDefaultGeneratorInputSchema,
   defaultGeneratorUploadResponseSchema,
   tickGeneratorRoundsInputSchema,
@@ -23,6 +25,11 @@ import {
   generatorRunIdInputSchema,
   generatorSettingsControlSchema,
   generatorSettingsRevisionSchema,
+  generatorSourceExcerptInputSchema,
+  generatorSourceExcerptSchema,
+  generatorSourceListingSchema,
+  generatorSourceSearchInputSchema,
+  generatorSourceSearchResultSchema,
   generatorSubmissionDetailSchema,
   generatorSubmissionIdInputSchema,
   generatorSubmissionListSchema,
@@ -33,15 +40,24 @@ import {
   rescoreGeneratorInputSchema,
   rotateGeneratorProbeInputSchema,
   setGeneratorSettingsInputSchema,
+  generatorFrontierAuditDetailSchema,
+  generatorFrontierAuditInputSchema,
+  generatorFrontierAuditListSchema,
+  generatorFrontierSchema,
+  listGeneratorFrontierAuditsInputSchema,
+  rerunGeneratorFrontierInputSchema,
+  ruleGeneratorFrontierAuditInputSchema,
+  settleGeneratorFrontierInputSchema,
   GENERATOR_SETTINGS_SCOPE,
 } from '../lib/generator-competition.schemas'
 import { PlatformAdminError, platformAdminRequest } from './ditto.server'
 
 // Shadow generator competition operator surface. Reads are plain admin GETs
 // over Platform's /admin/generator-competition endpoints plus the public
-// board. Generator source never crosses this boundary (Platform does not serve
-// it to admins), a run's seeds appear only after it finished, probe seeds are
-// never served at all, and a round's secret only after its privacy window.
+// board. Generator source crosses this boundary only through the source
+// reads below (artifact scope; Platform audits each one under the operator's
+// actor), a run's seeds appear only after it finished, probe seeds are never
+// served at all, and a round's secret only after its privacy window.
 
 const BASE = '/api/v1/admin/generator-competition'
 
@@ -139,6 +155,57 @@ export async function fetchGeneratorRun(rawInput: unknown) {
   const { runId } = generatorRunIdInputSchema.parse(rawInput)
   return generatorRunDetailSchema.parse(
     await platformAdminRequest(`${BASE}/runs/${encodeURIComponent(runId)}`),
+  )
+}
+
+export async function fetchGeneratorSourceFiles(rawInput: unknown, actor: string) {
+  const { submissionId } = generatorSubmissionIdInputSchema.parse(rawInput)
+  return generatorSourceListingSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/submissions/${encodeURIComponent(submissionId)}/source-files`,
+      { actor },
+    ),
+  )
+}
+
+export async function fetchGeneratorSourceExcerpt(rawInput: unknown, actor: string) {
+  const input = generatorSourceExcerptInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    path: input.path,
+    start_line: String(input.startLine),
+    end_line: String(input.endLine),
+  })
+  return generatorSourceExcerptSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/submissions/${encodeURIComponent(input.submissionId)}/source-file?${query}`,
+      { actor },
+    ),
+  )
+}
+
+// Paging is server-side, as for screening source: Platform scans the whole
+// archive, orders matches by (path, line) and returns the requested window.
+export async function searchGeneratorSource(
+  rawInput: unknown,
+  actor: string,
+  limit: number,
+  offset: number,
+) {
+  const input = generatorSourceSearchInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    pattern: input.pattern,
+    mode: input.mode,
+    ignore_case: String(input.ignoreCase),
+    context: String(input.context),
+    limit: String(limit),
+    offset: String(offset),
+  })
+  if (input.pathGlob) query.set('path_glob', input.pathGlob)
+  return generatorSourceSearchResultSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/submissions/${encodeURIComponent(input.submissionId)}/source-search?${query}`,
+      { actor },
+    ),
   )
 }
 
@@ -259,6 +326,13 @@ export async function listGeneratorRounds(rawInput: unknown) {
   const { limit, offset } = listGeneratorRoundsInputSchema.parse(rawInput)
   return generatorRoundListSchema.parse(
     await platformAdminRequest(`${BASE}/rounds?limit=${limit}&offset=${offset}`),
+  )
+}
+
+export async function listGeneratorPrescreens(rawInput: unknown) {
+  const { limit, offset } = listGeneratorPrescreensInputSchema.parse(rawInput)
+  return generatorPrescreenListSchema.parse(
+    await platformAdminRequest(`${BASE}/prescreens?limit=${limit}&offset=${offset}`),
   )
 }
 
@@ -397,6 +471,122 @@ export async function registerDefaultGenerator(rawInput: unknown, actor: string)
           actor,
           confirmation: input.confirmation,
         },
+      }),
+    ),
+  )
+}
+
+// --- frontier cases ----------------------------------------------------------
+
+type FrontierWriteKind = 'rule' | 'settle' | 'rerun'
+
+// Keep Platform's refusal text and name what was not applied. A 409 is a
+// state conflict (already ruled or settled, no open audit, a case outside the
+// sample, a wrong confirmation): re-read the lane. A 422 is the request
+// itself (a short reason, malformed case ids): correct it; re-reading fixes
+// nothing.
+export function frontierRefusal(kind: FrontierWriteKind, cause: unknown) {
+  if (!(cause instanceof PlatformAdminError)) return null
+  if (cause.status !== 409 && cause.status !== 422) return null
+  const nothing =
+    kind === 'rule'
+      ? 'Nothing was ruled'
+      : kind === 'rerun'
+        ? 'Nothing was re-run'
+        : 'Nothing was settled'
+  const recovery =
+    cause.status === 422
+      ? kind === 'rule'
+        ? 'correct the refused fields (a reason of at least 8 characters, invalidCaseIds a list of round case ids) and resubmit.'
+        : 'correct the refused fields (a reason of at least 8 characters) and resubmit.'
+      : kind === 'rule'
+        ? 're-read get_generator_round_frontier and get_generator_frontier_audit: the audit may already be ruled or the round settled, and an invalid ruling may name only cases from the sample; resubmit with the exact confirmation they imply.'
+        : kind === 'rerun'
+          ? 're-read get_generator_round_frontier: only held or zero-credit settled rounds with no live oracle lease can be re-run.'
+          : 're-read get_generator_round_frontier: the round may already be settled or have no frontier lane.'
+  return new Error(`${cause.message}. ${nothing}: ${recovery}`)
+}
+
+async function frontierWrite<T>(
+  kind: FrontierWriteKind,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation()
+  } catch (cause) {
+    throw frontierRefusal(kind, cause) ?? cause
+  }
+}
+
+export async function listGeneratorFrontierAudits(rawInput: unknown) {
+  const { includeRuled, limit, offset } = listGeneratorFrontierAuditsInputSchema.parse(rawInput)
+  return generatorFrontierAuditListSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/frontier/audits?include_ruled=${includeRuled}&limit=${limit}&offset=${offset}`,
+    ),
+  )
+}
+
+export async function fetchGeneratorRoundFrontier(rawInput: unknown) {
+  const { roundIndex } = generatorRoundIndexInputSchema.parse(rawInput)
+  return generatorFrontierSchema.parse(
+    await platformAdminRequest(`${BASE}/rounds/${roundIndex}/frontier`),
+  )
+}
+
+export async function fetchGeneratorFrontierAudit(rawInput: unknown) {
+  const { roundIndex, columnId, q } = generatorFrontierAuditInputSchema.parse(rawInput)
+  const query = q ? `?q=${encodeURIComponent(q)}` : ''
+  return generatorFrontierAuditDetailSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/rounds/${roundIndex}/frontier/audits/${encodeURIComponent(columnId)}${query}`,
+    ),
+  )
+}
+
+export async function ruleGeneratorFrontierAudit(rawInput: unknown, actor: string) {
+  const input = ruleGeneratorFrontierAuditInputSchema.parse(rawInput)
+  return frontierWrite('rule', async () =>
+    generatorFrontierSchema.parse(
+      await platformAdminRequest(
+        `${BASE}/rounds/${input.roundIndex}/frontier/audits/${encodeURIComponent(input.columnId)}`,
+        {
+          method: 'POST',
+          actor,
+          body: {
+            valid: input.valid,
+            invalid_case_ids: input.invalidCaseIds,
+            reason: input.reason,
+            actor,
+            confirmation: input.confirmation,
+          },
+        },
+      ),
+    ),
+  )
+}
+
+export async function settleGeneratorRoundFrontier(rawInput: unknown, actor: string) {
+  const input = settleGeneratorFrontierInputSchema.parse(rawInput)
+  return frontierWrite('settle', async () =>
+    generatorFrontierSchema.parse(
+      await platformAdminRequest(`${BASE}/rounds/${input.roundIndex}/frontier/settle`, {
+        method: 'POST',
+        actor,
+        body: { reason: input.reason, actor, confirmation: input.confirmation },
+      }),
+    ),
+  )
+}
+
+export async function rerunGeneratorRoundFrontier(rawInput: unknown, actor: string) {
+  const input = rerunGeneratorFrontierInputSchema.parse(rawInput)
+  return frontierWrite('rerun', async () =>
+    generatorFrontierSchema.parse(
+      await platformAdminRequest(`${BASE}/rounds/${input.roundIndex}/frontier/rerun`, {
+        method: 'POST',
+        actor,
+        body: { reason: input.reason, actor, confirmation: input.confirmation },
       }),
     ),
   )

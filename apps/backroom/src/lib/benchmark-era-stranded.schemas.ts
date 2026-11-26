@@ -94,6 +94,11 @@ const strandedAdmissionRowSchema = z.object({
   admitted_at: timestamp(),
   actor: z.string().nullable(),
   reason: z.string().nullable(),
+  // SN-485: operator_stranded_admission (free) or paid_readmission (the
+  // miner's self-serve paid readmission). An older Platform omits it.
+  origin: z.string().default('operator_stranded_admission'),
+  category: z.string().nullable().default(null),
+  payment_ref: z.record(z.string(), z.unknown()).nullable().default(null),
   position: z.number().int().nullable(),
   agent_sha256: z.string().nullable(),
   previous_bench_version: z.number().int().nullable(),
@@ -144,6 +149,9 @@ export const admitStrandedSubmissionInputSchema = z
     expectedActiveVersion: z.number().int().positive(),
     expectedSha256: z.string().regex(/^[0-9a-fA-F]{64}$/),
     expectedPreviousScoreCount: z.number().int().min(1),
+    // SN-485: why this free admission is granted, audited so free admissions
+    // can be counted against paid readmissions. Omitted reads as unspecified.
+    category: z.enum(['ditto_fault', 'owner_policy']).nullish(),
     reason: z.string().trim().min(8),
     confirmation: z.string().max(120),
   })

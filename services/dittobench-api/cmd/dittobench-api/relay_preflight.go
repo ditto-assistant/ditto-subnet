@@ -89,13 +89,17 @@ type relayHealthSnapshot struct {
 	Provider            string `json:"provider"`
 	ProfileRevision     string `json:"profile_revision"`
 	Model               string `json:"model"`
-	UsageAvailable      uint64 `json:"usage_available"`
-	UsageUnavailable    uint64 `json:"usage_unavailable"`
-	PromptTokens        uint64 `json:"prompt_tokens"`
-	PromptBytes         uint64 `json:"prompt_bytes"`
-	CompletionTokens    uint64 `json:"completion_tokens"`
-	ProviderLatencyMs   uint64 `json:"provider_latency_ms"`
-	TTFTStatus          string `json:"ttft_status"`
+	// FrontierOracleRun marks a broker session an oracle-mode run bound on the
+	// pinned frontier oracle route (claimRunForMode). It is never read from a
+	// relay's JSON: only this process's broker can set it.
+	FrontierOracleRun bool   `json:"-"`
+	UsageAvailable    uint64 `json:"usage_available"`
+	UsageUnavailable  uint64 `json:"usage_unavailable"`
+	PromptTokens      uint64 `json:"prompt_tokens"`
+	PromptBytes       uint64 `json:"prompt_bytes"`
+	CompletionTokens  uint64 `json:"completion_tokens"`
+	ProviderLatencyMs uint64 `json:"provider_latency_ms"`
+	TTFTStatus        string `json:"ttft_status"`
 }
 
 // relayExecutionSummary is the run's delivery ledger. It is embedded in the
@@ -296,6 +300,16 @@ func validV7RouteProfile(profile string) bool {
 	return true
 }
 
+// sessionRouteAllowed is the claim-time route gate for a bench >= 7 run: the
+// contract's aggregate route, or (oracle runs only, bench >= 9) the pinned
+// frontier oracle route.
+func sessionRouteAllowed(benchVersion int, model, profile string, oracle bool) bool {
+	if oracle && benchVersion >= protocol.BenchVersionV9 && model == llm.FrontierOracleModel {
+		return profile == llm.FrontierOracleProfileRevision
+	}
+	return validBenchmarkRouteProfile(benchVersion, profile)
+}
+
 func validBenchmarkRouteProfile(benchVersion int, profile string) bool {
 	if benchVersion >= protocol.BenchVersionV9 {
 		return profile == llm.V9AggregateProfileRevision
@@ -318,6 +332,15 @@ func requireTokenAccounting(snapshot relayHealthSnapshot, benchVersion int, runS
 	}
 	if snapshot.Provider == "" || snapshot.ProfileRevision == "" || snapshot.Model == "" {
 		return fmt.Errorf("relay health lacks immutable provider identity")
+	}
+	if snapshot.FrontierOracleRun {
+		// The frontier oracle answers on its own pinned model and route
+		// (llm.FrontierOracleModel), never on the bench contract's.
+		if benchVersion < protocol.BenchVersionV9 ||
+			!llm.FrontierOracleRoute(snapshot.Model, snapshot.ProfileRevision) {
+			return fmt.Errorf("relay route does not match the frontier oracle")
+		}
+		return nil
 	}
 	if benchVersion >= protocol.BenchVersionV7 {
 		if snapshot.Model != llm.V7HarnessModel {

@@ -9,11 +9,11 @@ with generator rounds and spans ``rounds_per_season`` of them. The lifecycle
 1. **Commit.** While the previous season (or round) runs, Platform draws the
    next season's 32-byte secret and publishes ``commitment =
    season_commitment(s, secret)`` on Platform, where ``s`` is the round index
-   the season opens on. The anchor block does not exist yet.
-   TODO(dueling): publish ``dds1:{s}:{commitment}`` on chain when
-   ``onchain_commitment`` is set. The round machinery elects validators to
-   write ``dgr1`` payloads; a ``dds1`` job needs the validator's publisher to
-   accept it, which is a validator change outside this layer.
+   the season opens on. The anchor block does not exist yet. When
+   ``onchain_commitment`` is set, elected validators publish
+   ``dds1:{s}:{commitment}`` on chain while the season is committed
+   (:mod:`ditto.api_server.dueling_season_commitments`, the season twin of
+   the round lane's ``dgr1``); shadow seasons publish too.
 2. **Battery.** Each candidate column (eligibility rules 1, 2 and 4 of section
    1: active, qualified, a counted or challenger column in a scored round
    inside ``window_days`` with ``column score > 0`` and an unsolved fraction of
@@ -25,11 +25,44 @@ with generator rounds and spans ``rounds_per_season`` of them. The lifecycle
    round's open block as anchor, and up to five columns freeze: battery-passed
    candidates by rank, one per owner, then the public default generator, which
    is never masked and fills every remaining column.
+   Opening is a mini-rollout (:func:`queue_rotation_retests`): the champion,
+   then the retest cohort by rank, get a rotation re-test of every accepted
+   score on the new set, and the champion's confirmation family re-anchors
+   per ``(champion, bench_version, season)``. Scores of the season before
+   stay provisional for one season, then expire from the authoritative
+   ledger (:mod:`ditto.db.queries.dueling_season_window`). Then a paid or
+   public top-five agent with no score in the season that just closed gets
+   one catch-up re-test on the new set (:func:`queue_catchup_retests`), so a
+   mid-season scorer does not expire unscored. Past the board cap, board
+   agents and then scored off-board agents whose scores expire queue within a
+   per-season budget (SN-486). A cleared ATH hold re-scores the agent on the
+   open season (:func:`queue_cleared_hold_retest`). A shadow season of an open
+   rollout's desired version catches up its ranked quorum agents instead,
+   so the rollout's activation count does not collapse at the boundary.
 4. **Close.** At ``closes_at_round`` (or on an audited rotation), or as soon
-   as its bench version is neither active nor rolling out. Disabling dueling
-   commits no new season but lets the open one finish.
+   as its bench version is neither active nor rolling out. A due close waits
+   while the committed successor cannot open yet (:func:`successor_blocker`,
+   e.g. its default-generator battery is still running): every v16+ lease
+   needs an open season, so the old set keeps serving and the successor opens
+   mid-round the tick it is ready. If the round passes, the successor voids
+   and the next boundary tries a fresh one. Disabling dueling
+   commits no new season but lets the open one finish. With
+   ``skip_unchanged_rounds``, an *idle* boundary extends the open season by
+   ``rounds_per_season`` instead (:func:`idle_season_extension`): the next
+   season would pin the same generators for the same cohort, and nobody new
+   is eligible, so a rotation would only buy the same evidence again. No new
+   season opens, so the two-season score window does not advance (nothing
+   expires) and no rotation re-test is queued for anyone. Agents uploaded
+   after the first extension owe no season duel seeds in it
+   (:func:`ditto.api_server.season_duel.season_duel_entrant_excluded`).
 5. **Reveal.** ``privacy_window_rounds`` subnet epochs after it closes, the
-   secret and season seed become readable.
+   secret and season seed become readable, publicly
+   (``/public/dueling/seasons``), with the pins ``reproduce-slice`` needs.
+6. **Release.** Each pinned generator's exact source is published at
+   ``max(last pinning season's reveal, first pinning season's close +
+   embargo_hours)`` (:mod:`ditto.api_server.generator_source_releases`).
+   Once every source a revealed season pinned is released and the score
+   dispute window has passed, its slice bytes are pruned (digests kept).
 
 Seasons only open while ``dueling_enabled``, a contract ``>= 16`` is active
 (an authoritative season) or is the desired version of an open rollout (a
@@ -47,15 +80,17 @@ import json
 import logging
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from dataclasses import field as dataclass_field
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import defer
 
+from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.dueling import (
     DuelingBatteryAck,
     DuelingBatteryCandidate,
@@ -67,7 +102,15 @@ from ditto.api_models.dueling import (
 )
 from ditto.api_models.generator_round_validator import accepted_grading_versions
 from ditto.api_models.source_disclosure import SourceDisclosure
+from ditto.api_server.dueling_season_commitments import (
+    settle_season_commitment_publications,
+)
+from ditto.api_server.generator_source_releases import (
+    prune_released_slice_bytes,
+    sync_generator_source_releases,
+)
 from ditto.db.models import (
+    Agent,
     DuelingSeason,
     DuelingSeasonBattery,
     DuelingSlicePreparation,
@@ -96,7 +139,8 @@ if TYPE_CHECKING:
         GeneratorScorerFault,
     )
     from ditto.api_server.generator_competition import ResolvedSettings
-    from ditto.api_server.generator_rounds import ChainPosition
+    from ditto.api_server.generator_rounds import ChainPosition, RoundClock
+    from ditto.db.queries.dueling_season_window import DuelingSeasonWindow
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +194,11 @@ async def dueling_target(
     )
     version: int | None = None
     shadow = False
-    if is_dueling_bench_version(active):
+    if desired is not None and is_dueling_bench_version(desired) and desired > active:
+        # Rollout to a higher dueling version: shadow the desired version so
+        # rollout scoring can begin while the authoritative board is still active.
+        version, shadow = desired, True
+    elif is_dueling_bench_version(active):
         version = active
     elif desired is not None and is_dueling_bench_version(desired):
         version, shadow = desired, True
@@ -339,6 +387,9 @@ def _commit_season(
         rounds_per_season=resolved.settings.rounds_per_season,
         settings_revision=resolved.revision,
         detail={"committed_epoch_index": position.subnet_epoch_index},
+        commitment_publication=(
+            "pending" if resolved.settings.onchain_commitment else "disabled"
+        ),
     )
 
 
@@ -533,6 +584,11 @@ async def _open(
     if isinstance(fallback, str):
         _void(season, fallback)
         return f"void ({fallback})"
+    # Read before the season opens: opening advances the score window, and
+    # the agents a catch-up exists for drop out of the board with it.
+    catchup_candidates = await _catchup_candidates(
+        session, season, settings=resolved.settings
+    )
     block, block_hash = anchor
     season.anchor_block = block
     season.anchor_block_hash = block_hash.lower()
@@ -548,8 +604,1300 @@ async def _open(
         "fallback": fallback,
         "opened_epoch_index": position.subnet_epoch_index,
     }
+    await session.flush()
+    rotation = await queue_rotation_retests(session, season, now=now)
+    catchup = await queue_catchup_retests(
+        session,
+        season,
+        candidates=catchup_candidates,
+        settings=resolved.settings,
+        now=now,
+    )
+    await _log_rotation_spend(session, season, rotation=rotation, catchup=catchup)
     miners = sum(1 for column in columns if not column["public_default"])
-    return f"open ({miners} miner column(s))"
+    return (
+        f"open ({miners} miner column(s)); "
+        f"{rotation.get('queued', 0)} rotation re-test(s) queued; "
+        f"{catchup.get('queued', 0)} catch-up re-test(s) queued"
+    )
+
+
+async def _rotation_cohort(
+    session: AsyncSession, season: DuelingSeason
+) -> tuple[list[UUID], str]:
+    """Who a season's opening re-scores, champion first, and where from.
+
+    An authoritative season re-scores the continual-retest cohort of its
+    (active) version: the champion, then ``retest_cohort_size`` agents by
+    rank. A shadow season re-scores the open rollout's frozen cohort in
+    position order. A canary-only shadow season has no cohort.
+    """
+    from ditto.db.models import BenchmarkRolloutMember
+
+    if season.shadow:
+        rollout = await open_rollout(session)
+        if rollout is None or rollout.desired_version != season.bench_version:
+            return [], "none (canary shadow season: no rollout cohort)"
+        members = list(
+            await session.scalars(
+                select(BenchmarkRolloutMember.agent_id)
+                .where(BenchmarkRolloutMember.rollout_id == rollout.rollout_id)
+                .order_by(BenchmarkRolloutMember.position)
+            )
+        )
+        return members, "rollout_members"
+    from ditto.api_server.continual_retest_settings import settings_from_row
+    from ditto.api_server.endpoints.validator import _current_retest_cohort
+    from ditto.db.queries.continual_retest_settings import (
+        latest_continual_retest_settings_revision,
+    )
+
+    revision = await latest_continual_retest_settings_revision(session)
+    settings = settings_from_row(revision)
+    emission, _wave, cohort, _challengers = await _current_retest_cohort(
+        session, canonical_version=season.bench_version, settings=settings
+    )
+    ordered = list(
+        dict.fromkeys(
+            [*(m.agent_id for m in emission[:1]), *(m.agent_id for m in cohort)]
+        )
+    )
+    return ordered[: max(1, settings.retest_cohort_size)], "continual_cohort"
+
+
+async def queue_rotation_retests(
+    session: AsyncSession, season: DuelingSeason, *, now: datetime
+) -> dict[str, Any]:
+    """Queue the season-open rotation re-tests and record them on the season.
+
+    Runs in its own savepoint: a cohort read that fails leaves the season
+    open with the failure recorded (``detail.rotation.error``), never a
+    season that cannot open. Caller commits.
+    """
+    from ditto.db.queries.score_retests import queue_dueling_rotation_retests
+
+    rotation: dict[str, Any] = {"queued_at": now.isoformat()}
+    try:
+        async with session.begin_nested():
+            cohort, source = await _rotation_cohort(session, season)
+            counts = await queue_dueling_rotation_retests(
+                session,
+                season_id=season.id,
+                bench_version=season.bench_version,
+                cohort=cohort,
+                now=now,
+            )
+    except Exception as exc:  # noqa: BLE001 - recorded, never blocks the open
+        logger.exception("dueling season %s: rotation re-tests failed", season.id)
+        rotation["error"] = f"{type(exc).__name__}: {exc}"[:500]
+    else:
+        rotation.update(
+            source=source,
+            cohort=[
+                {"agent_id": str(agent_id), "rank": rank}
+                for rank, agent_id in enumerate(cohort)
+            ],
+            **counts,
+        )
+    season.detail = {**(season.detail or {}), "rotation": rotation}
+    return rotation
+
+
+CATCHUP_KEY = "catchup"
+"""``DuelingSeason.detail`` key: the season-boundary catch-up it queued."""
+CATCHUP_SOURCE_BOARD = "continual_board"
+"""Authoritative season: the active version's paid set and public top five."""
+CATCHUP_SOURCE_ROLLOUT = "rollout_ranked_quorum"
+"""Shadow season of an open rollout: the desired version's ranked quorum."""
+
+
+@dataclass(frozen=True)
+class CatchupCandidates:
+    """Who the board held when the previous season closed, and who of them
+    had no score in it. Read before the window advances."""
+
+    closed_season_id: UUID | None
+    board: tuple[UUID, ...]
+    """Paid set (folded emission set), then the public top five, deduped; for
+    a rollout's shadow season, the desired version's ranked quorum agents,
+    one per owner family (:func:`_rollout_catchup_board`)."""
+    missing: tuple[UUID, ...]
+    """``board`` members with no accepted score in the closed season, in
+    board order."""
+    error: str | None = None
+    source: str = CATCHUP_SOURCE_BOARD
+    skipped: str | None = None
+    """Why this season has no catch-up at all (a canary shadow season)."""
+    off_board: tuple[OffBoardCandidate, ...] = ()
+    """Authoritative season only: scored agents off ``board`` whose quorum
+    leaves the window at this boundary (or already left it) and that could
+    still place, best last median first (:func:`_off_board_candidates`)."""
+    off_board_skipped: tuple[tuple[UUID, str], ...] = ()
+    """Off-board agents passed over, with the reason
+    (:data:`OFF_BOARD_SKIP_REASONS`)."""
+    run_counts: dict[UUID, int] = dataclass_field(default_factory=dict)
+    """Re-test runs each candidate costs: its accepted scores at the version."""
+
+
+OFF_BOARD_SKIP_REASONS = (
+    "below_board_floor",
+    "owner_has_better_agent",
+    "superseded_rerun",
+    "already_retested",
+    "unranked",
+)
+"""Why an off-board agent whose scores expire gets no catch-up:
+
+* ``below_board_floor``: its last valid median is under the lowest median on
+  the board, so a re-score could not place it;
+* ``owner_has_better_agent``: its owner family already has a better agent on
+  the board or ahead of it in this list (one slot per owner);
+* ``superseded_rerun``: a newer run of the same artifact by the same owner
+  stands for that content (SN-485: the latest run, never the best draw);
+* ``already_retested``: it already had its one off-board catch-up at this
+  bench version (an agent the board does not hold expires after that); a
+  catch-up the platform cut short does not count, up to
+  :data:`MAX_OFF_BOARD_CATCHUP_ATTEMPTS` seasons (SN-497);
+* ``unranked``: its last valid quorum was not a full, positive benchmark."""
+
+MAX_RECORDED_OFF_BOARD_SKIPS = 200
+"""``detail.catchup.off_board_skipped`` keeps at most this many rows, best
+first; ``off_board_skipped_counts`` always counts them all."""
+
+
+@dataclass(frozen=True)
+class OffBoardCandidate:
+    agent_id: UUID
+    last_composite: float
+    expired: bool
+    """Already out of the window before this boundary (not just leaving it)."""
+
+
+async def _rollout_catchup_board(
+    session: AsyncSession, bench_version: int
+) -> tuple[UUID, ...]:
+    """A shadow season's catch-up board: who the rollout's flip counts.
+
+    The agents holding a ranked desired-version quorum in the season window
+    (:func:`~ditto.db.queries.scores.ranked_quorum_agent_ids`, the set
+    ``count_ranked_quorum_agents`` gates activation on), best median
+    composite first, one per owner family, with reruns of one artifact
+    represented by the newest run. Not the KOTH board: an explicit
+    version ledger read admits pre-quorum medians, and the rollout gate never
+    counts those. Scalar columns only, never ``Score.details``.
+    """
+    from ditto.db.models import EvaluationPayment, Score
+    from ditto.db.queries.dueling_season_window import season_scope_predicate
+    from ditto.db.queries.scores import (
+        attested_emission_owner_roots,
+        emission_owner_key,
+        ranked_quorum_agent_ids,
+    )
+
+    ranked = await ranked_quorum_agent_ids(session, bench_version=bench_version)
+    if not ranked:
+        return ()
+    rows: dict[UUID, list[tuple[float, str]]] = {}
+    for agent_id, composite, validator_hotkey in (
+        await session.execute(
+            select(Score.agent_id, Score.composite, Score.validator_hotkey).where(
+                Score.agent_id.in_(ranked),
+                Score.bench_version == bench_version,
+                await season_scope_predicate(
+                    session,
+                    version_column=Score.bench_version,
+                    season_column=Score.dueling_season_id,
+                    bench_versions=(bench_version,),
+                ),
+            )
+        )
+    ).tuples():
+        rows.setdefault(agent_id, []).append((composite, validator_hotkey))
+    # The ledger's median row: ascending composite, validator tie-break.
+    medians = {
+        agent_id: sorted(scores)[(len(scores) - 1) // 2][0]
+        for agent_id, scores in rows.items()
+    }
+    owners = {
+        agent_id: (miner_hotkey, owner, created_at, sha256)
+        for agent_id, miner_hotkey, owner, created_at, sha256 in (
+            await session.execute(
+                select(
+                    Agent.agent_id,
+                    Agent.miner_hotkey,
+                    emission_owner_key(),
+                    Agent.created_at,
+                    Agent.sha256,
+                )
+                .outerjoin(
+                    EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id
+                )
+                .where(Agent.agent_id.in_(medians))
+            )
+        ).tuples()
+    }
+    ordered = sorted(
+        owners,
+        key=lambda agent_id: (-medians[agent_id], owners[agent_id][2], agent_id),
+    )
+    roots = await attested_emission_owner_roots(
+        session, [owners[agent_id][:2] for agent_id in ordered]
+    )
+    # SN-485: reruns of one artifact are represented by the newest one, as on
+    # the ledger (``LedgerRow.superseded_rerun``), never by the best draw.
+    latest_run: dict[tuple[str, str], UUID] = {}
+    for agent_id, root in zip(ordered, roots, strict=True):
+        content = (root, owners[agent_id][3])
+        current = latest_run.get(content)
+        if current is None or (owners[agent_id][2], agent_id) > (
+            owners[current][2],
+            current,
+        ):
+            latest_run[content] = agent_id
+    board: dict[str, UUID] = {}
+    for agent_id, root in zip(ordered, roots, strict=True):
+        if latest_run[(root, owners[agent_id][3])] == agent_id:
+            board.setdefault(root, agent_id)
+    return tuple(board.values())
+
+
+async def _catchup_candidates(
+    session: AsyncSession,
+    season: DuelingSeason,
+    *,
+    settings: GeneratorCompetitionSettings,
+) -> CatchupCandidates:
+    """The season-boundary catch-up candidates for ``season`` (not yet open).
+
+    An agent scored after a season's opening cohort was picked holds scores
+    only in that season. They count one more season as provisional, then
+    expire at the next open, and nothing re-scores it on the way: it was not
+    in either opening cohort. Every paid or public top-five agent with no
+    score in the season that just closed is in that state, so it is read
+    here, while those scores still count. Never raises: a failed read is
+    recorded and queues nothing.
+
+    A shadow season of the version an open rollout targets reads its board
+    from the desired version's ranked quorum instead
+    (:func:`_rollout_catchup_board`): its opening cohort is the rollout's
+    frozen members, so a new submission that reached a ranked quorum would
+    otherwise expire and drop out of the activation count. A canary-only
+    shadow season has no catch-up.
+    """
+    from ditto.db.queries.dueling_season_window import dueling_season_window
+
+    if not settings.season_catchup_enabled:
+        return CatchupCandidates(closed_season_id=None, board=(), missing=())
+    source = CATCHUP_SOURCE_ROLLOUT if season.shadow else CATCHUP_SOURCE_BOARD
+    try:
+        async with session.begin_nested():
+            if season.shadow:
+                rollout = await open_rollout(session)
+                if rollout is None or rollout.desired_version != season.bench_version:
+                    return CatchupCandidates(
+                        closed_season_id=None,
+                        board=(),
+                        missing=(),
+                        source=source,
+                        skipped="canary shadow season: no rollout at this version",
+                    )
+            window = await dueling_season_window(session, season.bench_version)
+            closed = window.current if window is not None else None
+            if closed is None:
+                return CatchupCandidates(
+                    closed_season_id=None, board=(), missing=(), source=source
+                )
+            from ditto.db.models import Score
+
+            if season.shadow:
+                board = await _rollout_catchup_board(session, season.bench_version)
+            else:
+                board = await _continual_catchup_board(session, season.bench_version)
+            current = set(
+                await session.scalars(
+                    select(Score.agent_id).where(
+                        Score.agent_id.in_(board or (UUID(int=0),)),
+                        Score.bench_version == season.bench_version,
+                        Score.dueling_season_id == closed,
+                    )
+                )
+            )
+            off_board: tuple[OffBoardCandidate, ...] = ()
+            off_board_skipped: tuple[tuple[UUID, str], ...] = ()
+            if not season.shadow:
+                assert window is not None
+                off_board, off_board_skipped = await _off_board_candidates(
+                    session, season.bench_version, window=window, board=board
+                )
+            run_counts = await _score_counts(
+                session,
+                season.bench_version,
+                [*board, *(c.agent_id for c in off_board)],
+            )
+    except Exception as exc:  # noqa: BLE001 - recorded, never blocks the open
+        logger.exception("dueling season %s: catch-up read failed", season.id)
+        return CatchupCandidates(
+            closed_season_id=None,
+            board=(),
+            missing=(),
+            error=f"{type(exc).__name__}: {exc}"[:500],
+            source=source,
+        )
+    return CatchupCandidates(
+        closed_season_id=closed,
+        board=board,
+        missing=tuple(agent_id for agent_id in board if agent_id not in current),
+        source=source,
+        off_board=off_board,
+        off_board_skipped=off_board_skipped,
+        run_counts=run_counts,
+    )
+
+
+async def _score_counts(
+    session: AsyncSession, bench_version: int, agent_ids: list[UUID]
+) -> dict[UUID, int]:
+    """Accepted scores per agent at ``bench_version``: one re-test run each."""
+    from ditto.db.models import Score
+
+    ids = list(dict.fromkeys(agent_ids))
+    if not ids:
+        return {}
+    return {
+        agent_id: int(count)
+        for agent_id, count in (
+            await session.execute(
+                select(Score.agent_id, func.count())
+                .where(Score.agent_id.in_(ids), Score.bench_version == bench_version)
+                .group_by(Score.agent_id)
+            )
+        ).tuples()
+    }
+
+
+def _quorum_median(scores: Any, seasons: frozenset[UUID]) -> tuple[float, int] | None:
+    """``(composite, n)`` of the ledger's median row over the rows in
+    ``seasons``, or ``None`` below a full quorum."""
+    from ditto.db.queries.scores import SCORING_QUORUM
+
+    rows = sorted(
+        (row.composite, row.validator_hotkey, row.n)
+        for row in scores
+        if row.dueling_season_id in seasons
+    )
+    if len(rows) < SCORING_QUORUM:
+        return None
+    composite, _validator, n = rows[(len(rows) + 1) // 2 - 1]
+    return composite, n
+
+
+MAX_OFF_BOARD_CATCHUP_ATTEMPTS = 3
+"""SN-497: seasons an off-board agent may be queued for a catch-up at one
+bench version. Only a catch-up whose every queued re-score ran (or was already
+current) uses up the agent's one catch-up; one the platform closed before a
+validator re-scored it (a lapsed shared lease, the season ending first) left a
+split quorum through no fault of the agent, so a later boundary may try again,
+up to this many seasons in all. Bounds the spend on an agent a validator
+cannot serve."""
+
+
+async def _off_board_catchups_used(
+    session: AsyncSession, *, agent_ids: list[UUID], bench_version: int
+) -> set[UUID]:
+    """The agents whose one off-board catch-up at ``bench_version`` is spent.
+
+    Spent: some season's catch-up was served in full -- every queued re-score
+    was promoted to a lease and not then closed unscored by the platform, or
+    closed only because its score was already current -- or catch-ups were
+    queued in :data:`MAX_OFF_BOARD_CATCHUP_ATTEMPTS` seasons. A re-score still
+    waiting (never promoted, never released) is pending, not served, so it
+    spends nothing. Two audit reads over the given agents only.
+    """
+    from ditto.db.models import ScoreAuditEntry
+    from ditto.db.queries.audit import (
+        EVENT_SCORE_RETEST_QUEUED,
+        EVENT_SCORE_RETEST_RELEASED,
+        EVENT_SCORE_RETEST_REQUESTED,
+    )
+    from ditto.db.queries.score_retests import (
+        CATCH_UP_SOURCE_OFF_BOARD,
+        DUELING_ROTATION_RETEST_BASIS,
+        ROTATION_ALREADY_CURRENT_REASON,
+    )
+
+    if not agent_ids:
+        return set()
+    queued = (
+        (
+            await session.execute(
+                select(
+                    ScoreAuditEntry.agent_id,
+                    ScoreAuditEntry.payload["dueling_season_id"].as_string(),
+                    ScoreAuditEntry.payload["request_id"].as_string(),
+                ).where(
+                    ScoreAuditEntry.event == EVENT_SCORE_RETEST_QUEUED,
+                    ScoreAuditEntry.agent_id.in_(agent_ids),
+                    ScoreAuditEntry.payload["basis"].as_string()
+                    == DUELING_ROTATION_RETEST_BASIS,
+                    ScoreAuditEntry.payload["catch_up_source"].as_string()
+                    == CATCH_UP_SOURCE_OFF_BOARD,
+                    ScoreAuditEntry.payload["bench_version"].as_integer()
+                    == bench_version,
+                )
+            )
+        )
+        .tuples()
+        .all()
+    )
+    if not queued:
+        return set()
+    request_ids = sorted({request_id for _a, _s, request_id in queued if request_id})
+    promoted: set[str] = set()
+    cut_short: set[str] = set()
+    already_current: set[str] = set()
+    if request_ids:
+        for event, request_id, retest_request_id, reason in (
+            await session.execute(
+                select(
+                    ScoreAuditEntry.event,
+                    ScoreAuditEntry.payload["request_id"].as_string(),
+                    ScoreAuditEntry.payload["retest_request_id"].as_string(),
+                    ScoreAuditEntry.payload["reason"].as_string(),
+                ).where(
+                    ScoreAuditEntry.event.in_(
+                        (EVENT_SCORE_RETEST_REQUESTED, EVENT_SCORE_RETEST_RELEASED)
+                    ),
+                    ScoreAuditEntry.agent_id.in_(
+                        sorted({a for a, _s, _r in queued}, key=str)
+                    ),
+                    or_(
+                        ScoreAuditEntry.payload["request_id"]
+                        .as_string()
+                        .in_(request_ids),
+                        ScoreAuditEntry.payload["retest_request_id"]
+                        .as_string()
+                        .in_(request_ids),
+                    ),
+                )
+            )
+        ).tuples():
+            if event == EVENT_SCORE_RETEST_REQUESTED:
+                promoted.add(str(request_id))
+            elif reason == ROTATION_ALREADY_CURRENT_REASON:
+                already_current.add(str(retest_request_id or request_id))
+            else:
+                cut_short.add(str(retest_request_id or request_id))
+    seasons: dict[UUID, dict[str, bool]] = {}
+    for agent_id, season_id, request_id in queued:
+        served = request_id in already_current or (
+            request_id in promoted and request_id not in cut_short
+        )
+        per_agent = seasons.setdefault(agent_id, {})
+        per_agent[str(season_id)] = per_agent.get(str(season_id), True) and served
+    return {
+        agent_id
+        for agent_id, per_season in seasons.items()
+        if any(per_season.values()) or len(per_season) >= MAX_OFF_BOARD_CATCHUP_ATTEMPTS
+    }
+
+
+async def _off_board_candidates(
+    session: AsyncSession,
+    bench_version: int,
+    *,
+    window: DuelingSeasonWindow,
+    board: tuple[UUID, ...],
+) -> tuple[tuple[OffBoardCandidate, ...], tuple[tuple[UUID, str], ...]]:
+    """Scored agents off the board that a boundary would expire unscored.
+
+    Read while ``window`` is still the closing one. An agent qualifies when
+    the season that just closed (``window.current``) holds less than a full
+    quorum of its scores and it either counts now (its quorum sits partly in
+    the provisional season, which leaves at this open) or already expired.
+    The board's own catch-up covers board agents. Passed over, with the
+    reason: a last median under the board's lowest in-window median, an
+    owner family with a better agent on the board or earlier in the list, an
+    agent that already had its one off-board catch-up at this version, an
+    older run of an artifact the owner re-ran (the newest run stands for it,
+    SN-485), and a last quorum that was not a full, positive benchmark. Best
+    last median first. Scalar score columns only.
+    """
+    from ditto.db.models import EvaluationPayment
+    from ditto.db.queries.dueling_season_expiry import season_coverage
+    from ditto.db.queries.scores import (
+        MIN_ELIGIBLE_CASES,
+        attested_emission_owner_roots,
+        emission_owner_key,
+    )
+
+    coverage = await season_coverage(session, bench_version=bench_version)
+    if not coverage:
+        return (), ()
+    board_ids = set(board)
+    closing = frozenset(() if window.current is None else (window.current,))
+    board_medians: dict[UUID, float] = {}
+    for agent_id in board_ids:
+        board_cov = coverage.get(agent_id)
+        board_median = (
+            None
+            if board_cov is None
+            else _quorum_median(board_cov.scores, window.comparable)
+        )
+        if board_median is not None:
+            board_medians[agent_id] = board_median[0]
+    floor = min(board_medians.values()) if board_medians else None
+    owed: list[tuple[UUID, float, bool]] = []
+    skipped: list[tuple[UUID, str, float]] = []
+    for agent_id, cov in coverage.items():
+        if agent_id in board_ids or _quorum_median(cov.scores, closing) is not None:
+            continue  # the board catches it up, or its scores still count
+        in_window = _quorum_median(cov.scores, window.comparable)
+        if in_window is not None:
+            composite, n = in_window
+            expired = False
+        elif cov.expired and cov.median is not None:
+            composite, n = cov.median.composite, cov.median.n
+            expired = True
+        else:
+            continue  # never held a full quorum: nothing to expire
+        if n < MIN_ELIGIBLE_CASES or composite <= 0.0:
+            skipped.append((agent_id, "unranked", composite))
+        elif floor is not None and composite < floor:
+            skipped.append((agent_id, "below_board_floor", composite))
+        else:
+            owed.append((agent_id, composite, expired))
+    owed.sort(key=lambda item: (-item[1], str(item[0])))
+    retested: set[UUID] = set()
+    if owed:
+        retested = await _off_board_catchups_used(
+            session,
+            agent_ids=[a for a, _c, _e in owed],
+            bench_version=bench_version,
+        )
+    identities: dict[UUID, tuple[str, str]] = {}
+    content: dict[UUID, tuple[str, datetime]] = {}
+    for agent_id, miner_hotkey, owner, sha256, created_at in (
+        await session.execute(
+            select(
+                Agent.agent_id,
+                Agent.miner_hotkey,
+                emission_owner_key(),
+                Agent.sha256,
+                Agent.created_at,
+            )
+            .outerjoin(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
+            .where(
+                or_(
+                    Agent.agent_id.in_(
+                        [*board_medians, *(a for a, _c, _e in owed)] or (UUID(int=0),)
+                    ),
+                    # Every other scored run of an owed artifact, so a newer
+                    # rerun on (or off) the board still stands for it.
+                    and_(
+                        Agent.sha256.in_(
+                            select(Agent.sha256).where(
+                                Agent.agent_id.in_(
+                                    [a for a, _c, _e in owed] or (UUID(int=0),)
+                                )
+                            )
+                        ),
+                        Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
+                        Agent.shadow.is_(False),
+                    ),
+                )
+            )
+        )
+    ).tuples():
+        identities[agent_id] = (miner_hotkey, owner)
+        content[agent_id] = (sha256, created_at)
+    ordered = list(identities)
+    roots = dict(
+        zip(
+            ordered,
+            await attested_emission_owner_roots(
+                session, [identities[agent_id] for agent_id in ordered]
+            ),
+            strict=True,
+        )
+    )
+    owner_best: dict[str, float] = {}
+    for agent_id, median in board_medians.items():
+        root = roots.get(agent_id)
+        if root is not None:
+            owner_best[root] = max(owner_best.get(root, median), median)
+    # SN-485: reruns of one artifact are represented by the newest run, as on
+    # the ledger and the rollout catch-up board, never by the best draw.
+    latest_run: dict[tuple[str, str], UUID] = {}
+    for agent_id in ordered:
+        root = roots.get(agent_id)
+        if root is None:
+            continue
+        key = (root, content[agent_id][0])
+        current = latest_run.get(key)
+        if current is None or (content[agent_id][1], agent_id) > (
+            content[current][1],
+            current,
+        ):
+            latest_run[key] = agent_id
+    out: list[OffBoardCandidate] = []
+    for agent_id, composite, expired in owed:
+        root = roots.get(agent_id)
+        newest = (
+            None
+            if root is None or agent_id not in content
+            else latest_run.get((root, content[agent_id][0]))
+        )
+        if newest is not None and newest != agent_id:
+            skipped.append((agent_id, "superseded_rerun", composite))
+        elif agent_id in retested:
+            skipped.append((agent_id, "already_retested", composite))
+        elif root is not None and owner_best.get(root, -1.0) >= composite:
+            skipped.append((agent_id, "owner_has_better_agent", composite))
+        else:
+            if root is not None:
+                owner_best[root] = composite
+            out.append(
+                OffBoardCandidate(
+                    agent_id=agent_id, last_composite=composite, expired=expired
+                )
+            )
+    skipped.sort(key=lambda item: (-item[2], str(item[0])))
+    return tuple(out), tuple((agent_id, reason) for agent_id, reason, _c in skipped)
+
+
+async def _continual_catchup_board(
+    session: AsyncSession, bench_version: int
+) -> tuple[UUID, ...]:
+    """An authoritative season's catch-up board: the paid set (folded
+    emission set), then the public top five, deduped."""
+    from ditto.api_server.continual_retest_settings import settings_from_row
+    from ditto.api_server.endpoints.validator import _current_retest_cohort
+    from ditto.db.queries.continual_retest_settings import (
+        latest_continual_retest_settings_revision,
+    )
+
+    retest_settings = settings_from_row(
+        await latest_continual_retest_settings_revision(session)
+    )
+    emission, wave, _cohort, _challengers = await _current_retest_cohort(
+        session, canonical_version=bench_version, settings=retest_settings
+    )
+    return tuple(
+        dict.fromkeys([*(m.agent_id for m in emission), *(m.agent_id for m in wave)])
+    )
+
+
+async def queue_catchup_retests(
+    session: AsyncSession,
+    season: DuelingSeason,
+    *,
+    candidates: CatchupCandidates,
+    settings: GeneratorCompetitionSettings,
+    now: datetime,
+) -> dict[str, Any]:
+    """Queue one rotation re-test for each catch-up candidate, once.
+
+    Runs after :func:`queue_rotation_retests`: anyone the opening cohort
+    already re-scores is skipped. The first ``season_catchup_max_agents``
+    board agents (board order) always queue. The overflow -- board agents
+    past that cap, then the off-board candidates (best last median first) --
+    queues while its estimated cost fits ``season_catchup_budget_usd``
+    (:func:`_catchup_run_cost`); the rest are recorded ``over_budget``. All
+    queue behind the cohort with the same mechanics: the new set, the
+    season's rotation seed, idempotent per ``(season, agent, validator)``,
+    tagged with their ``catch_up_source``. Nothing else ever queues a
+    boundary catch-up, so an agent gets at most one per season. Recorded on
+    the season (``detail.catchup``); caller commits.
+    """
+    from ditto.db.queries.score_retests import (
+        CATCH_UP_SOURCE_BOARD,
+        CATCH_UP_SOURCE_BOARD_OVERFLOW,
+        CATCH_UP_SOURCE_OFF_BOARD,
+        queue_dueling_rotation_retests,
+    )
+
+    record: dict[str, Any] = {
+        "queued_at": now.isoformat(),
+        "enabled": settings.season_catchup_enabled,
+        "max_agents": settings.season_catchup_max_agents,
+        "budget_usd": settings.season_catchup_budget_usd,
+    }
+    if not settings.season_catchup_enabled:
+        record["skipped"] = "season_catchup_enabled is off"
+    elif candidates.skipped is not None:
+        record["skipped"] = candidates.skipped
+    elif candidates.error is not None:
+        record["error"] = candidates.error
+    elif candidates.closed_season_id is None:
+        record["skipped"] = "no earlier season opened"
+    if set(record) & {"skipped", "error"}:
+        season.detail = {**(season.detail or {}), CATCHUP_KEY: record}
+        return record
+    rotation = (season.detail or {}).get("rotation") or {}
+    in_cohort = {str(member.get("agent_id")) for member in rotation.get("cohort", ())}
+    owed = [a for a in candidates.missing if str(a) not in in_cohort]
+    cap = settings.season_catchup_max_agents
+    agents, capped = owed[:cap], owed[cap:]
+    overflow = [(a, CATCH_UP_SOURCE_BOARD_OVERFLOW) for a in capped] + [
+        (c.agent_id, CATCH_UP_SOURCE_OFF_BOARD)
+        for c in candidates.off_board
+        if str(c.agent_id) not in in_cohort
+    ]
+    run_cost, run_cost_source = (
+        await _catchup_run_cost(session, settings=settings, now=now)
+        if overflow
+        else (settings.season_catchup_run_cost_usd, "setting")
+    )
+    budget = settings.season_catchup_budget_usd
+    estimated = 0.0
+    fitted: list[tuple[UUID, str, int, float]] = []
+    over_budget: list[tuple[UUID, str]] = []
+    for agent_id, source in overflow:
+        runs = max(1, candidates.run_counts.get(agent_id, 1))
+        cost = round(runs * run_cost, 6)
+        if estimated + cost <= budget + 1e-9:
+            estimated = round(estimated + cost, 6)
+            fitted.append((agent_id, source, runs, cost))
+        else:
+            over_budget.append((agent_id, source))
+    skip_counts: dict[str, int] = {}
+    for _agent_id, reason in candidates.off_board_skipped:
+        skip_counts[reason] = skip_counts.get(reason, 0) + 1
+    record.update(
+        source=candidates.source,
+        closed_season_id=str(candidates.closed_season_id),
+        board=[str(agent_id) for agent_id in candidates.board],
+        in_opening_cohort=[str(a) for a in candidates.missing if str(a) in in_cohort],
+        agents=[str(agent_id) for agent_id in agents],
+        capped=[str(agent_id) for agent_id in capped],
+        run_cost_usd=run_cost,
+        run_cost_source=run_cost_source,
+        overflow=[
+            {
+                "agent_id": str(agent_id),
+                "source": source,
+                "runs": runs,
+                "estimated_usd": cost,
+            }
+            for agent_id, source, runs, cost in fitted
+        ],
+        overflow_estimated_usd=estimated,
+        over_budget=[
+            {"agent_id": str(agent_id), "source": source}
+            for agent_id, source in over_budget
+        ],
+        off_board_skipped=[
+            {"agent_id": str(agent_id), "reason": reason}
+            for agent_id, reason in candidates.off_board_skipped[
+                :MAX_RECORDED_OFF_BOARD_SKIPS
+            ]
+        ],
+        off_board_skipped_counts=skip_counts,
+    )
+    batches = [
+        (CATCH_UP_SOURCE_BOARD, list(agents)),
+        (
+            CATCH_UP_SOURCE_BOARD_OVERFLOW,
+            [a for a, src, _r, _c in fitted if src == CATCH_UP_SOURCE_BOARD_OVERFLOW],
+        ),
+        (
+            CATCH_UP_SOURCE_OFF_BOARD,
+            [a for a, src, _r, _c in fitted if src == CATCH_UP_SOURCE_OFF_BOARD],
+        ),
+    ]
+    if any(batch for _source, batch in batches):
+        totals = {"queued": 0, "already_current": 0, "busy": 0, "replaced": 0}
+        rank = len(rotation.get("cohort", ()))
+        errors: dict[str, str] = {}
+        for source, batch in batches:
+            if not batch:
+                continue
+            first_rank = rank
+            rank += len(batch)
+            # One savepoint per source: a failed overflow batch never rolls
+            # back the board catch-ups queued before it.
+            try:
+                async with session.begin_nested():
+                    counts = await queue_dueling_rotation_retests(
+                        session,
+                        season_id=season.id,
+                        bench_version=season.bench_version,
+                        cohort=batch,
+                        now=now,
+                        catch_up=True,
+                        first_rank=first_rank,
+                        catch_up_source=source,
+                    )
+            except Exception as exc:  # noqa: BLE001 - recorded, never blocks the open
+                logger.exception(
+                    "dueling season %s: %s catch-up re-tests failed", season.id, source
+                )
+                errors[source] = f"{type(exc).__name__}: {exc}"[:500]
+                continue
+            for key, value in counts.items():
+                totals[key] = totals.get(key, 0) + value
+        record.update(totals)
+        if errors:
+            record["errors"] = errors
+            record["error"] = next(iter(errors.values()))
+    season.detail = {**(season.detail or {}), CATCHUP_KEY: record}
+    return record
+
+
+async def queue_cleared_hold_retest(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    review_id: UUID,
+    now: datetime,
+) -> dict[str, Any]:
+    """After an ATH hold clears, re-score the agent on the open season.
+
+    A hold keeps an agent off the board, so no boundary catch-up covers it,
+    and a hold longer than about two seasons lets every score it holds leave
+    the window: it is cleared already expired and nothing ever re-tests it.
+    Had it not been held, it would have been re-scored with the board. So a
+    clear that leaves the agent ``scored`` or ``live`` at the active dueling
+    version, with less than a full quorum in the open season, queues one
+    rotation re-test per accepted score on that season's set (``catch_up``,
+    source ``ath_clear``), idempotent per ``(season, agent, validator)``. It
+    is platform work, never charged to the miner. Returns what happened,
+    with a ``skipped`` reason when nothing was queued. Never raises; caller
+    commits.
+    """
+    from ditto.db.models import Score
+    from ditto.db.queries.score_retests import (
+        CATCH_UP_SOURCE_ATH_CLEAR,
+        queue_dueling_rotation_retests,
+    )
+    from ditto.db.queries.scores import SCORING_QUORUM
+
+    record: dict[str, Any] = {"queued": 0}
+    try:
+        async with session.begin_nested():
+            agent = await session.get(Agent, agent_id)
+            if agent is None or agent.status not in (
+                AgentStatus.SCORED,
+                AgentStatus.LIVE,
+            ):
+                record["skipped"] = "the agent is not scored or live after the clear"
+                return record
+            version = await active_bench_version(session)
+            record["bench_version"] = version
+            if not is_dueling_bench_version(version):
+                record["skipped"] = "the active bench version has no dueling seasons"
+                return record
+            season = await open_season(session, version)
+            if season is None:
+                record["skipped"] = "no dueling season is open"
+                return record
+            record["dueling_season_id"] = str(season.id)
+            seasons = list(
+                await session.scalars(
+                    select(Score.dueling_season_id).where(
+                        Score.agent_id == agent_id, Score.bench_version == version
+                    )
+                )
+            )
+            if not seasons:
+                record["skipped"] = f"no accepted score at bench v{version}"
+                return record
+            if sum(1 for s in seasons if s == season.id) >= SCORING_QUORUM:
+                record["skipped"] = "its quorum is already from the open season"
+                return record
+            rotation = (season.detail or {}).get("rotation") or {}
+            catchup = (season.detail or {}).get(CATCHUP_KEY) or {}
+            counts = await queue_dueling_rotation_retests(
+                session,
+                season_id=season.id,
+                bench_version=version,
+                cohort=[agent_id],
+                now=now,
+                catch_up=True,
+                first_rank=len(rotation.get("cohort", ()))
+                + len(catchup.get("agents", ()))
+                + len(catchup.get("overflow", ())),
+                catch_up_source=CATCH_UP_SOURCE_ATH_CLEAR,
+                extra_payload={"ath_review_id": str(review_id)},
+            )
+            record.update(counts, catch_up_source=CATCH_UP_SOURCE_ATH_CLEAR)
+    except Exception as exc:  # noqa: BLE001 - a clear never fails on this
+        logger.exception("ATH clear %s: season re-test failed", agent_id)
+        record["error"] = f"{type(exc).__name__}: {exc}"[:500]
+    return record
+
+
+async def _catchup_run_cost(
+    session: AsyncSession,
+    *,
+    settings: GeneratorCompetitionSettings,
+    now: datetime,
+) -> tuple[float, str]:
+    """``(usd_per_run, source)`` for the catch-up budget estimate.
+
+    The metered cost per priced rotation re-test run over the last 24 hours
+    (opening and catch-up together, ``metered_24h``), else the
+    ``season_catchup_run_cost_usd`` fallback (``setting``). An estimate from
+    averages, never a quote: the budget bounds what is queued, not what the
+    runs end up costing.
+    """
+    from ditto.db.queries.dueling_rotation_spend import rotation_spend_since
+
+    try:
+        async with session.begin_nested():
+            day = await rotation_spend_since(session, now - timedelta(days=1))
+    except Exception:  # noqa: BLE001 - fall back to the setting
+        logger.exception("dueling season catch-up: run cost read failed")
+        return settings.season_catchup_run_cost_usd, "setting"
+    priced = day.opening.priced_runs + day.catchup.priced_runs
+    cost = day.opening.cost_microusd + day.catchup.cost_microusd
+    if priced <= 0 or cost <= 0:
+        return settings.season_catchup_run_cost_usd, "setting"
+    return round(cost / priced / 1_000_000, 6), "metered_24h"
+
+
+async def _log_rotation_spend(
+    session: AsyncSession,
+    season: DuelingSeason,
+    *,
+    rotation: dict[str, Any],
+    catchup: dict[str, Any],
+) -> None:
+    """One log line per season open: what it queued, and what the closed
+    season's opening rotation and catch-up re-tests really cost."""
+    from ditto.db.queries.dueling_rotation_spend import (
+        rotation_spend_by_season,
+        rotation_spend_since,
+    )
+    from ditto.db.queries.dueling_season_window import dueling_season_window
+
+    try:
+        async with session.begin_nested():
+            window = await dueling_season_window(session, season.bench_version)
+            closed = window.previous if window is not None else None
+            spent = (
+                None
+                if closed is None
+                else (await rotation_spend_by_season(session, [closed])).get(closed)
+            )
+            day = await rotation_spend_since(
+                session, (season.opened_at or datetime.now(UTC)) - timedelta(days=1)
+            )
+    except Exception:  # noqa: BLE001 - a log line never blocks the open
+        logger.exception("dueling season %s: rotation spend read failed", season.id)
+        return
+    logger.info(
+        "dueling season %s v%s opened: %s rotation and %s catch-up re-test(s) "
+        "queued (catch-up agents %s, capped %s, overflow %s est $%.4f, over "
+        "budget %s); closed season %s spent "
+        "opening %s run(s) $%.4f, catch-up %s run(s) $%.4f; last 24h opening "
+        "$%.4f/day, catch-up $%.4f/day",
+        season.season_index,
+        season.bench_version,
+        rotation.get("queued", 0),
+        catchup.get("queued", 0),
+        len(catchup.get("agents", ())),
+        len(catchup.get("capped", ())),
+        len(catchup.get("overflow", ())),
+        float(catchup.get("overflow_estimated_usd", 0.0)),
+        len(catchup.get("over_budget", ())),
+        closed,
+        spent.opening.runs if spent else 0,
+        spent.opening.cost_usd if spent else 0.0,
+        spent.catchup.runs if spent else 0,
+        spent.catchup.cost_usd if spent else 0.0,
+        day.opening.cost_usd,
+        day.catchup.cost_usd,
+    )
+
+
+IDLE_EXTENSIONS_KEY = "idle_extensions"
+"""``DuelingSeason.detail`` key: how often, and when, the season was extended."""
+MAX_RECORDED_IDLE_EXTENSIONS = 20
+IDLE_ELIGIBLE_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE, AgentStatus.EVALUATING)
+"""An agent created since the season opened in one of these statuses is a
+change: scored, or being scored right now (it reaches the board within the
+season). A long operator hold (``ath_pending_review``) is not, or one held
+agent would force a paid rotation every boundary; its release is."""
+
+
+def _pin_identity(columns: Any) -> list[list[Any]]:
+    """A season's frozen generator set, order-free: who fills each column with
+    which exact source and grading policy."""
+    return sorted(
+        [
+            str(column.get("submission_id")),
+            str(column.get("source_sha256")),
+            column.get("grading_bench_version"),
+            bool(column.get("public_default")),
+        ]
+        for column in columns or ()
+    )
+
+
+def season_first_extended_at(season: DuelingSeason | None) -> datetime | None:
+    """When ``season`` first ran past its scheduled close, if ever: extended
+    as idle, or its close deferred for a successor (both keep its duel seeds
+    public longer than one season)."""
+    detail = (season.detail or {}) if season is not None else {}
+    stamps: list[datetime] = []
+    for key, field in (
+        (IDLE_EXTENSIONS_KEY, "first_extended_at"),
+        (CLOSE_DEFERRAL_KEY, "first_deferred_at"),
+    ):
+        record = detail.get(key)
+        first = record.get(field) if isinstance(record, dict) else None
+        if not isinstance(first, str):
+            continue
+        # Always aware: it is compared with TIMESTAMPTZ columns (Agent.created_at).
+        parsed = datetime.fromisoformat(first)
+        stamps.append(
+            parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+        )
+    return min(stamps) if stamps else None
+
+
+async def idle_season_extension(
+    session: AsyncSession,
+    season: DuelingSeason,
+    *,
+    resolved: ResolvedSettings,
+    target: DuelingTarget,
+    current: int,
+) -> str | None:
+    """Why the open, due ``season`` should not rotate, or None to rotate.
+
+    Idle means a rotation would only re-buy the evidence the season already
+    holds, so it is extended instead (all or nothing: the whole cohort keeps
+    its rows, nobody is re-tested):
+
+    a. the committed season that would open now freezes the same generator
+       pins (submission, source digest, grading policy, default flag);
+    b. the rotation cohort has the members this season re-scored when it
+       opened;
+    c. no agent created since the season opened is scored, live or being
+       scored;
+    d. no rotation was requested (checked by the caller).
+    """
+    if not resolved.settings.skip_unchanged_rounds:
+        return None
+    if target.blocked is not None or target.bench_version != season.bench_version:
+        return None
+    if target.shadow != season.shadow or season.opened_at is None:
+        return None
+    committed = await session.scalar(
+        select(DuelingSeason).where(
+            DuelingSeason.bench_version == season.bench_version,
+            DuelingSeason.status == "committed",
+            DuelingSeason.season_index == current,
+        )
+    )
+    if committed is None or committed.shadow != season.shadow:
+        return None
+    columns, fallback = await freeze_columns(session, committed)
+    if isinstance(fallback, str) or _pin_identity(columns) != _pin_identity(
+        season.columns
+    ):
+        return None
+    rotation = (season.detail or {}).get("rotation") or {}
+    if rotation.get("error") or "cohort" not in rotation:
+        return None
+    # Membership, not rank order: the same agents re-scored on the same pins
+    # buy the same evidence whatever order the board lists them in.
+    opened_cohort = sorted(str(member.get("agent_id")) for member in rotation["cohort"])
+    cohort, _source = await _rotation_cohort(session, season)
+    if sorted(str(agent_id) for agent_id in cohort) != opened_cohort:
+        return None
+    entrant = await session.scalar(
+        select(Agent.agent_id)
+        .where(
+            Agent.created_at > season.opened_at,
+            Agent.status.in_(IDLE_ELIGIBLE_STATUSES),
+        )
+        .limit(1)
+    )
+    if entrant is not None:
+        return None
+    return (
+        "idle: same generator pins and rotation cohort, no new eligible agent "
+        "since the season opened"
+    )
+
+
+def _extend(
+    season: DuelingSeason,
+    *,
+    why: str,
+    current: int,
+    position: ChainPosition,
+    now: datetime,
+) -> None:
+    """Push ``season``'s close one season length out and record why."""
+    season.closes_at_round = current + season.rounds_per_season
+    detail = dict(season.detail or {})
+    record = dict(detail.get(IDLE_EXTENSIONS_KEY) or {})
+    history = list(record.get("recent") or [])
+    history.append(
+        {
+            "at_round": current,
+            "closes_at_round": season.closes_at_round,
+            "epoch_index": position.subnet_epoch_index,
+            "at": now.isoformat(),
+            "reason": why,
+        }
+    )
+    record.update(
+        count=int(record.get("count") or 0) + 1,
+        first_extended_at=record.get("first_extended_at") or now.isoformat(),
+        last_extended_at=now.isoformat(),
+        recent=history[-MAX_RECORDED_IDLE_EXTENSIONS:],
+    )
+    detail[IDLE_EXTENSIONS_KEY] = record
+    deferral = detail.get(CLOSE_DEFERRAL_KEY)
+    if isinstance(deferral, dict) and deferral.get("open"):
+        # The season reached a scheduled close again: a later deferral is a
+        # new episode, and the cap counts per episode.
+        detail[CLOSE_DEFERRAL_KEY] = {**deferral, "open": False}
+    season.detail = detail
+
+
+CLOSE_DEFERRAL_KEY = "close_deferral"
+"""``DuelingSeason.detail`` key: a due close held for an unready successor."""
+MAX_DEFERRED_ROUNDS = 6
+"""Rounds a due close may wait for a successor (about a day at 4.8h rounds).
+Past it the season closes as before: a successor that cannot open for a day
+is an operator problem, and reveals and source releases must not wait on it
+indefinitely."""
+ANCHOR_PASSED_KEY = "anchor_passed_at"
+"""``DuelingSeason.detail`` key on a committed successor whose anchor block
+exists while the season before it is held open: a commitment published from
+then on proves nothing, so publication is settled and republish refused."""
+
+
+async def successor_blocker(
+    session: AsyncSession,
+    season: DuelingSeason,
+    *,
+    target: DuelingTarget,
+    clock: RoundClock,
+    position: ChainPosition,
+) -> tuple[str | None, DuelingSeason | None]:
+    """Why the season that should follow the due ``season`` cannot open at
+    this position (None when it can, or when ``season`` should close
+    regardless), and that successor if one is committed.
+
+    Every v16+ lease needs an open season of its version
+    (:func:`resolve_dueling_slice`). Closing a due season before its
+    successor can open leaves the version with none, and validators are
+    refused until a later boundary: on 2026-11-12 the successor's default
+    generator battery finished 46 minutes after the boundary, the successor
+    was voided, and canonical scoring stalled for 4.8 hours (SN-476). The
+    checks mirror what step 3 of :func:`advance_seasons` and :func:`_open`
+    would void the successor for. A dueling target that is blocked or moved
+    to another version closes the season as before.
+    """
+    if target.blocked is not None or target.bench_version != season.bench_version:
+        return None, None
+    current = clock.current
+    successor = await session.scalar(
+        select(DuelingSeason).where(
+            DuelingSeason.bench_version == season.bench_version,
+            DuelingSeason.status == "committed",
+            DuelingSeason.season_index == current,
+        )
+    )
+    if successor is None:
+        return f"no season is committed for round {current}", None
+    if successor.shadow != target.shadow:
+        return "the committed successor's contract changed before it opened", successor
+    committed_epoch = int((successor.detail or {}).get("committed_epoch_index", -1))
+    if committed_epoch >= clock.first_epoch:
+        return "the committed successor was committed after its anchor block", successor
+    if await _anchor(session, current, clock.first_epoch, position) is None:
+        return "the successor's opening epoch was missed", successor
+    scored = await session.scalar(
+        select(func.count())
+        .select_from(GeneratorRound)
+        .where(GeneratorRound.status == "scored")
+    )
+    if not scored:
+        return "no generator round has been scored yet", successor
+    _columns, fallback = await freeze_columns(session, successor)
+    if isinstance(fallback, str):
+        return fallback, successor
+    return None, successor
+
+
+def _deferred_rounds(season: DuelingSeason) -> int:
+    """Rounds the current deferral episode has waited (0 outside one)."""
+    record = (season.detail or {}).get(CLOSE_DEFERRAL_KEY)
+    if not isinstance(record, dict) or not record.get("open"):
+        return 0
+    return int(record.get("rounds") or 0)
+
+
+def _defer_close(
+    season: DuelingSeason, *, why: str, current: int, now: datetime
+) -> bool:
+    """Record that ``season``'s due close waits for its successor; True when
+    the record changed. Written only when the reason or round changes, so a
+    tick loop does not churn.
+
+    ``rounds`` counts the current episode, which an idle extension ends
+    (:func:`_extend`), so :data:`MAX_DEFERRED_ROUNDS` bounds one continuous
+    wait, not a season's lifetime. ``first_deferred_at`` is kept across
+    episodes: it is the duel-seed exposure stamp."""
+    detail = dict(season.detail or {})
+    record = dict(detail.get(CLOSE_DEFERRAL_KEY) or {})
+    episode = bool(record.get("open"))
+    if episode and record.get("reason") == why and record.get("at_round") == current:
+        return False
+    new_round = not episode or record.get("at_round") != current
+    record.update(
+        first_deferred_at=record.get("first_deferred_at") or now.isoformat(),
+        last_deferred_at=now.isoformat(),
+        open=True,
+        episode_start_round=(record.get("episode_start_round") if episode else current),
+        at_round=current,
+        reason=why[:500],
+        rounds=(int(record.get("rounds") or 0) if episode else 0)
+        + (1 if new_round else 0),
+        episodes=int(record.get("episodes") or 0) + (0 if episode else 1),
+    )
+    detail[CLOSE_DEFERRAL_KEY] = record
+    season.detail = detail
+    return True
+
+
+async def _settle_successor_at_anchor(
+    session: AsyncSession, successor: DuelingSeason, *, now: datetime
+) -> None:
+    """The successor's anchor block exists while it waits: settle its
+    on-chain commitment publication now, exactly as opening would, so no
+    claim is offered and no confirmation counts after the anchor."""
+    from ditto.api_server.dueling_season_commitments import (
+        season_commitment_confirmations,
+    )
+
+    if ANCHOR_PASSED_KEY in (successor.detail or {}):
+        return
+    # A validator's commitment report locks the same row and may flip it to
+    # published; lock it here so the settle never overwrites that.
+    await session.refresh(successor, with_for_update=True)
+    if successor.status != "committed" or ANCHOR_PASSED_KEY in (successor.detail or {}):
+        return
+    successor.detail = {**(successor.detail or {}), ANCHOR_PASSED_KEY: now.isoformat()}
+    if successor.commitment_publication != "pending":
+        return
+    if await season_commitment_confirmations(session, successor.id) > 0:
+        successor.commitment_publication = "published"
+        successor.commitment_error = None
+    else:
+        successor.commitment_publication = "failed"
+        successor.commitment_error = (
+            "no validator confirmed the on-chain commitment before the "
+            "season's anchor block"
+        )
 
 
 async def advance_seasons(
@@ -597,10 +1945,79 @@ async def advance_seasons(
         elif season.rotation_requested_at is not None and season.rotation_immediate:
             reason = f"rotated immediately: {season.rotation_reason}"
         elif season.closes_at_round is not None and season.closes_at_round <= current:
+            idle = (
+                await idle_season_extension(
+                    session,
+                    season,
+                    resolved=resolved,
+                    target=target,
+                    current=current,
+                )
+                if season.rotation_requested_at is None
+                else None
+            )
+            if idle is not None:
+                # The privacy window counts from the extended close, so the
+                # secret is never revealed before the season really ends.
+                _extend(season, why=idle, current=current, position=position, now=now)
+                notes.append(
+                    f"season {season.season_index} v{season.bench_version}: "
+                    f"extended to round {season.closes_at_round} ({idle})"
+                )
+                continue
+            # An audited rotation keeps its promise to close at the boundary
+            # (an operator rotating out a bad generator wants it gone).
+            blocker, successor = (
+                await successor_blocker(
+                    session, season, target=target, clock=clock, position=position
+                )
+                if season.rotation_requested_at is None
+                else (None, None)
+            )
+            deferred = _deferred_rounds(season)
+            capped = blocker is not None and deferred >= MAX_DEFERRED_ROUNDS
+            if blocker is not None and not capped:
+                # Closing now would leave the version with no open season, and
+                # every v16+ lease is refused until one opens. Keep serving
+                # this season's set until the successor can take over.
+                if (
+                    successor is not None
+                    and successor.status == "committed"
+                    and await _anchor(session, current, clock.first_epoch, position)
+                    is not None
+                ):
+                    await _settle_successor_at_anchor(session, successor, now=now)
+                if _defer_close(season, why=blocker, current=current, now=now):
+                    logger.warning(
+                        "dueling season %s v%s: close deferred at round %s: %s",
+                        season.season_index,
+                        season.bench_version,
+                        current,
+                        blocker,
+                    )
+                    notes.append(
+                        f"season {season.season_index} v{season.bench_version}: "
+                        f"close deferred ({blocker})"
+                    )
+                continue
+            if capped:
+                logger.error(
+                    "dueling season %s v%s: successor still not ready after %s "
+                    "deferred round(s); closing with no successor: %s",
+                    season.season_index,
+                    season.bench_version,
+                    deferred,
+                    blocker,
+                )
             reason = (
                 f"rotated: {season.rotation_reason}"
                 if season.rotation_requested_at is not None
-                else "season ended"
+                else (
+                    f"season ended (successor not ready after {deferred} "
+                    f"deferred round(s): {blocker})"[:500]
+                    if capped
+                    else "season ended"
+                )
             )
         if reason is not None:
             _close(season, reason=reason, position=position, settings=settings, now=now)
@@ -688,6 +2105,16 @@ async def advance_seasons(
             )
             .with_for_update()
         )
+        if (
+            live is not None
+            and live.closes_at_round is not None
+            and live.closes_at_round <= current
+            and committed is not None
+            and committed.season_index == current
+        ):
+            # The live season's close is deferred until this round's
+            # committed successor can open: keep it, it opens mid-round.
+            next_index = current
         if committed is not None and committed.season_index != next_index:
             _void(committed, f"season boundary moved to round {next_index}")
             notes.append(f"season {committed.season_index}: void (boundary moved)")
@@ -752,6 +2179,20 @@ async def advance_seasons(
                     f"season {committed.season_index}: {queued} battery candidate(s)"
                 )
     await session.flush()
+    # Close on-chain commitment publication for seasons that left committed.
+    notes.extend(await settle_season_commitment_publications(session))
+    # 5. Publish pinned generator sources whose embargo and reveal have passed.
+    try:
+        async with session.begin_nested():
+            notes.extend(await sync_generator_source_releases(session, now=now))
+    except Exception:  # noqa: BLE001 - a release sync never blocks seasons
+        logger.exception("dueling seasons: generator source release sync failed")
+    # 6. Prune slice bytes anyone can now regenerate, in its own savepoint.
+    try:
+        async with session.begin_nested():
+            notes.extend(await prune_released_slice_bytes(session, now=now))
+    except Exception:  # noqa: BLE001 - pruning never blocks seasons
+        logger.exception("dueling seasons: slice byte prune failed")
     for note in notes:
         logger.info("dueling seasons: %s", note)
     return notes
@@ -810,7 +2251,7 @@ async def lease_slice_work(
     if row is None:
         return None
     season = await session.get(DuelingSeason, row.season_id)
-    if row.attempts >= MAX_SLICE_ATTEMPTS:
+    if slice_attempts_exhausted(row):
         _fail_slice(row, "slice lease expired repeatedly", now=now)
         await session.flush()
         return None
@@ -875,6 +2316,55 @@ async def lease_slice_work(
             tree_sha256=fallback_sub.tree_sha256,
         ),
     )
+
+
+UNSUPPORTED_SLICE_ERROR_PREFIX = "infra: unsupported_request:"
+"""A preparation failed this way was refused by the scorer itself (a digest
+mismatch on the pinned source, an unbuildable request): a retry repeats it,
+so it needs a season rotation, not a re-queue."""
+
+
+def slice_attempts_exhausted(row: DuelingSlicePreparation) -> bool:
+    """Each operator retry restarts the lease attempt cap."""
+    return row.attempts >= MAX_SLICE_ATTEMPTS * (1 + (row.retries or 0))
+
+
+def slice_retry_refusal(
+    row: DuelingSlicePreparation, season: DuelingSeason | None, *, force: bool
+) -> str | None:
+    """Why this preparation cannot be re-queued now, or None."""
+    if row.status != "failed":
+        return f"preparation is {row.status}; only a failed one is retried"
+    if season is None or season.status != "open":
+        status = "missing" if season is None else season.status
+        return (
+            f"its season is {status}; only an open season's slices are retried "
+            "(a closed season's tickets keep their pinned bytes or are refused)"
+        )
+    if not force and (row.error or "").startswith(UNSUPPORTED_SLICE_ERROR_PREFIX):
+        return (
+            "the scorer refused this request itself (a digest mismatch or an "
+            "unbuildable pin): rotate the season instead, or pass force with a "
+            "reason"
+        )
+    return None
+
+
+def retry_slice(
+    row: DuelingSlicePreparation, *, actor: str, reason: str, now: datetime
+) -> None:
+    """Re-queue one failed preparation: attempts kept, error cleared."""
+    row.status = "pending"
+    row.error = None
+    row.failed_at = None
+    row.columns = None
+    row.scorer_version = None
+    row.lease_id = None
+    row.lease_expires_at = None
+    row.retries = (row.retries or 0) + 1
+    row.last_retry_at = now
+    row.last_retry_actor = actor
+    row.last_retry_reason = reason
 
 
 def _fail_slice(row: DuelingSlicePreparation, error: str, *, now: datetime) -> None:
@@ -1212,7 +2702,7 @@ async def record_dueling_fault(
     )
     if slice_row is not None:
         if payload.error_kind == "unsupported_request" or (
-            slice_row.attempts >= MAX_SLICE_ATTEMPTS
+            slice_attempts_exhausted(slice_row)
         ):
             _fail_slice(slice_row, detail, now=now)
             await session.flush()
@@ -1436,4 +2926,10 @@ def dueling_score_evidence(
         raise DuelingEvidenceRejected(
             "details.dueling owner_key is not the scored agent's owner"
         )
+    # Bench v19+ weights the columns at 0.15 and carries the datagen
+    # qualifier; a block weighted for another version is not this ticket's.
+    try:
+        report.check_bench_version(bench_version)
+    except ValueError as exc:
+        raise DuelingEvidenceRejected(str(exc)) from exc
     return season_id, report.model_dump(mode="json")

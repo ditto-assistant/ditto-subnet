@@ -35,7 +35,7 @@ func TestCompleteChatViaDittoRouterShapesASuccess(t *testing.T) {
 		seen = r
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"chatcmpl-1","model":"dittobench-competition","choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":12,"completion_tokens":3,"cost":0.0004}}`))
+		_, _ = w.Write([]byte(dittoRouterCompletion("dittobench-competition")))
 	}))
 	defer srv.Close()
 	cfg, router := dittoRouterTestConfig(srv.URL)
@@ -59,6 +59,71 @@ func TestCompleteChatViaDittoRouterShapesASuccess(t *testing.T) {
 	}
 	if len(result.phases) != 1 || result.phases[0].route != dittoRouterRoute || result.phases[0].status != 200 {
 		t.Fatalf("trace phase: %+v", result.phases)
+	}
+	// The harness sees the same rebuilt contract as on the OpenRouter path:
+	// Router-only keys (provider, reasoning, routing metadata, usage.cost) are
+	// dropped, never passed through verbatim.
+	want := `{"id":"chatcmpl-1","object":"chat.completion","created":1755000000,"model":"dittobench-competition",` +
+		`"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"hi"},"logprobs":null}],` +
+		`"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}`
+	if string(result.raw) != want {
+		t.Fatalf("sanitized body:\n got %s\nwant %s", result.raw, want)
+	}
+}
+
+// dittoRouterCompletion is a Router reply carrying additive keys the harness
+// contract does not include.
+func dittoRouterCompletion(model string) string {
+	return `{"id":"chatcmpl-1","object":"chat.completion","created":1755000000,"model":"` + model + `",` +
+		`"provider":"router-picked","ditto_routing":{"tier":"x"},` +
+		`"choices":[{"index":0,"finish_reason":"stop","logprobs":null,` +
+		`"message":{"role":"assistant","content":"hi","reasoning":"private chain of thought"}}],` +
+		`"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15,"cost":0.0004}}`
+}
+
+func TestCompleteChatViaDittoRouterRefusesAnotherModel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(dittoRouterCompletion("some/other-model")))
+	}))
+	defer srv.Close()
+	cfg, router := dittoRouterTestConfig(srv.URL)
+	result, exhausted := completeChatViaDittoRouter(context.Background(), srv.Client(), cfg, router,
+		map[string]any{"model": "dittobench-competition"}, "dittobench-competition", "u", func(context.Context, time.Duration) {})
+	if result != nil || exhausted == nil || exhausted.terminalErrorCode != "provider_identity_mismatch" {
+		t.Fatalf("a reply from an unlocked model must be refused: %+v / %+v", result, exhausted)
+	}
+}
+
+func TestCompleteChatViaDittoRouterRefusesAnOffContractReply(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Usage is valid but the choice has no finish_reason or index.
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"m",` +
+			`"choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer srv.Close()
+	cfg, router := dittoRouterTestConfig(srv.URL)
+	_, exhausted := completeChatViaDittoRouter(context.Background(), srv.Client(), cfg, router,
+		map[string]any{"model": "m"}, "m", "u", func(context.Context, time.Duration) {})
+	if exhausted == nil || exhausted.terminalErrorCode != "invalid_provider_response" {
+		t.Fatalf("exhausted: %+v", exhausted)
+	}
+}
+
+func TestCompleteChatViaDittoRouterFailuresNeverObserveTheOpenRouterRoute(t *testing.T) {
+	for name, status := range map[string]int{"402 consent": http.StatusPaymentRequired, "500 outage": http.StatusInternalServerError} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"error":{"message":"no"}}`))
+			}))
+			defer srv.Close()
+			cfg, router := dittoRouterTestConfig(srv.URL)
+			_, exhausted := completeChatViaDittoRouter(context.Background(), srv.Client(), cfg, router,
+				map[string]any{"model": "m"}, "m", "u", func(context.Context, time.Duration) {})
+			if exhausted == nil || exhausted.routeObservable {
+				t.Fatalf("a Router failure is not evidence about the OpenRouter route: %+v", exhausted)
+			}
+		})
 	}
 }
 
@@ -84,6 +149,44 @@ func TestCompleteChatViaDittoRouterReportsPaymentRequiredDistinctly(t *testing.T
 	}
 	if len(exhausted.phases) != 1 || exhausted.phases[0].status != 402 {
 		t.Fatalf("trace phase: %+v", exhausted.phases)
+	}
+}
+
+func TestCompleteChatViaDittoRouterClassifiesContextOverflow(t *testing.T) {
+	overflow := `{"error":{"code":400,"message":"Input length (145769) exceeds model's maximum context length (131072)."}}`
+	for name, testCase := range map[string]struct {
+		status int
+		body   string
+		code   string
+	}{
+		"http 400":           {http.StatusBadRequest, overflow, providerContextLengthExceededCode},
+		"200 envelope":       {http.StatusOK, overflow, providerContextLengthExceededCode},
+		"unrelated 400":      {http.StatusBadRequest, `{"error":{"code":400,"message":"invalid request"}}`, "upstream_http_400"},
+		"unrelated envelope": {http.StatusOK, `{"error":{"code":502,"message":"maximum context length"}}`, "provider_unavailable"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(testCase.status)
+				_, _ = w.Write([]byte(testCase.body))
+			}))
+			defer srv.Close()
+			cfg, router := dittoRouterTestConfig(srv.URL)
+			_, exhausted := completeChatViaDittoRouter(context.Background(), srv.Client(), cfg, router,
+				map[string]any{"model": "m"}, "m", "u", func(context.Context, time.Duration) {})
+			if exhausted == nil || exhausted.terminalErrorCode != testCase.code {
+				t.Fatalf("exhausted: %+v", exhausted)
+			}
+			want := http.StatusBadGateway
+			if testCase.code == providerContextLengthExceededCode {
+				want = http.StatusRequestEntityTooLarge
+				if exhausted.routeObservable {
+					t.Fatalf("an oversized request must not mark the route: %+v", exhausted)
+				}
+			}
+			if got := chatProviderFailure(exhausted).status; got != want {
+				t.Fatalf("public status=%d want %d", got, want)
+			}
+		})
 	}
 }
 

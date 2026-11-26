@@ -67,6 +67,17 @@ class RuntimeEnvelope:
             single_slot_headroom_mib=self.single_slot_headroom_mib,
         )
 
+    def host_memory_required_mib(
+        self, slots: int, sandbox_memory_limit_mib: int
+    ) -> int:
+        """Least host memory :meth:`memory_admitted_slots` admits ``slots`` on."""
+        return required_host_memory_mib(
+            slots,
+            sandbox_memory_limit_mib,
+            reserve_mib=self.host_memory_reserve_mib,
+            single_slot_headroom_mib=self.single_slot_headroom_mib,
+        )
+
 
 def admitted_slots(
     host_memory_mib: int,
@@ -89,6 +100,27 @@ def admitted_slots(
     ):
         return 1
     return slots
+
+
+def required_host_memory_mib(
+    slots: int,
+    sandbox_memory_limit_mib: int,
+    *,
+    reserve_mib: int,
+    single_slot_headroom_mib: int,
+) -> int:
+    """The least host memory :func:`admitted_slots` admits ``slots`` slots on.
+
+    The exact inverse, so the fix path a validator operator is told ("this host
+    needs N MiB for M slots") can never disagree with what admission enforces.
+    """
+    if slots <= 0:
+        return 0
+    required = slots * sandbox_memory_limit_mib + reserve_mib
+    if slots == 1:
+        # The one-slot floor keeps a host in the quorum below the reserve.
+        required = min(required, sandbox_memory_limit_mib + single_slot_headroom_mib)
+    return required
 
 
 @cache

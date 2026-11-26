@@ -29,6 +29,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ditto.api_models.admin_quarantine import (
+    AdminOpaqueBlobEntry,
+    AdminSourceFileEntry,
+    AdminSourceLine,
+    AdminSourceSearchMatch,
+)
+from ditto.api_models.generator_round_validator import MAX_ROUND_COLUMNS
 from ditto.api_models.name_claim import PublicNameHandle
 
 GENERATOR_SETTINGS_SCOPE = "*"
@@ -113,6 +120,18 @@ class GeneratorModel(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
 
+# The models the frontier oracle may answer on instead of the bench contract's
+# harness model: exactly the routes the scorer pins (dittobench-api
+# ``llm.FrontierOracleModel``). One today.
+FRONTIER_ORACLE_MODEL = "z-ai/glm-5.3-flash"
+FrontierOracleModel = Literal["z-ai/glm-5.3-flash"]
+# Below this bench version the scorer pins no oracle route, so a round keeps
+# the contract model whatever ``frontier_oracle_model`` says. Generator rounds
+# run at v13 and later today; this keeps the setting's signature and its
+# effect on one gate all the same.
+FRONTIER_ORACLE_MIN_BENCH_VERSION = 9
+
+
 class GeneratorCompetitionSettings(BaseModel):
     """The complete generator competition policy (one revision = whole object).
 
@@ -150,9 +169,15 @@ class GeneratorCompetitionSettings(BaseModel):
     """Generator columns every agent is compared on: the best qualified
     generators by latest round score, filled by the public default generator
     while too few qualify."""
-    challenger_columns: Annotated[int, Field(ge=0, le=2)] = 1
+    challenger_columns: Annotated[int, Field(ge=0, le=MAX_ROUND_COLUMNS - 1)] = 1
     """Extra columns for qualified generators that have never held a column.
-    They are scored as generators but never move an agent."""
+    They are scored as generators but never move an agent. Bounded by the
+    round's column capacity: counted plus challenger columns hold at most
+    ``MAX_ROUND_COLUMNS`` (8), so five counted columns leave room for three.
+    This is the minimum a round seats: above zero, every template family with
+    a never-scored generator waiting gets one challenger column, up to that
+    capacity. Spare challenger columns go on down the challenger queue, then
+    re-measure scored generators. Zero turns challenger columns off."""
     reference_agent_ids: Annotated[list[UUID], Field(max_length=3)] = Field(
         default_factory=list
     )
@@ -220,6 +245,119 @@ class GeneratorCompetitionSettings(BaseModel):
     authoritative. Must name a shipped bench contract. Null by default, and a
     revision written before this field existed reads as null."""
 
+    skip_unchanged_rounds: bool = True
+    """Spend no inference on a round that cannot change anything. A round
+    whose frozen columns (generator submissions and their source digests)
+    and panel agents, bench version, case count and score parameters all
+    match the last scored round is ``skipped`` at opening, with no
+    generation or panel runs. The ledger keeps paying that scored round's
+    column scores, and the skip keeps it inside ``window_days``. On by
+    default, and a revision written before this field existed reads as on."""
+
+    season_catchup_enabled: bool = True
+    """At a season boundary, re-score once on the new set every paid or
+    public top-five agent with no score in the season that just closed
+    (:func:`ditto.api_server.dueling_seasons.queue_catchup_retests`), then,
+    within ``season_catchup_budget_usd``, board agents past the cap and
+    scored off-board agents whose window scores expire. Without it, an agent
+    that scored after a season's opening cohort was picked expires one season
+    later, with no re-score. The kill switch: off queues none (an ATH clear
+    still re-scores its agent). On by default, and a revision written before
+    this field existed reads as on."""
+    season_catchup_max_agents: Annotated[int, Field(ge=0, le=10)] = 5
+    """At most this many board catch-up agents per season (each re-scored by
+    every validator that scored it), in board order, always queued. Board
+    agents past it are overflow, bounded by ``season_catchup_budget_usd``."""
+    season_catchup_budget_usd: Annotated[float, Field(ge=0.0, le=200.0)] = 10.0
+    """Estimated USD ceiling per season boundary for catch-up re-tests beyond
+    the first ``season_catchup_max_agents`` board agents: board agents past
+    the cap, then scored agents off the board whose last in-window scores
+    expire at this boundary (best last median first; one off-board catch-up
+    per agent per bench version). Estimated as runs x the metered rotation
+    cost per run of the last 24 hours (``season_catchup_run_cost_usd`` when
+    nothing was metered). Agents it cannot fit are recorded as capped, with
+    the reason, on the season and on the public expiry label. Zero queues
+    no overflow. A revision written before this field existed reads as 10."""
+    season_catchup_run_cost_usd: Annotated[float, Field(gt=0.0, le=20.0)] = 0.5
+    """Fallback cost of one re-test run, in USD, for the catch-up budget
+    estimate when no rotation re-test was metered in the last 24 hours."""
+
+    frontier_weight: Annotated[float, Field(ge=0.0, le=1.0)] = 1.0
+    """Share of full credit a frontier case earns: a case no two independent
+    panel owners solved that the frontier oracle answered and no failed audit
+    voided. Zero turns frontier scoring off. Takes effect only with
+    ``frontier_oracle_agent_id`` set. A revision written before this field
+    existed reads as 1.0."""
+    frontier_oracle_agent_id: Annotated[UUID | None, Field(strict=False)] = None
+    """The subnet-run reference agent that runs as the frontier oracle on a
+    scored round's unsolved cases, each from only its bounded
+    ``challenge.OracleContext``. Unset (the default) runs no oracle, so no
+    case is ever attested and frontier scoring stays inert."""
+    frontier_audit_cases: Annotated[int, Field(ge=0, le=16)] = 3
+    """Oracle-attested cases per column an operator audits, drawn with
+    ``challenge.FrontierAuditSample`` from the secret round seed. One invalid
+    case voids the column's frontier credit for the round. Zero applies
+    attestations without an audit."""
+    frontier_audit_grace_hours: Annotated[int, Field(ge=1, le=336)] = 24
+    """Hours an audit may stay unruled before the round's attestations are
+    applied anyway: operator silence never withholds frontier credit."""
+    frontier_oracle_timeout_hours: Annotated[int, Field(ge=1, le=168)] = 12
+    """Hours a scored round waits for its oracle run before it settles with
+    no attestations."""
+    frontier_oracle_model: FrontierOracleModel | None = None
+    """The model the frontier oracle (and the escalation agent) answers on,
+    instead of the bench contract's harness model. A witness no stronger than
+    the panel attests little, and gpt-oss-20b's 131072-token window
+    overflowed on whole rounds (SN-496). Unset (the default, and the reading
+    of a revision that predates the field) keeps the contract model. Set, an
+    oracle job is leased only to a validator whose scorer advertises the
+    model (``generator_frontier_oracle_models``), and Platform's inference
+    config must allow it."""
+    frontier_escalation_agent_id: Annotated[UUID | None, Field(strict=False)] = None
+    """A second, stronger subnet-run reference agent that re-checks the cases
+    the frontier oracle failed (:mod:`ditto.api_server.generator_frontier`,
+    "Escalation"). It runs only on a capped, secret-seed sample of the
+    oracle-failed candidates, on the same bounded oracle contexts, and a case
+    it passes is attested exactly like an oracle pass (same audit, same
+    frontier credit). Unset (the default) runs no escalation, so frontier
+    scoring and spend are unchanged. Must differ from the frontier oracle and
+    from every reference agent, and takes effect only while frontier scoring
+    runs."""
+    frontier_escalation_solve_threshold: Annotated[float, Field(gt=0.0, le=1.0)] = 1.0
+    """Score the escalation agent needs on a case to attest it. 1.0, the
+    default, requires a full answer (every list item), never a partial."""
+    frontier_escalation_max_cases: Annotated[int, Field(ge=1, le=64)] = 8
+    """At most this many oracle-failed cases per round go to the escalation
+    agent, across all columns: the round's spend ceiling."""
+    frontier_escalation_max_cases_per_column: Annotated[int, Field(ge=1, le=16)] = 4
+    """At most this many oracle-failed cases per column go to the escalation
+    agent."""
+    frontier_escalation_max_failed_fraction: Annotated[float, Field(gt=0.0, le=1.0)] = (
+        0.25
+    )
+    """A column whose oracle-failed cases exceed this share of its scored
+    (non-duplicate) cases is not escalated at all: a column that mostly
+    beats the oracle looks broken, not hard, and flooding a pack with
+    unsolvable cases must not buy escalation."""
+
+    prescreen_enabled: bool = False
+    """Pre-screen never-scored generators before they take a challenger
+    column (:mod:`ditto.api_server.generator_prescreens`): a batch of up to
+    ``prescreen_columns`` generators from the head of the challenger queue,
+    ``prescreen_cases`` cases each on a fresh secret seed, run by the top
+    ``prescreen_panel_size`` runnable ledger owners while no round needs the
+    panel. Inference spend that is never paid out: a pre-screen score only
+    orders the challenger queue. Ships off, and a revision written before
+    this field existed reads as off."""
+    prescreen_cases: Annotated[int, Field(ge=MIN_PACK_CASES, le=MAX_CASES_PER_SEED)] = (
+        16
+    )
+    """Cases per pre-screen column (the original ``cases_per_seed`` default)."""
+    prescreen_panel_size: Annotated[int, Field(ge=1, le=16)] = 3
+    """Top runnable ledger owners on a pre-screen panel."""
+    prescreen_columns: Annotated[int, Field(ge=1, le=8)] = 4
+    """Never-scored generators per pre-screen batch, one per owner."""
+
     @model_validator(mode="after")
     def _coherent(self) -> GeneratorCompetitionSettings:
         if self.min_solver_owners > self.min_panel:
@@ -228,8 +366,21 @@ class GeneratorCompetitionSettings(BaseModel):
             raise ValueError("min_panel must not exceed the round panel size")
         if len(set(self.reference_agent_ids)) != len(self.reference_agent_ids):
             raise ValueError("reference_agent_ids must be unique")
-        if self.counted_columns + self.challenger_columns > 8:
-            raise ValueError("a round holds at most 8 columns")
+        if self.counted_columns + self.challenger_columns > MAX_ROUND_COLUMNS:
+            raise ValueError(f"a round holds at most {MAX_ROUND_COLUMNS} columns")
+        escalation = self.frontier_escalation_agent_id
+        if escalation is not None:
+            if escalation == self.frontier_oracle_agent_id:
+                raise ValueError(
+                    "frontier_escalation_agent_id must differ from "
+                    "frontier_oracle_agent_id"
+                )
+            if escalation in self.reference_agent_ids:
+                # A panel agent already failed these cases on the panel; it
+                # must not re-roll its own attempt into an attestation.
+                raise ValueError(
+                    "frontier_escalation_agent_id must not be a reference agent"
+                )
         return self
 
     def dueling_season_refusal(self) -> str | None:
@@ -257,6 +408,60 @@ class GeneratorCompetitionSettings(BaseModel):
             "champion_bonus": self.champion_bonus,
             "target_cases": self.cases_per_seed,
         }
+
+    @property
+    def frontier_enabled(self) -> bool:
+        """Frontier scoring runs: a positive weight and an oracle agent."""
+        return self.frontier_weight > 0 and self.frontier_oracle_agent_id is not None
+
+    @property
+    def frontier_escalation_enabled(self) -> bool:
+        """Oracle-failed cases are re-checked by the escalation agent."""
+        return self.frontier_enabled and self.frontier_escalation_agent_id is not None
+
+    def measurement_params(
+        self, *, bench_version: int | None = None
+    ) -> dict[str, float | int | str]:
+        """Everything this policy changes about what a round measures: the
+        score params, plus the frontier policy while frontier scoring runs.
+        With frontier off this is exactly ``score_params()``, so a policy
+        that predates frontier scoring keeps its unchanged-round signature.
+
+        ``bench_version`` is the round's. The oracle model counts only where
+        it takes effect (``FRONTIER_ORACLE_MIN_BENCH_VERSION`` and later,
+        the same gate ``generator_frontier.oracle_run_model`` applies), so
+        setting it never changes the signature of a round it cannot change."""
+        params: dict[str, float | int | str] = dict(self.score_params())
+        if self.frontier_enabled:
+            params["frontier_weight"] = self.frontier_weight
+            params["frontier_oracle_agent_id"] = str(self.frontier_oracle_agent_id)
+            params["frontier_audit_cases"] = self.frontier_audit_cases
+            params["frontier_audit_grace_hours"] = self.frontier_audit_grace_hours
+            params["frontier_oracle_timeout_hours"] = self.frontier_oracle_timeout_hours
+            if self.frontier_oracle_model is not None and (
+                bench_version is None
+                or bench_version >= FRONTIER_ORACLE_MIN_BENCH_VERSION
+            ):
+                # Only while set and in effect, so a policy without it keeps
+                # its unchanged-round signature.
+                params["frontier_oracle_model"] = self.frontier_oracle_model
+        if self.frontier_escalation_enabled:
+            # Only while escalation runs, so a policy without it keeps its
+            # unchanged-round signature.
+            params["frontier_escalation_agent_id"] = str(
+                self.frontier_escalation_agent_id
+            )
+            params["frontier_escalation_solve_threshold"] = (
+                self.frontier_escalation_solve_threshold
+            )
+            params["frontier_escalation_max_cases"] = self.frontier_escalation_max_cases
+            params["frontier_escalation_max_cases_per_column"] = (
+                self.frontier_escalation_max_cases_per_column
+            )
+            params["frontier_escalation_max_failed_fraction"] = (
+                self.frontier_escalation_max_failed_fraction
+            )
+        return params
 
 
 class GeneratorSettingsRevision(GeneratorModel):
@@ -709,6 +914,56 @@ class AdminGeneratorSubmissionDetail(GeneratorModel):
 class AdminGeneratorSubmissionListResponse(GeneratorModel):
     submissions: list[GeneratorSubmissionSummary]
     counts_by_status: dict[str, int]
+
+
+class AdminGeneratorSourceListing(GeneratorModel):
+    """Bounded file inventory of one generator's stored source archive."""
+
+    submission_id: UUID
+    source_sha256: str
+    file_count: int
+    files: list[AdminSourceFileEntry]
+    opaque_blobs: list[AdminOpaqueBlobEntry]
+    opaque_total: int
+    """Total unreadable members found; ``opaque_blobs`` shows at most 128."""
+
+    truncated: bool
+
+
+class AdminGeneratorSourceExcerpt(GeneratorModel):
+    """A bounded line range from one file of a generator's source archive."""
+
+    submission_id: UUID
+    source_sha256: str
+    path: str
+    total_lines: int
+    start_line: int
+    end_line: int
+    lines: list[AdminSourceLine]
+
+
+class AdminGeneratorSourceSearchResult(GeneratorModel):
+    """Regex/literal hits across one generator's readable source files."""
+
+    submission_id: UUID
+    source_sha256: str
+    pattern: str
+    mode: Literal["regex", "literal"]
+    path_glob: str | None = None
+    matches: list[AdminSourceSearchMatch]
+    match_count: int
+    """Matches the scan found. A lower bound when ``truncated``."""
+
+    returned: int
+    limit: int
+    offset: int
+    has_more: bool
+    files_searched: int
+    files_matched: int
+    opaque_skipped: int
+    """Members never searched because they are binary or oversized."""
+
+    truncated: bool
 
 
 class GeneratorProbeEpochView(GeneratorModel):

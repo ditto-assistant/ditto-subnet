@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import asdict
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -18,6 +18,8 @@ from ditto.api_models.benchmark_contract import (
     benchmark_contract,
     benchmark_contracts,
 )
+from ditto.api_models.inference_concurrency_settings import InferenceConcurrencySettings
+from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_server.benchmark_rollout import (
     admit_stranded_previous_era_agent,
     expand_rolling_qualification,
@@ -29,6 +31,7 @@ from ditto.api_server.config import InferenceProxyConfig
 from ditto.api_server.datapipeline import DataPipelineError, DatasetGenerator
 from ditto.api_server.dependencies import get_dataset_generator, get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.inference_concurrency_settings import settings_from_row
 from ditto.api_server.inference_routing import (
     AGGREGATE_CALIBRATION_SAMPLES,
@@ -46,6 +49,7 @@ from ditto.db.models import (
     InferenceRoutingPolicy,
     ValidatorHeartbeat,
 )
+from ditto.db.queries.artifact_release_settings import artifact_release_policy
 from ditto.db.queries.benchmark_era_stranded import stranded_previous_era_agents
 from ditto.db.queries.benchmark_rollout import (
     MIN_SCOREABLE_BENCH_VERSION,
@@ -53,6 +57,7 @@ from ditto.db.queries.benchmark_rollout import (
     DatasetPin,
     RolloutConflictError,
     active_bench_version,
+    agent_attributable_exhausted_members,
     authority_selection_state,
     capable_validator_counts,
     create_rollout_snapshot,
@@ -73,6 +78,7 @@ from ditto.db.queries.stranded_admission import (
     stranded_admission_confirmation,
     stranded_admissions,
 )
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 router = APIRouter(prefix="/admin/benchmark-rollout", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -360,6 +366,7 @@ async def _decision_lane_start_blocker(
     session: AsyncSession,
     desired_version: int,
     inference_config: InferenceProxyConfig | None,
+    settings_cache: dict[str, InferenceConcurrencySettings] | None = None,
 ) -> str | None:
     """A v15+ rollout needs the operator's decision lane on with a pinned model.
 
@@ -371,15 +378,58 @@ async def _decision_lane_start_blocker(
     """
     if desired_version < DECISION_LANE_MIN_BENCH_VERSION or inference_config is None:
         return None
-    settings = settings_from_row(
-        await latest_inference_concurrency_settings_revision(session)
-    )
+    # One status read evaluates every decision-lane contract (v15 and later);
+    # the caller passes one cache so the settings row is read once per read,
+    # not once per shipped contract.
+    if settings_cache is not None and "settings" in settings_cache:
+        settings = settings_cache["settings"]
+    else:
+        settings = settings_from_row(
+            await latest_inference_concurrency_settings_revision(session)
+        )
+        if settings_cache is not None:
+            settings_cache["settings"] = settings
     lane = settings.decision_lane
     if not lane.enabled or lane.model is None:
         return (
             f"benchmark v{desired_version} rollout requires the decision lane "
             "enabled with a pinned model (set_inference_concurrency_settings "
             "decision_lane)"
+        )
+    return None
+
+
+async def _dueling_start_blocker(
+    session: AsyncSession,
+    desired_version: int,
+    inference_config: InferenceProxyConfig | None = None,
+) -> str | None:
+    """A v16+ (dueling) rollout needs a dueling season to be able to open.
+
+    Every v16+ ticket leases only with a ready slice from an open dueling
+    season, and a season opens only while ``dueling_enabled`` is on, the
+    competition is not off, and the source release policy is not
+    ``disclosure = never`` (``dueling_seasons.dueling_target``). Opening the
+    rollout without them would admit a cohort whose every lease answers 503,
+    so the start is refused. Unlike the proxy and decision-lane blockers this
+    is not about inference, so it applies on every call path.
+    """
+    del inference_config  # Same call shape as the other config blockers.
+    if not is_dueling_bench_version(desired_version):
+        return None
+    settings = (await load_settings(session)).settings
+    if settings.mode == "off" or not settings.dueling_enabled:
+        return (
+            f"benchmark v{desired_version} rollout requires dueling_enabled with "
+            "the generator competition on (set_generator_competition_settings); "
+            "its tickets lease only with a ready dueling slice"
+        )
+    policy = await artifact_release_policy(session)
+    if policy.disclosure is SourceDisclosure.NEVER:
+        return (
+            f"benchmark v{desired_version} rollout requires a source release "
+            "policy other than disclosure = never; a dueling season cannot open "
+            "without releasing every pinned generator's source"
         )
     return None
 
@@ -445,6 +495,7 @@ async def get_rollout_control(
     degraded: list[str] = []
     candidates: list[dict[str, object]] = []
     start_readiness: dict[int, tuple[bool, list[str]]] = {}
+    lane_settings_cache: dict[str, InferenceConcurrencySettings] = {}
     try:
         async with asyncio.timeout(_remaining(deadline)):
             for version in targets:
@@ -462,6 +513,10 @@ async def get_rollout_control(
                 )
                 if config_blocker is None:
                     config_blocker = await _decision_lane_start_blocker(
+                        session, version, inference_config, lane_settings_cache
+                    )
+                if config_blocker is None:
+                    config_blocker = await _dueling_start_blocker(
                         session, version, inference_config
                     )
                 if config_blocker is not None:
@@ -541,12 +596,23 @@ async def rollout_retry_diagnostics(session: AsyncSession) -> list[dict[str, obj
         rollout=rollout,
         canonical_version=rollout.desired_version,
     )
+    resolved = await agent_attributable_exhausted_members(
+        session,
+        rollout=rollout,
+        agent_ids=[
+            agent.agent_id
+            for agent, position in rows
+            if position <= rollout.priority_cohort_target
+        ],
+    )
     return [
         {
             "agent_id": str(agent.agent_id),
             "agent_name": agent.name,
             "bench_version": retry.bench_version,
-            "blocks_activation": position <= rollout.priority_cohort_target,
+            # A member its own failure closed out no longer gates the flip.
+            "blocks_activation": position <= rollout.priority_cohort_target
+            and agent.agent_id not in resolved,
             "state": retry.state,
             "score_count": retry.score_count,
             "recovery_allowed": retry.recovery_allowed,
@@ -677,6 +743,10 @@ class AdminStrandedAdmissionRequest(BaseModel):
         str, StringConstraints(strip_whitespace=True, pattern=r"^[0-9a-fA-F]{64}$")
     ]
     expected_previous_score_count: int = Field(ge=1)
+    category: Literal["ditto_fault", "owner_policy"] | None = None
+    """Why this free admission is granted, audited so free admissions can be
+    counted against paid readmissions (SN-485). Omitted reads as
+    ``unspecified``."""
 
 
 class StrandedAdmissionTicketRow(BaseModel):
@@ -699,6 +769,15 @@ class StrandedAdmissionRow(BaseModel):
     admitted_at: datetime
     actor: str | None
     reason: str | None
+    origin: str = "operator_stranded_admission"
+    """``operator_stranded_admission`` (free, operator) or ``paid_readmission``
+    (the miner's self-serve paid readmission)."""
+    category: str | None = None
+    """``ditto_fault``, ``owner_policy``, ``unspecified`` or ``paid``; null on
+    an admission from before SN-485."""
+    payment_ref: dict[str, Any] | None = None
+    """For a paid readmission: the proof (``block_hash``,
+    ``extrinsic_index``), ``amount_rao`` and ``funding``."""
     position: int | None
     agent_sha256: str | None
     previous_bench_version: int | None
@@ -821,6 +900,7 @@ async def admit_stranded_previous_era(
             expected_previous_score_count=payload.expected_previous_score_count,
             actor=payload.actor,
             reason=payload.reason,
+            category=payload.category or "unspecified",
         )
     except StrandedAgentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1071,6 +1151,8 @@ async def start_rollout(
         config_blocker = await _decision_lane_start_blocker(
             session, target, inference_config
         )
+    if config_blocker is None:
+        config_blocker = await _dueling_start_blocker(session, target, inference_config)
     if config_blocker is not None:
         raise HTTPException(status_code=409, detail=config_blocker)
     await _require_rollout_start_capacity(

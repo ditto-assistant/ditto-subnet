@@ -98,6 +98,8 @@ from ditto.api_models import (
     PublicEfficiencySnapshotResponse,
     PublicEfficiencyStatus,
     PublicEmissionRecipient,
+    PublicHarnessMemory,
+    PublicHarnessMemoryRun,
     PublicHealthResponse,
     PublicHostSpecs,
     PublicInferenceRun,
@@ -132,6 +134,8 @@ from ditto.api_models import (
     PublicScreeningReviewEvidence,
     PublicScreeningReviewFinding,
     PublicScreeningReviewLocation,
+    PublicSeasonExpiry,
+    PublicSeasonRetest,
     PublicSubmissionFamily,
     PublicSubmissionFamilyMember,
     PublicSubmissionImageBuild,
@@ -167,6 +171,8 @@ from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL
 from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.continual_retest_settings import (
+    CROWN_DUEL_PROTOCOL,
+    CROWN_DUEL_SEASONS,
     CROWN_GATE_PROTOCOL,
     DEFAULT_CHAMPION_STANDING_RANK,
     DEFAULT_MIN_DETHRONE_CONFIRMATIONS,
@@ -188,7 +194,9 @@ from ditto.api_models.public import (
     PublicCrownKing,
     PublicCrownRules,
     PublicDeferredReviewTrigger,
+    PublicDuelingSeasonState,
     PublicReviewConclusion,
+    PublicScoringWait,
     PublicScreeningInvariantAssessment,
     PublicScreeningReviewNote,
     ScorerLiveness,
@@ -233,6 +241,7 @@ from ditto.api_server.bench import CURRENT_BENCH_VERSION, is_bench_version_retir
 from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
+    configured_crown_gate,
     crown_gate_for,
     crown_incumbent_is_active,
     statistical_band_cap_is_active,
@@ -246,6 +255,13 @@ from ditto.api_server.deferred_source_review import (
     public_review_conclusion,
     public_review_reason,
     verified_review_notes,
+)
+from ditto.api_server.dueling_breakdown import public_dueling_breakdown
+from ditto.api_server.dueling_season_gate import (
+    DuelingSeasonGate,
+    dueling_season_gate,
+    queue_season_gates,
+    round_schedule,
 )
 from ditto.api_server.efficiency import (
     EfficiencyBoardView,
@@ -280,6 +296,7 @@ from ditto.api_server.generator_round_reservation import (
     round_reservation_active,
     validator_advertises_rounds,
 )
+from ditto.api_server.inference_concurrency_settings import settings_from_row
 from ditto.api_server.koth import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
@@ -294,22 +311,35 @@ from ditto.api_server.koth import (
     KothEntry,
     bounded_efficiency_adjusted_quality,
     champion_defense,
+    continual_composite,
     crown_standings,
+    duel_seed_records,
+    dueling_seed_records,
     emission_allocation,
     koth_entries_from_ledger,
+    ledger_row_dueling_fields,
     project_koth,
 )
 from ditto.api_server.ledger_pin import (
     classify_vector_against_pins,
+    crown_family_root,
     pin_expected_shares,
     pin_generator_fraction,
     pin_provisional_incumbent,
+    pin_row_champion_hotkey,
     served_crown_gate,
     served_rank_shares,
 )
 from ditto.api_server.miner_avatar import public_avatar_path
 from ditto.api_server.model_use import model_use_factor, model_use_policy
 from ditto.api_server.storage import ObjectDownloadFailedError, ObjectNotFoundError
+from ditto.api_server.submission_status import (
+    PUBLIC_ACTIVITY_STATUSES,
+    closed_submission_statuses,
+    era_change,
+    public_agent_status,
+)
+from ditto.api_server.validator_memory_admission import host_memory_admission
 from ditto.api_server.validator_slot_settings import (
     HostResourceSample,
     allowed_slot_count,
@@ -367,7 +397,9 @@ from ditto.db.queries.ath_review_queue_slo import (
 )
 from ditto.db.queries.audit import GENESIS_HASH, list_audit_entries
 from ditto.db.queries.benchmark_admission import (
+    admission_rollout_for_active_version,
     agent_is_admitted,
+    previous_era_scored_agent_ids,
 )
 from ditto.db.queries.benchmark_rollout import (
     LEGACY_BENCH_VERSION,
@@ -390,12 +422,22 @@ from ditto.db.queries.confirmation_scores import (
     WaveMembership,
     confirmation_composites_by_seed,
     confirmation_depths,
+    confirmation_history_by_agent,
+    duel_history_by_agent,
 )
 from ditto.db.queries.desired_era_backlog import prev_generation_agent_ids
+from ditto.db.queries.dueling_season_expiry import (
+    SeasonCoverage,
+    SeasonRetestState,
+    expired_season_ledger_rows,
+    season_coverage,
+    season_retest_states,
+)
 from ditto.db.queries.emission_eligibility import (
     AgentReviewPosture,
     load_review_postures,
 )
+from ditto.db.queries.harness_memory import agent_harness_memory
 from ditto.db.queries.heartbeats import (
     ActiveValidatorAssignment,
     ActiveValidatorWork,
@@ -407,6 +449,9 @@ from ditto.db.queries.heartbeats import (
     live_weight_setter_fleet_supports_protocol,
 )
 from ditto.db.queries.inference import USAGE_ACCOUNTING_VERSION
+from ditto.db.queries.inference_concurrency_settings import (
+    latest_inference_concurrency_settings_revision,
+)
 from ditto.db.queries.inference_observability import (
     LeaseInferenceActivity,
     LeaseSlotKey,
@@ -422,6 +467,7 @@ from ditto.db.queries.queue_order import (
     QueuePreviewEntry,
     preview_queue_order,
 )
+from ditto.db.queries.queue_removal import removed_agent_ids
 from ditto.db.queries.retirement import retired_agent_ids
 from ditto.db.queries.retry_state import (
     AgentRetryState,
@@ -450,6 +496,7 @@ from ditto.db.queries.scores import (
     list_eligible_ledger,
     list_memory_leader_timeline,
     list_provisional_ledger,
+    list_public_agent_scores,
     list_public_submissions,
     list_scored_bench_versions,
     list_scores_for_bench_version,
@@ -482,6 +529,7 @@ from ditto.db.queries.source_review_queue_slo import (
     ORDINARY_REVIEW_ACTIONABLE_STATUSES,
     load_source_review_queue_slo_snapshot,
 )
+from ditto.db.queries.terminal_failure import terminal_failure_codes
 from ditto.db.queries.tickets import (
     generator_round_free_ticket,
     get_score_continuation_floor,
@@ -491,11 +539,17 @@ from ditto.db.queries.tickets import (
 )
 from ditto.db.queries.transcript_mirror_settings import transcript_mirror_enabled
 from ditto.score_order import score_order_key
-from ditto.screener_policy_state import effective_screening_policy_version
+from ditto.screener_policy_state import (
+    lease_screening_policy_floor,
+)
 from ditto_screening_protocol import reason_codes
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 logger = logging.getLogger(__name__)
+
+# Recent harness memory runs published per agent on the pipeline (SN-500).
+_PUBLIC_HARNESS_MEMORY_RUNS = 20
 
 router = APIRouter(prefix="/public", tags=["public"])
 
@@ -632,22 +686,7 @@ _BENCHMARK_STALL_AFTER = timedelta(minutes=15)
 # past the validator's own 75-minute cap — the signal is a floor on wedged runs,
 # not a competing timeout.
 _BENCHMARK_STALL_PER_CHECK = timedelta(seconds=60)
-_PUBLIC_ACTIVITY_STATUSES = frozenset(
-    {
-        "waiting_screening",
-        "screening_failed",
-        "screening",
-        "waiting_validator",
-        "evaluating",
-        "below_score_floor",
-        "not_queued",
-        "retired",
-        "under_review",
-        "rejected",
-        "scored",
-        "live",
-    }
-)
+_PUBLIC_ACTIVITY_STATUSES = PUBLIC_ACTIVITY_STATUSES
 
 
 def _error_detail(error: BaseException) -> str:
@@ -1673,6 +1712,7 @@ def _health_reasons(
     stack_health: ValidatorStackHealth | None,
     scorer_reasons: list[str],
     bench_reason: str | None = None,
+    memory_reason: str | None = None,
 ) -> list[str]:
     """Human-readable labels explaining a non-healthy fleet badge.
 
@@ -1686,6 +1726,9 @@ def _health_reasons(
         # First, because it is the reason the validator earns nothing: every other
         # label describes a validator that is at least in the running.
         reasons.append(bench_reason)
+    if memory_reason is not None:
+        # Equally final: a host that fits no harness earns nothing either.
+        reasons.append(memory_reason)
     if state == "error":
         reasons.append("worker reported an error state")
     if metrics is None:
@@ -2611,6 +2654,7 @@ def _public_entry(
     router_shadow_by_hotkey: Mapping[str, float] | None = None,
     router_shadow_queued: bool = False,
     reward_eligibility: Any | None = None,
+    season_expiry: PublicSeasonExpiry | None = None,
 ) -> PublicLeaderboardEntry:
     """Map a ledger row to the public entry, exposing only the safe subset of
     ``details`` (never ``per_case``, which carries the answer key)."""
@@ -2717,6 +2761,7 @@ def _public_entry(
             else None
         ),
         reward_eligibility=_public_reward_eligibility(reward_eligibility),
+        season_expiry=season_expiry,
         composite=r.composite,
         official_composite=(
             official_composite if official_composite is not None else r.composite
@@ -2956,6 +3001,7 @@ def _public_koth_emissions(
     quorum_by_agent: dict[UUID, list[float]] | None = None,
     confirmation_by_seed: dict[UUID, dict[int, float]] | None = None,
     confirmation_depth: dict[UUID, int] | None = None,
+    dueling_history: Mapping[UUID, Sequence[Any]] | None = None,
     include_continual_scores: bool = True,
     wave_membership: WaveMembership = DEFAULT_WAVE_MEMBERSHIP,
     anchor_version: int | None = None,
@@ -2973,6 +3019,7 @@ def _public_koth_emissions(
     rank_shares: Sequence[float] | None = None,
     crown_gate: CrownGate | None = None,
     crown_rules: CrownGate | None = None,
+    duel_history: Mapping[UUID, Sequence[Any]] | None = None,
 ) -> PublicKothEmissions | None:
     """Project the caller's finalized, registration-eligible score pool.
 
@@ -2986,6 +3033,10 @@ def _public_koth_emissions(
     the next pin will. ``provisional_incumbent`` is that incumbent when only a
     withheld generation is left (protocol 28): it folds like any row and every
     slot it takes is published unpaid, as validators burn it.
+
+    ``dueling_history`` (bench v16+) is each agent's raw confirmation records
+    with their signed ``details.dueling``; the seeds this projection admits
+    pair-mask exactly as the pinned fold does.
     """
     quorum_values = quorum_by_agent or {}
     bonus_values = efficiency_bonuses or {}
@@ -3063,6 +3114,20 @@ def _public_koth_emissions(
                 efficiency_bonus=bonus_values.get(row.agent_id),
                 efficiency_factor=factor_values.get(row.agent_id),
                 efficiency_curve_version=curve_values.get(row.agent_id),
+                **ledger_row_dueling_fields(row),
+                dueling_records=(
+                    None
+                    if v9_confirmed
+                    else dueling_seed_records(
+                        (dueling_history or {}).get(row.agent_id, ()),
+                        seeds=merged_confirmations.keys(),
+                    )
+                ),
+                duel_records=(
+                    None
+                    if v9_confirmed
+                    else duel_seed_records((duel_history or {}).get(row.agent_id, ()))
+                ),
             )
         )
 
@@ -3517,6 +3582,285 @@ def _displayed_efficiency_factors(
     }
 
 
+_EXPIRED_BOARD_ROWS = 10
+"""Most ``expired`` reference rows the live board appends (display only)."""
+
+
+@dataclass(frozen=True)
+class _SeasonExpiryRow:
+    """One board row kept visible after its scores left the season window."""
+
+    row: LedgerRow
+    expiry: PublicSeasonExpiry
+    score_count: int
+    official_composite: float | None = None
+    """``pinned_carry`` only: the official composite the current pin folds."""
+
+
+async def _agent_season_expiry(
+    session: AsyncSession, agent_id: UUID, *, bench_version: int
+) -> PublicSeasonExpiry | None:
+    """One scored agent's expiry label with its re-test state, or ``None``
+    while its quorum is still in the window (or below the dueling floor)."""
+    if not is_dueling_bench_version(bench_version):
+        return None
+    coverage = (
+        await season_coverage(
+            session, bench_version=bench_version, agent_ids=[agent_id]
+        )
+    ).get(agent_id)
+    if coverage is None or not coverage.expired:
+        return None
+    states = await season_retest_states(session, [coverage])
+    label = _season_expiry_label(coverage, state="expired")
+    state = states.get(agent_id)
+    if state is None:
+        return label
+    return label.model_copy(update={"retest": public_season_retest(state)})
+
+
+_SEASON_RETEST_NOTES: dict[str, str] = {
+    "rotation": "Queued: the season-opening rotation re-scores it on the open season.",
+    "board": "Queued: a free catch-up re-test on the open season (board agent).",
+    "board_overflow": (
+        "Queued: a free catch-up re-test on the open season, past the board cap "
+        "and within the season's catch-up budget."
+    ),
+    "off_board": (
+        "Queued: a free catch-up re-test on the open season, because its scores "
+        "expired while it was off the board."
+    ),
+    "ath_clear": (
+        "Queued: a free re-test on the open season, because its review hold was "
+        "cleared after its scores had left the window."
+    ),
+    "retested": (
+        "A free catch-up re-test was queued, but it did not restore a full quorum "
+        "inside the window."
+    ),
+    "over_budget": (
+        "Not re-tested yet: the season's catch-up budget ran out. The next season "
+        "boundary reconsiders it."
+    ),
+    "board_cap": (
+        "Not re-tested: it was past the board catch-up cap when its season "
+        "expired. The next season boundary reconsiders it."
+    ),
+    "below_board_floor": (
+        "Not re-tested: its last valid score is below the lowest score on the "
+        "board, so a re-test could not place it."
+    ),
+    "owner_has_better_agent": (
+        "Not re-tested: the same owner already has a better agent on the board."
+    ),
+    "superseded_rerun": (
+        "Not re-tested: a newer run of the same artifact stands for it, so that "
+        "run is the one that counts."
+    ),
+    "already_retested": (
+        "Not re-tested: it already had its one free off-board catch-up on this "
+        "bench version. Only new in-window scores count again."
+    ),
+    "unranked": "Not re-tested: its last quorum was not a full, positive run.",
+    "catchup_disabled": "Not re-tested: season catch-up is switched off.",
+    "not_considered": (
+        "No season boundary has recorded a re-test decision for it yet. Each "
+        "boundary reconsiders expired agents."
+    ),
+}
+
+
+def public_season_retest(state: SeasonRetestState) -> PublicSeasonRetest:
+    """The miner-facing re-test label for one :class:`SeasonRetestState`."""
+    reason = state.reason if state.reason in _SEASON_RETEST_NOTES else "not_considered"
+    return PublicSeasonRetest(
+        state="queued" if state.state == "queued" else "not_queued",
+        reason=cast(Any, reason),
+        dueling_season_id=state.dueling_season_id,
+        note=_SEASON_RETEST_NOTES[reason],
+    )
+
+
+def _season_expiry_label(
+    coverage: SeasonCoverage,
+    *,
+    state: Literal["pinned_carry", "expired"],
+    pinned_epoch_index: int | None = None,
+) -> PublicSeasonExpiry:
+    median = coverage.median
+    window = coverage.window
+    return PublicSeasonExpiry(
+        state=state,
+        score_dueling_season_ids=list(coverage.score_dueling_season_ids),
+        window_dueling_season_ids=[
+            season for season in (window.current, window.previous) if season
+        ],
+        in_window_score_count=coverage.in_window_count,
+        last_valid_composite=median.composite if median is not None else 0.0,
+        pinned_epoch_index=pinned_epoch_index,
+    )
+
+
+async def _season_expiry_rows(
+    session: AsyncSession,
+    *,
+    bench_version: int | None,
+    pin: LedgerEpochSnapshot | None,
+    finalized_ids: set[UUID],
+    shown_ids: set[UUID],
+    finalized_owners: set[str],
+    provisional_owners: set[str],
+) -> tuple[list[_SeasonExpiryRow], list[_SeasonExpiryRow]]:
+    """Bench v16+ rows the live window dropped, as ``(pinned, expired)``.
+
+    The two-season window is a deliberate cost control: expired scores are
+    never re-scored here and never re-enter a pin or the weight fold. This
+    only stops the board from deleting them silently.
+
+    * ``pinned``: scored agents in the pin validators fold *now* whose quorum
+      expired after that pin was taken (a season opened mid-pin). They keep a
+      ranked row with the pin's own official composite until the next pin,
+      which is built from the live window and will not carry them.
+    * ``expired``: other scored agents whose last valid quorum expired, best
+      first, unranked, capped at :data:`_EXPIRED_BOARD_ROWS`.
+
+    An owner already finalized on the board is never shown twice; a pinned
+    carry replaces its own owner's provisional row (the caller drops it), and
+    an ``expired`` row never shadows a provisional one. A held, banned or
+    shadow agent is never carried (only ``scored`` agents have coverage).
+    """
+    if bench_version is None or not is_dueling_bench_version(bench_version):
+        return [], []
+    pinned_entries: dict[UUID, LedgerEntry] = {}
+    if pin is not None and pin.bench_version == bench_version:
+        for item in pin.entries or []:
+            try:
+                entry = LedgerEntry.model_validate(item)
+            except ValidationError:
+                continue
+            pinned_entries[entry.agent_id] = entry
+    pinned_official = (
+        {
+            fold.agent_id: continual_composite(fold)
+            for fold in koth_entries_from_ledger(list(pinned_entries.values()))
+        }
+        if pinned_entries
+        else {}
+    )
+    carry_ids = [
+        agent_id for agent_id in pinned_entries if agent_id not in finalized_ids
+    ]
+    carry_candidates = (
+        await expired_season_ledger_rows(
+            session, bench_version=bench_version, agent_ids=carry_ids
+        )
+        if carry_ids
+        else []
+    )
+    expired_candidates = [
+        candidate
+        for candidate in await expired_season_ledger_rows(
+            session,
+            bench_version=bench_version,
+            # Headroom for rows the owner and shown-agent filters drop.
+            limit=4 * _EXPIRED_BOARD_ROWS + len(carry_candidates),
+        )
+        if candidate[0].agent_id not in shown_ids
+    ]
+    candidates = carry_candidates + expired_candidates
+    if not candidates:
+        return [], []
+    roots = await attested_emission_owner_roots(
+        session,
+        [
+            (
+                row.miner_hotkey,
+                emission_owner(
+                    miner_hotkey=row.miner_hotkey, miner_coldkey=row.miner_coldkey
+                ),
+            )
+            for row, _coverage in candidates
+        ],
+    )
+    taken = set(finalized_owners)
+    pinned: list[_SeasonExpiryRow] = []
+    carry_by_official = sorted(
+        zip(roots[: len(carry_candidates)], carry_candidates, strict=True),
+        key=lambda item: (
+            -pinned_official.get(item[1][0].agent_id, item[1][0].composite),
+            str(item[1][0].agent_id),
+        ),
+    )
+    for owner, (row, coverage) in carry_by_official:
+        if owner in taken:
+            continue
+        taken.add(owner)
+        entry = pinned_entries[row.agent_id]
+        pinned.append(
+            _SeasonExpiryRow(
+                # The pin's own bytes: validators fold exactly this row until
+                # the next pin, so it is still emission-eligible for now.
+                row=replace(
+                    row,
+                    composite=entry.composite,
+                    n=entry.n,
+                    eligible=True,
+                    emission_owner_root=owner,
+                ),
+                expiry=_season_expiry_label(
+                    coverage,
+                    state="pinned_carry",
+                    pinned_epoch_index=pin.epoch_index if pin is not None else None,
+                ),
+                score_count=len(coverage.scores),
+                official_composite=pinned_official.get(row.agent_id, entry.composite),
+            )
+        )
+    pinned_ids = {item.row.agent_id for item in pinned}
+    taken |= provisional_owners
+    expired: list[_SeasonExpiryRow] = []
+    expired_coverage: list[SeasonCoverage] = []
+    for owner, (row, coverage) in zip(
+        roots[len(carry_candidates) :], expired_candidates, strict=True
+    ):
+        if len(expired) >= _EXPIRED_BOARD_ROWS:
+            break
+        if row.agent_id in pinned_ids or owner in taken:
+            continue
+        taken.add(owner)
+        expired.append(
+            _SeasonExpiryRow(
+                row=replace(row, emission_owner_root=owner),
+                expiry=_season_expiry_label(coverage, state="expired"),
+                score_count=len(coverage.scores),
+            )
+        )
+        expired_coverage.append(coverage)
+    shown = [
+        *(item.row.agent_id for item in pinned),
+        *(c.agent_id for c in expired_coverage),
+    ]
+    by_id = {coverage.agent_id: coverage for _row, coverage in candidates}
+    states = await season_retest_states(
+        session, [by_id[agent_id] for agent_id in shown if agent_id in by_id]
+    )
+
+    def _with_retest(item: _SeasonExpiryRow) -> _SeasonExpiryRow:
+        state = states.get(item.row.agent_id)
+        if state is None:
+            return item
+        return replace(
+            item,
+            expiry=item.expiry.model_copy(
+                update={"retest": public_season_retest(state)}
+            ),
+        )
+
+    return [_with_retest(item) for item in pinned], [
+        _with_retest(item) for item in expired
+    ]
+
+
 async def build_public_leaderboard(
     request: Request,
     response: Response,
@@ -3702,16 +4046,19 @@ async def build_public_leaderboard(
     # The protocol-34 crown rules: configured by the operator, folded only
     # once every recently-live weight setter reports v34 -- the same gate the
     # validator ledger applies, so the board's King is the fleet's King.
-    crown_rules = CrownGate(
-        min_shared_seeds=continual_settings.min_dethrone_confirmations,
-        standing_rank=continual_settings.champion_standing_rank,
-    )
+    crown_rules = configured_crown_gate(continual_settings)
     crown_gate_active_rules = (
         crown_gate_for(
             continual_settings,
             fleet_protocol_ready=await live_weight_setter_fleet_supports_protocol(
                 session,
                 minimum_protocol=CROWN_GATE_PROTOCOL,
+                now=now,
+                freshness=_VALIDATOR_STALE_WINDOW,
+            ),
+            duel_fleet_ready=await live_weight_setter_fleet_supports_protocol(
+                session,
+                minimum_protocol=CROWN_DUEL_PROTOCOL,
                 now=now,
                 freshness=_VALIDATOR_STALE_WINDOW,
             ),
@@ -3790,9 +4137,19 @@ async def build_public_leaderboard(
             agent_ids=finalized_ids,
             bench_version=active_version,
         )
+        dueling_history = (
+            await confirmation_history_by_agent(
+                session,
+                agent_ids=finalized_ids,
+                bench_version=active_version,
+            )
+            if is_dueling_bench_version(active_version)
+            else {}
+        )
     else:
         confirmation_by_seed = {}
         confirmation_depth = {}
+        dueling_history = {}
     _, completed_by_seed, completed_depth = completed_wave_data(
         finalized_rows,
         stderrs=fold_stderrs,
@@ -4014,7 +4371,11 @@ async def build_public_leaderboard(
             if score_counts.get(row.agent_id, 0) < SCORING_QUORUM
         ]
         + [(row, score_counts.get(row.agent_id, 0)) for row in v9_display_rows]
-        + list(await list_provisional_ledger(session, bench_version=bench_version))
+        + list(
+            await list_provisional_ledger(
+                session, bench_version=bench_version, active_version=active_version
+            )
+        )
     )
     # Pre-quorum rows have no continual mean, so the canonical comparator reads
     # their raw composite -- the same call ``list_provisional_ledger`` makes.
@@ -4040,8 +4401,43 @@ async def build_public_leaderboard(
     ):
         if owner not in finalized_owners:
             provisional_by_owner.setdefault(owner, candidate)
-    provisional_rows = list(provisional_by_owner.values())
-    rows = finalized_rows + [row for row, _count in provisional_rows]
+    # The pin validators fold now; ``None`` in live mode, before the first
+    # pin, and on a historical board.
+    ledger_pin, eligibility_pin = (
+        await _current_ledger_pin(request, session, continual_settings)
+        if bench_version is None
+        else (None, None)
+    )
+    # Bench v16+ season expiry (SN-466). The window drops a quorum the moment
+    # its season expires -- by design, so rotations never pay to re-score the
+    # board. Keep such agents visible, labelled, without re-scoring them and
+    # without adding them to the emissions projection below, which is the
+    # next pin's and stays season-scoped.
+    pinned_carry, expired_rows = (
+        await _season_expiry_rows(
+            session,
+            bench_version=active_version,
+            pin=eligibility_pin,
+            finalized_ids={row.agent_id for row in finalized_generations},
+            shown_ids={row.agent_id for row in finalized_generations}
+            | {row.agent_id for row, _count in provisional_by_owner.values()},
+            finalized_owners=finalized_owners,
+            provisional_owners=set(provisional_by_owner),
+        )
+        if bench_version is None
+        else ([], [])
+    )
+    carried_owners = {item.row.emission_owner_root for item in pinned_carry}
+    provisional_rows = [
+        candidate
+        for owner, candidate in provisional_by_owner.items()
+        if owner not in carried_owners
+    ]
+    rows = (
+        finalized_rows
+        + [row for row, _count in provisional_rows]
+        + [item.row for item in (*pinned_carry, *expired_rows)]
+    )
     v9_confirmations = await v9_confirmation_public_projections(
         session,
         agent_ids=[
@@ -4200,11 +4596,6 @@ async def build_public_leaderboard(
     # publish the score AND say whether it is earning. Only the emissions
     # projection drops anything, and only while the gate is enforcing, so the
     # visible board keeps a withheld artifact's score, rank and history.
-    ledger_pin, eligibility_pin = (
-        await _current_ledger_pin(request, session, continual_settings)
-        if bench_version is None
-        else (None, None)
-    )
     reward_eligibility = await _resolve_reward_eligibility(
         request,
         session,
@@ -4306,7 +4697,9 @@ async def build_public_leaderboard(
         # next pin still carries the crown through the owner family, so the
         # projection must too, or it opens a classic first-seen walk and names
         # a senior rival the fleet will never crown.
-        emission_incumbent_id = _pin_crown_heir(eligibility_pin, emission_rows)
+        emission_incumbent_id = _pin_crown_heir(
+            eligibility_pin, emission_rows, family_rows=finalized_generations
+        )
     entries = []
     for i, row in enumerate(finalized_rows, start=1):
         settled, rolling, rolling_count = rollout_states.get(
@@ -4440,6 +4833,66 @@ async def build_public_leaderboard(
                 reward_eligibility=reward_eligibility.get(row.agent_id),
             )
         )
+
+    def season_entry(item: _SeasonExpiryRow, rank: int) -> PublicLeaderboardEntry:
+        stored_name, stored_version = agent_metadata[item.row.agent_id]
+        display_name, name_handle = _public_named(
+            stored_name,
+            item.row.emission_owner_root,
+            handle_claims,
+            strike=strike_colliding_names,
+        )
+        carried = item.expiry.state == "pinned_carry"
+        return _public_entry(
+            rank,
+            item.row,
+            display_name,
+            stored_version,
+            name_handle=name_handle,
+            avatar_url=avatar_urls.get(item.row.miner_hotkey),
+            finalized=carried,
+            score_count=item.score_count,
+            registered=(
+                item.row.miner_hotkey in registered_uids
+                if registered_uids is not None
+                else None
+            ),
+            miner_uid=(
+                registered_uids.get(item.row.miner_hotkey)
+                if registered_uids is not None
+                else None
+            ),
+            official_composite=item.official_composite,
+            average_run_cost_microusd=run_costs.get(
+                (item.row.agent_id, item.row.bench_version), (None, 0)
+            )[0],
+            inference_run_count=run_costs.get(
+                (item.row.agent_id, item.row.bench_version), (None, 0)
+            )[1],
+            reward_eligibility=(
+                reward_eligibility.get(item.row.agent_id) if carried else None
+            ),
+            season_expiry=item.expiry,
+        )
+
+    # A pinned carry keeps its place among the finalized rows by the official
+    # composite the current pin folds (ties go to the live row).
+    for item in pinned_carry:
+        official = item.official_composite or item.row.composite
+        position = next(
+            (
+                index
+                for index, entry in enumerate(entries)
+                if entry.official_composite < official
+            ),
+            len(entries),
+        )
+        entries.insert(position, season_entry(item, position + 1))
+    if pinned_carry:
+        entries = [
+            entry.model_copy(update={"rank": rank})
+            for rank, entry in enumerate(entries, start=1)
+        ]
     for row, count in provisional_rows:
         settled, rolling, rolling_count = rollout_states.get(
             row.agent_id, (None, None, None)
@@ -4487,6 +4940,11 @@ async def build_public_leaderboard(
                 reward_eligibility=reward_eligibility.get(row.agent_id),
             )
         )
+    # Expired reference rows trail everything, unranked.
+    entries.extend(
+        season_entry(item, len(entries) + 1).model_copy(update={"rank": None})
+        for item in expired_rows
+    )
     return PublicLeaderboardResponse(
         generated_at=now,
         count=len(entries),
@@ -4522,6 +4980,7 @@ async def build_public_leaderboard(
                 confirmation_depth=(
                     confirmation_depth if continual_mean_active else {}
                 ),
+                dueling_history=dueling_history if continual_mean_active else {},
                 include_continual_scores=continual_mean_active,
                 wave_membership=continual_settings.wave_membership,
                 anchor_version=active_version,
@@ -4539,6 +4998,18 @@ async def build_public_leaderboard(
                 rank_shares=board_rank_shares,
                 crown_gate=crown_gate_active_rules,
                 crown_rules=crown_rules,
+                duel_history=(
+                    await duel_history_by_agent(
+                        session,
+                        agent_ids=[row.agent_id for row in finalized_rows],
+                        bench_version=active_version,
+                        seasons=CROWN_DUEL_SEASONS,
+                    )
+                    if crown_gate_active_rules is not None
+                    and crown_gate_active_rules.duel_window is not None
+                    and active_version is not None
+                    else {}
+                ),
             )
         ),
         efficiency=_efficiency_status(efficiency_view),
@@ -4573,19 +5044,34 @@ def _ledger_pin_model(
     )
 
 
-def _pin_crown_heir(pin: LedgerEpochSnapshot, rows: Sequence[LedgerRow]) -> UUID | None:
+def _pin_crown_heir(
+    pin: LedgerEpochSnapshot,
+    rows: Sequence[LedgerRow],
+    *,
+    family_rows: Sequence[LedgerRow] | None = None,
+) -> UUID | None:
     """The row the next pin hands ``pin``'s crown to, as ``build_pin_draft`` does.
 
     The owner family's representative in ``rows`` inherits the crown; a legacy
-    pin without an owner root only carries it to the exact same agent.
+    pin without an owner root only carries it to the exact same agent. The
+    family is resolved through the champion's identity over ``family_rows``
+    (including withheld generations, matching ``build_pin_draft``) by the same
+    :func:`crown_family_root` the next pin uses, so a family renamed by an
+    owner link since ``pin`` was taken keeps its crown here too (#2991).
     """
     if pin.champion_owner_root is not None:
-        return next(
-            (
-                row.agent_id
-                for row in rows
-                if row.emission_owner_root == pin.champion_owner_root
+        member_rows = rows if family_rows is None else family_rows
+        family = crown_family_root(
+            stored_root=pin.champion_owner_root,
+            champion_agent_id=pin.champion_agent_id,
+            champion_hotkey=pin_row_champion_hotkey(pin),
+            members=(
+                (row.agent_id, row.miner_hotkey, row.emission_owner_root)
+                for row in member_rows
             ),
+        )
+        return next(
+            (row.agent_id for row in rows if row.emission_owner_root == family),
             None,
         )
     return next(
@@ -5133,6 +5619,7 @@ def _validator_heartbeats_response(
     round_reservation_active: bool = False,
     lease_inference_activity: Mapping[LeaseSlotKey, LeaseInferenceActivity]
     | None = None,
+    sandbox_memory_limit_mib: int | None = None,
 ) -> PublicValidatorHeartbeatsResponse:
     """Reconcile platform leases and signed heartbeat claims without conflating them.
 
@@ -5356,6 +5843,19 @@ def _validator_heartbeats_response(
                 validator_hotkey=row.validator_hotkey,
             )
         )
+        host_specs = _public_validator_host_specs(row)
+        configured_slots = capacity.configured_slots if capacity else 1
+        # The memory guard the validator applies to itself, derived here so the
+        # fleet says why advertised slots never run and what the host needs.
+        memory = host_memory_admission(
+            memory_total_mib=(
+                host_specs.memory_total_mib if host_specs is not None else None
+            ),
+            configured_slots=configured_slots,
+            sandbox_memory_limit_mib=sandbox_memory_limit_mib,
+        )
+        memory_note = memory.note() if memory is not None else None
+        memory_admits_nothing = memory is not None and memory.admitted_slots == 0
         entries.append(
             PublicValidatorHeartbeat(
                 validator_hotkey=row.validator_hotkey,
@@ -5377,7 +5877,14 @@ def _validator_heartbeats_response(
                     else None
                 ),
                 active_benchmark=active_benchmark,
-                configured_slots=(capacity.configured_slots if capacity else 1),
+                configured_slots=configured_slots,
+                memory_admitted_slots=(
+                    memory.admitted_slots if memory is not None else None
+                ),
+                memory_required_mib=(
+                    memory.required_mib if memory is not None else None
+                ),
+                memory_note=memory_note,
                 # Keep the operator brake separate from heartbeat availability:
                 # an offline paused validator remains honestly offline while
                 # the dashboard can still show why it receives no new work.
@@ -5430,10 +5937,13 @@ def _validator_heartbeats_response(
                 # problem regardless of how the host metrics look (or whether they
                 # were reported), so surface it as a warning in the fleet health
                 # roll-up rather than only in the nested per-component map.
+                # A host whose memory admits not one harness at the live cap is
+                # in the same class: it can heartbeat forever and never score.
                 health=(
                     "critical"
                     if scorer_liveness == "not_serving"
                     or bench_serviceability != "serving"
+                    or memory_admits_nothing
                     else (
                         "warning"
                         if scorer_reasons
@@ -5456,10 +5966,11 @@ def _validator_heartbeats_response(
                         version=active_bench_version,
                         protocol_version=row.protocol_version,
                     ),
+                    memory_reason=memory_note if memory_admits_nothing else None,
                 ),
                 bench_serviceability=bench_serviceability,
                 system_metrics=metrics,
-                host_specs=_public_validator_host_specs(row),
+                host_specs=host_specs,
                 capabilities=capabilities,
                 stack=stack,
                 stack_health=stack_health,
@@ -5478,6 +5989,7 @@ def _validator_heartbeats_response(
         ),
         reported_count=len(entries),
         online_count=sum(entry.online for entry in entries),
+        sandbox_memory_limit_mib=sandbox_memory_limit_mib,
         validators=entries,
     )
 
@@ -5519,7 +6031,27 @@ async def load_validator_fleet(
         slot_settings=await resolve_slot_settings(app_state),
         round_reservation_active=await round_reservation_active(app_state, session),
         lease_inference_activity=lease_inference_activity,
+        sandbox_memory_limit_mib=await _live_sandbox_memory_limit_mib(
+            app_state, session
+        ),
     )
+
+
+async def _live_sandbox_memory_limit_mib(app_state: Any, session: AsyncSession) -> int:
+    """The live per-harness memory cap host memory admission is judged at.
+
+    Read through the app's short-TTL settings cache, the one ticket issue uses,
+    so the fleet views that poll it add no query per request; a direct read is
+    only the fallback for an app without the resolver.
+    """
+    resolver = getattr(app_state, "inference_concurrency_settings", None)
+    if resolver is not None:
+        settings = await resolver.resolve(getattr(app_state, "session_maker", None))
+    else:
+        settings = settings_from_row(
+            await latest_inference_concurrency_settings_revision(session)
+        )
+    return int(settings.benchmark_runtime.sandbox_memory_limit_mib)
 
 
 @router.get("/validators", response_model=PublicValidatorHeartbeatsResponse)
@@ -5581,23 +6113,6 @@ def _public_handle_status(raw: str) -> Literal["reserved", "disputed", "pending"
 
 
 _SS58_HOTKEY_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{47,48}$")
-_INTERNAL_TO_PUBLIC_STATUS = {
-    "uploaded": "waiting_screening",
-    "screening_failed": "screening_failed",
-    "screening": "screening",
-    "screening_passed": "waiting_validator",
-    "evaluating": "evaluating",
-    "ath_pending_review": "under_review",
-    "quarantined": "under_review",
-    "banned": "rejected",
-}
-
-
-def _public_agent_status(raw: str) -> str:
-    mapped = _INTERNAL_TO_PUBLIC_STATUS.get(raw, raw)
-    if mapped in _PUBLIC_ACTIVITY_STATUSES:
-        return mapped
-    return "under_review"
 
 
 def _profile_handle_for_hotkey(claims: dict[str, Any], hotkey: str) -> Any:
@@ -5671,17 +6186,33 @@ async def public_miner_profile(
         )
     )[0]
     avatar_url = public_avatar_path(hotkey) if avatar else None
+    # The same closed-out labels activity projects, so a previous-era row the
+    # active bench never admits reads ``era_changed`` here too, not the stored
+    # "evaluating" or "scored" (SN-462, SN-485).
+    closed = await closed_submission_statuses(
+        session,
+        agents=agents,
+        active_version=await active_bench_version(session),
+    )
     submissions = []
     for agent in agents:
         display, name_handle = _public_named(
             agent.name, owner_root, claims, strike=True
         )
+        closed_status = closed.get(agent.agent_id)
         submissions.append(
             PublicMinerSubmission(
                 agent_id=agent.agent_id,
                 name=display,
                 version=agent.version,
-                status=_public_agent_status(str(agent.status)),
+                status=(
+                    closed_status.status
+                    if closed_status is not None
+                    else public_agent_status(str(agent.status))
+                ),
+                era_change=(
+                    closed_status.era_change if closed_status is not None else None
+                ),
                 created_at=agent.created_at,
                 avatar_url=avatar_url,
                 name_handle=name_handle,
@@ -5860,7 +6391,7 @@ async def screeners(
                 instance_id=row.instance_id,
                 screener_hotkey=row.screener_hotkey,
                 provider=cast(
-                    Literal["gcp", "targon", "hetzner", "home", "test"],
+                    Literal["gcp", "targon", "hetzner", "aws", "home", "test"],
                     enrolled_node.provider if enrolled_node is not None else "gcp",
                 ),
                 node_status=cast(
@@ -6104,6 +6635,11 @@ def _public_validator_score(s) -> PublicValidatorScore:
             final_composite=s.composite,
             details=details,
         ),
+        dueling_breakdown=public_dueling_breakdown(
+            bench_version=bench_version,
+            dueling=getattr(s, "dueling", None),
+            gate_evidence=getattr(s, "gate_evidence", None),
+        ),
         v9_base=(_safe_public_v9_base(details) if (bench_version or 0) >= 9 else None),
         median_ms=s.median_ms,
         n=s.n,
@@ -6161,12 +6697,22 @@ def _public_activity_status(
     score_continuation_floor: float | None = None,
     benchmark_admitted: bool = True,
     retired: bool = False,
+    terminal_failure: bool = False,
     screening_retry_authorized: bool = False,
+    queue_withdrawn: bool = False,
+    previous_era_scored: bool = False,
 ) -> str:
-    """Collapse internal moderation detail into stable public lifecycle labels."""
+    """Collapse internal moderation detail into stable public lifecycle labels.
+
+    ``benchmark_admitted`` is both queue gates. When it is false,
+    ``queue_withdrawn`` says an in-force operator removal is why (``not_queued``);
+    otherwise the era boundary refused the row (``era_changed``).
+    ``previous_era_scored`` is :func:`previous_era_scored_predicate` for a
+    finalized row.
+    """
     needs_rescreen = (
         status == AgentStatus.EVALUATING
-        and screening_policy_version < effective_screening_policy_version()
+        and screening_policy_version < lease_screening_policy_floor()
         # Mirrors the claim path: only unfinished evaluations re-queue on a
         # policy bump. A terminal rejection stays visible unless an operator
         # explicitly authorizes its exact rescreen.
@@ -6187,12 +6733,19 @@ def _public_activity_status(
         # while an already-issued ticket drains, so the label cannot flicker.
         if retired:
             return "retired"
+        # Every remaining quorum slot failed on the agent's own named failure,
+        # so no validator will produce the scores still owed. Checked before
+        # ``not_queued`` (the withdrawal that records it also removes the row
+        # from the queue) because it names why, and before the waiting labels
+        # because waiting would be false.
+        if terminal_failure:
+            return "scoring_failed"
         if (
             not benchmark_admitted
             and not has_active_validation
             and not has_live_assignment
         ):
-            return "not_queued"
+            return "not_queued" if queue_withdrawn else "era_changed"
         if (
             status == AgentStatus.EVALUATING
             and not has_live_assignment
@@ -6203,11 +6756,86 @@ def _public_activity_status(
         ):
             return "below_score_floor"
         return "evaluating" if has_active_validation else "waiting_validator"
+    if previous_era_scored and status in (AgentStatus.SCORED, AgentStatus.LIVE):
+        return "era_changed"
     if status in (AgentStatus.ATH_PENDING_REVIEW, AgentStatus.QUARANTINED):
         return "under_review"
     if status == AgentStatus.BANNED:
         return "rejected"
     return status.value
+
+
+_SCORING_WAIT_STATUSES = frozenset({"waiting_validator", "below_score_floor"})
+
+
+def _public_scoring_wait(gate: DuelingSeasonGate | None) -> PublicScoringWait | None:
+    """What holds every waiting row beyond the queue, or None."""
+    if gate is None or gate.open:
+        return None
+    return PublicScoringWait(
+        reason="dueling_season_closed",
+        bench_version=gate.bench_version,
+        next_season_opens_at=gate.next_opens_at,
+        next_round_epoch=gate.next_round_epoch,
+        season_scheduled=gate.scheduled,
+    )
+
+
+async def _request_scoring_waits(
+    request: Request,
+    session: AsyncSession,
+    *,
+    agents: list[Agent],
+    now: datetime,
+    active_version: int | None = None,
+) -> dict[UUID, PublicScoringWait]:
+    """Each waiting agent's season hold, keyed by agent id.
+
+    ``agents`` are the waiting rows only; with none, no gate is read. Each row
+    gets the gate of the version its next lease would use.
+    """
+    if not agents:
+        return {}
+    gates = await queue_season_gates(
+        session,
+        schedule=round_schedule(request.app.state),
+        now=now,
+        active_version=active_version,
+    )
+    waits: dict[UUID, PublicScoringWait] = {}
+    for agent in agents:
+        wait = _public_scoring_wait(gates.for_agent(agent.agent_id, agent.created_at))
+        if wait is not None:
+            waits[agent.agent_id] = wait
+    return waits
+
+
+def _public_dueling_season(
+    gate: DuelingSeasonGate | None,
+) -> PublicDuelingSeasonState | None:
+    if gate is None:
+        return None
+    return PublicDuelingSeasonState(
+        open=gate.open,
+        bench_version=gate.bench_version,
+        next_opens_at=gate.next_opens_at,
+        next_round_epoch=gate.next_round_epoch,
+    )
+
+
+async def _request_season_gate(
+    request: Request,
+    session: AsyncSession,
+    *,
+    now: datetime,
+    active_version: int | None = None,
+) -> DuelingSeasonGate | None:
+    return await dueling_season_gate(
+        session,
+        schedule=round_schedule(request.app.state),
+        now=now,
+        active_version=active_version,
+    )
 
 
 def _waiting_validator_agent_ids(
@@ -6308,6 +6936,7 @@ def _public_activity_statuses(
     active_bench_version: int | None = None,
     benchmark_admitted_agent_ids: set[UUID] | None = None,
     retired_agent_ids: set[UUID] | None = None,
+    terminal_failure_agent_ids: set[UUID] | None = None,
 ) -> dict[UUID, str]:
     """Public lifecycle label per submission, keyed by agent id.
 
@@ -6322,6 +6951,7 @@ def _public_activity_statuses(
     }
     admitted = benchmark_admitted_agent_ids
     retired = retired_agent_ids or set()
+    terminal = terminal_failure_agent_ids or set()
     return {
         row.agent.agent_id: _public_activity_status(
             row.agent.status,
@@ -6334,6 +6964,7 @@ def _public_activity_statuses(
             score_continuation_floor=score_continuation_floor,
             benchmark_admitted=(admitted is None or row.agent.agent_id in admitted),
             retired=row.agent.agent_id in retired,
+            terminal_failure=row.agent.agent_id in terminal,
         )
         for row in rows
     }
@@ -6384,6 +7015,7 @@ def _public_activity_response(
     active_bench_version: int | None = None,
     benchmark_admitted_agent_ids: set[UUID] | None = None,
     retry_states: dict[UUID, AgentRetryState] | None = None,
+    terminal_failure_codes: dict[UUID, str] | None = None,
     duplicate_metadata: dict[UUID, _DuplicateSubmissionMetadata] | None = None,
     ath_reviews: dict[UUID, _PublicAthReviewSnapshot] | None = None,
     ath_review_composite: dict[UUID, float] | None = None,
@@ -6402,8 +7034,22 @@ def _public_activity_response(
     strike_colliding_names: bool = True,
     avatar_urls: dict[str, str] | None = None,
     miner_uids: dict[str, int] | None = None,
+    scoring_waits: dict[UUID, PublicScoringWait] | None = None,
+    queue_withdrawn_agent_ids: set[UUID] | None = None,
+    admission_rollout: BenchmarkRollout | None = None,
 ) -> PublicActivityResponse:
-    """Project activity from the same validated work set used by fleet health."""
+    """Project activity from the same validated work set used by fleet health.
+
+    ``scoring_waits`` holds each waiting row's season hold, keyed by agent id;
+    it is attached to the waiting lanes only. ``queue_withdrawn_agent_ids``
+    names the rows an in-force operator removal keeps out of the active queue;
+    it marks ``not_queued`` rows only. ``admission_rollout`` is the rollout
+    that bounds the active era (the one the status projection already read);
+    with ``active_bench_version`` it names each ``era_changed`` row's reason
+    without another query.
+    """
+    waits = scoring_waits or {}
+    withdrawn = queue_withdrawn_agent_ids or set()
     claims = handle_claims or {}
     roots = owner_roots or {}
     uids = miner_uids or {}
@@ -6427,6 +7073,7 @@ def _public_activity_response(
         )
     }
     retry_by_agent = retry_states or {}
+    terminal_codes = terminal_failure_codes or {}
     statuses = (
         precomputed_statuses
         if precomputed_statuses is not None
@@ -6438,6 +7085,7 @@ def _public_activity_response(
             active_bench_version=active_bench_version,
             benchmark_admitted_agent_ids=benchmark_admitted_agent_ids,
             retired_agent_ids=retired_agent_ids,
+            terminal_failure_agent_ids=set(terminal_codes),
         )
     )
     projected = [(row, statuses[row.agent.agent_id]) for row in rows]
@@ -6662,6 +7310,21 @@ def _public_activity_response(
                     _queue_gate(queue_preview, row.agent.agent_id)
                     == "previous_generation"
                 ),
+                queue_withdrawn=(
+                    row_status == "not_queued" and row.agent.agent_id in withdrawn
+                ),
+                era_change=(
+                    era_change(
+                        bench_version=active_bench_version,
+                        rollout=admission_rollout,
+                        # The projection names a finalized row ``era_changed``
+                        # only through the previous-era scored predicate.
+                        previous_era_scored=row.agent.status
+                        in (AgentStatus.SCORED, AgentStatus.LIVE),
+                    )
+                    if row_status == "era_changed" and active_bench_version is not None
+                    else None
+                ),
                 quorum=SCORING_QUORUM,
                 retry_state=(
                     retry_by_agent[row.agent.agent_id].state
@@ -6682,6 +7345,8 @@ def _public_activity_response(
                     retry_by_agent[row.agent.agent_id].disposition
                     if row_status in ("waiting_validator", "below_score_floor")
                     and row.agent.agent_id in retry_by_agent
+                    else "terminal_artifact_failure"
+                    if row_status == "scoring_failed"
                     else None
                 ),
                 terminal_failure_code=(
@@ -6690,6 +7355,10 @@ def _public_activity_response(
                     )
                     if row_status in ("waiting_validator", "below_score_floor")
                     and row.agent.agent_id in retry_by_agent
+                    else public_validation_failure_code(
+                        terminal_codes.get(row.agent.agent_id)
+                    )
+                    if row_status == "scoring_failed"
                     else None
                 ),
                 hold_failure_code=(
@@ -6700,8 +7369,13 @@ def _public_activity_response(
                     and row.agent.agent_id in retry_by_agent
                     else None
                 ),
+                scoring_wait=(
+                    waits.get(row.agent.agent_id)
+                    if row_status in _SCORING_WAIT_STATUSES
+                    else None
+                ),
                 screening_policy_version=row.agent.screening_policy_version,
-                required_screening_policy_version=effective_screening_policy_version(),
+                required_screening_policy_version=lease_screening_policy_floor(),
                 screening_attempt_id=(
                     row.screening_attempt.attempt_id
                     if row.screening_attempt is not None
@@ -7292,6 +7966,25 @@ async def activity(
             now=now,
             canonical_version=active_version,
         ),
+        terminal_failure_codes=await terminal_failure_codes(
+            session,
+            agent_ids=[
+                agent_id
+                for agent_id, row_status in statuses.items()
+                if row_status == "scoring_failed"
+            ],
+            bench_version=active_version,
+        ),
+        queue_withdrawn_agent_ids=await removed_agent_ids(
+            session,
+            agent_ids=[
+                agent_id
+                for agent_id, row_status in statuses.items()
+                if row_status == "not_queued"
+            ],
+            bench_version=active_version,
+        ),
+        admission_rollout=activity_page.admission_rollout,
         duplicate_metadata=await _duplicate_submission_metadata(session, rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
@@ -7307,6 +8000,17 @@ async def activity(
         strike_colliding_names=True,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
         miner_uids=registered_uids,
+        scoring_waits=await _request_scoring_waits(
+            request,
+            session,
+            agents=[
+                row.agent
+                for row in rows
+                if statuses.get(row.agent.agent_id) in _SCORING_WAIT_STATUSES
+            ],
+            now=now,
+            active_version=active_version,
+        ),
     )
 
 
@@ -7401,7 +8105,9 @@ async def _public_submission_build_snapshot(
                 agent_name=agent_name,
                 agent_version=agent_version,
                 status=cast(Any, row.status),
-                provider=cast(Literal["targon", "gcp", "hetzner"] | None, row.provider),
+                provider=cast(
+                    Literal["targon", "gcp", "hetzner", "aws"] | None, row.provider
+                ),
                 attempt_count=row.attempt_count,
                 output_sha256=row.output_sha256,
                 output_size_bytes=row.output_size_bytes,
@@ -7553,6 +8259,15 @@ async def operations(
         ),
         active_bench_version=active_version,
         retry_states=retry_states,
+        terminal_failure_codes=await terminal_failure_codes(
+            session,
+            agent_ids=[
+                agent_id
+                for agent_id, row_status in activity_statuses.items()
+                if row_status == "scoring_failed"
+            ],
+            bench_version=active_version,
+        ),
         duplicate_metadata=await _duplicate_submission_metadata(session, activity_rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
@@ -7568,6 +8283,17 @@ async def operations(
         strike_colliding_names=False,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
         miner_uids=registered_uids,
+        scoring_waits=await _request_scoring_waits(
+            request,
+            session,
+            agents=[
+                row.agent
+                for row in activity_rows
+                if activity_statuses.get(row.agent.agent_id) in _SCORING_WAIT_STATUSES
+            ],
+            now=now,
+            active_version=active_version,
+        ),
     )
     validator_snapshot = _validator_heartbeats_response(
         rows=heartbeat_rows,
@@ -7581,6 +8307,11 @@ async def operations(
         active_bench_version=active_version,
         slot_settings=await resolve_slot_settings(request.app.state),
         round_reservation_active=await round_reservation_active(
+            request.app.state, session
+        ),
+        # The dashboard reads the fleet from this snapshot, not /validators, so
+        # it needs the same cap for its memory-limited slots and fix path.
+        sandbox_memory_limit_mib=await _live_sandbox_memory_limit_mib(
             request.app.state, session
         ),
     )
@@ -7846,6 +8577,13 @@ async def agent_summary(
         if needs_queue_state
         else False
     )
+    entry_terminal_codes = (
+        await terminal_failure_codes(
+            session, agent_ids=[agent_id], bench_version=active_version
+        )
+        if needs_queue_state
+        else {}
+    )
     score_floor = (
         await get_score_continuation_floor(
             session,
@@ -7856,6 +8594,38 @@ async def agent_summary(
         if row.agent.status == AgentStatus.EVALUATING
         and row.score_count == SCORING_QUORUM - 1
         else None
+    )
+    # Which gate refused a waiting row: an operator removal (``not_queued``) or
+    # the era boundary (``era_changed``). A finalized row with no active-version
+    # score is checked against the stranded predicate. Both reads are skipped
+    # for every other row.
+    summary_withdrawn = (
+        needs_queue_state
+        and not admitted
+        and bool(
+            await removed_agent_ids(
+                session, agent_ids=[agent_id], bench_version=active_version
+            )
+        )
+    )
+    finalized_without_active_score = (
+        row.agent.status in {AgentStatus.SCORED, AgentStatus.LIVE}
+        and row.score_count == 0
+    )
+    summary_rollout = (
+        await admission_rollout_for_active_version(
+            session, bench_version=active_version
+        )
+        if (needs_queue_state and not admitted) or finalized_without_active_score
+        else None
+    )
+    summary_previous_era_scored = finalized_without_active_score and bool(
+        await previous_era_scored_agent_ids(
+            session,
+            agent_ids=[agent_id],
+            bench_version=active_version,
+            rollout=summary_rollout,
+        )
     )
     status = _public_activity_status(
         row.agent.status,
@@ -7870,6 +8640,7 @@ async def agent_summary(
         score_continuation_floor=score_floor,
         benchmark_admitted=admitted,
         retired=retired,
+        terminal_failure=agent_id in entry_terminal_codes,
         screening_retry_authorized=bool(
             await session.scalar(
                 select(Agent.agent_id).where(
@@ -7880,6 +8651,8 @@ async def agent_summary(
         )
         if row.agent.status == AgentStatus.SCREENING_FAILED
         else False,
+        queue_withdrawn=summary_withdrawn,
+        previous_era_scored=summary_previous_era_scored,
     )
 
     ath_reviews: dict[UUID, _PublicAthReviewSnapshot] = {}
@@ -7918,9 +8691,15 @@ async def agent_summary(
     )
     display_name, name_handle = _public_named(row.agent.name, owner_root, handle_claims)
     avatar = await get_miner_avatar(session, hotkey=row.agent.miner_hotkey)
+    season_expiry = (
+        await _agent_season_expiry(session, agent_id, bench_version=active_version)
+        if row.agent.status == AgentStatus.SCORED
+        else None
+    )
     return PublicAgentSummary(
         generated_at=now,
         agent_id=agent_id,
+        season_expiry=season_expiry,
         miner_hotkey=row.agent.miner_hotkey,
         name=display_name,
         name_handle=name_handle,
@@ -7969,6 +8748,25 @@ async def agent_summary(
             )
             for work in active_work
         ],
+        scoring_wait=(
+            await _request_scoring_waits(
+                request,
+                session,
+                agents=[row.agent] if status in _SCORING_WAIT_STATUSES else [],
+                now=now,
+                active_version=active_version,
+            )
+        ).get(row.agent.agent_id),
+        queue_withdrawn=status == "not_queued" and summary_withdrawn,
+        era_change=(
+            era_change(
+                bench_version=active_version,
+                rollout=summary_rollout,
+                previous_era_scored=summary_previous_era_scored,
+            )
+            if status == "era_changed"
+            else None
+        ),
     )
 
 
@@ -8236,6 +9034,11 @@ async def agent_pipeline(
             )
         )
     )
+    # SN-500: miners see their own harness memory beside their inference
+    # spend. Bounded: one indexed rollup and at most 20 recent runs.
+    memory_rollup, memory_runs = await agent_harness_memory(
+        session, agent_id=agent_id, limit=_PUBLIC_HARNESS_MEMORY_RUNS
+    )
     inference_grants = list(
         await session.scalars(
             select(InferenceGrant)
@@ -8263,13 +9066,9 @@ async def agent_pipeline(
         (work.ticket.validator_hotkey, work.ticket.bench_version): work
         for work in active_work
     }
-    accepted_scores = list(
-        await session.scalars(
-            select(Score)
-            .where(Score.agent_id == agent_id)
-            .order_by(Score.created_at, Score.validator_hotkey)
-        )
-    )
+    # Public projection: ``per_case`` carries only the published case fields,
+    # which is all ``_safe_case_results`` reads. The full blob is ~1.8 MB a row.
+    accepted_scores = await list_public_agent_scores(session, agent_id=agent_id)
     canonical_version = await active_bench_version(session)
     # The same classification the operations feed publishes, for one agent. A
     # submission that is finalized, withdrawn, or has no validator work yet is
@@ -8298,6 +9097,35 @@ async def agent_pipeline(
         if validator_retry_state is not None
         else None
     )
+    # A terminal close-out is a withdrawal, and the retry classifier skips
+    # withdrawn rows, so the verdict would vanish from the wire exactly when
+    # it became final. Publish it from the withdrawal instead. The same
+    # verdict read live (not yet withdrawn) counts too, so a row stranded
+    # before the platform began writing these does not read as waiting.
+    pipeline_terminal_code: str | None = None
+    if agent.status == AgentStatus.EVALUATING:
+        pipeline_terminal_code = (
+            await terminal_failure_codes(
+                session, agent_ids=[agent_id], bench_version=canonical_version
+            )
+        ).get(agent_id)
+    if (
+        pipeline_terminal_code is None
+        and validator_retry_state is not None
+        and validator_retry_state.disposition == "terminal_artifact_failure"
+        and validator_retry_state.bench_version == canonical_version
+    ):
+        pipeline_terminal_code = validator_retry_state.terminal_failure_code
+    if pipeline_terminal_code is not None and validator_retry is None:
+        validator_retry = PublicValidatorRetry(
+            state="exhausted",
+            disposition="terminal_artifact_failure",
+            terminal_failure_code=public_validation_failure_code(
+                pipeline_terminal_code
+            ),
+            hold_failure_code=None,
+            retry_after=None,
+        )
     # Read every generation before owner reduction, then run the same current
     # official-score resolver and canonical owner dedupe used by ranking/floor
     # authority. The old detail path read the SQL pre-efficiency representative,
@@ -8482,6 +9310,73 @@ async def agent_pipeline(
     dispute = await session.scalar(
         select(ScreeningDispute).where(ScreeningDispute.agent_id == agent_id)
     )
+    pipeline_withdrawn = (
+        agent.status in (AgentStatus.SCREENING_PASSED, AgentStatus.EVALUATING)
+        and not benchmark_admitted
+        and bool(
+            await removed_agent_ids(
+                session, agent_ids=[agent_id], bench_version=canonical_version
+            )
+        )
+    )
+    pipeline_finalized_without_active_score = (
+        agent.status in (AgentStatus.SCORED, AgentStatus.LIVE) and not canonical_scores
+    )
+    pipeline_rollout = (
+        await admission_rollout_for_active_version(
+            session, bench_version=canonical_version
+        )
+        if not benchmark_admitted or pipeline_finalized_without_active_score
+        else None
+    )
+    pipeline_previous_era_scored = pipeline_finalized_without_active_score and bool(
+        await previous_era_scored_agent_ids(
+            session,
+            agent_ids=[agent_id],
+            bench_version=canonical_version,
+            rollout=pipeline_rollout,
+        )
+    )
+    pipeline_status = _public_activity_status(
+        agent.status,
+        screening_retry_authorized=(
+            admission_retry is not None and admission_retry.state == "retry_queued"
+        ),
+        screening_policy_version=agent.screening_policy_version,
+        has_active_attempt=running_attempt is not None,
+        has_active_validation=any(
+            work.ticket.bench_version == canonical_version for work in active_work
+        ),
+        has_live_assignment=any(
+            ticket.status == TicketStatus.ISSUED
+            and ticket.bench_version == canonical_version
+            and cast(datetime, _aware(ticket.deadline)) > now
+            for ticket in tickets
+        ),
+        # Deliberately the ACTIVE-era count, not ``era_scores``. The only
+        # label this feeds is ``below_score_floor``, which compares a score
+        # against the active version's continuation floor -- a previous
+        # generation's composites are not on that scale, so admitting them
+        # here would decide a live-queue question with incomparable numbers.
+        score_count=len(canonical_scores),
+        highest_composite=(
+            max(score.composite for score in canonical_scores)
+            if canonical_scores
+            else None
+        ),
+        score_continuation_floor=score_continuation_floor,
+        benchmark_admitted=benchmark_admitted,
+        retired=agent_retired,
+        terminal_failure=pipeline_terminal_code is not None,
+        queue_withdrawn=pipeline_withdrawn,
+        previous_era_scored=pipeline_previous_era_scored,
+    )
+    if pipeline_status in ("not_queued", "era_changed"):
+        # The retry classifier resolves a row's era from its newest ticket or
+        # score, so a row the active era never admits can still carry a v9
+        # "retry queued" no validator will serve. The status already says it
+        # will not be scored; the dead retry state would contradict it.
+        validator_retry = None
     return PublicSubmissionPipeline(
         generated_at=now,
         agent_id=agent_id,
@@ -8496,36 +9391,15 @@ async def agent_pipeline(
                 now=now,
             )
         )[agent_id],
-        status=_public_activity_status(
-            agent.status,
-            screening_retry_authorized=(
-                admission_retry is not None and admission_retry.state == "retry_queued"
-            ),
-            screening_policy_version=agent.screening_policy_version,
-            has_active_attempt=running_attempt is not None,
-            has_active_validation=any(
-                work.ticket.bench_version == canonical_version for work in active_work
-            ),
-            has_live_assignment=any(
-                ticket.status == TicketStatus.ISSUED
-                and ticket.bench_version == canonical_version
-                and cast(datetime, _aware(ticket.deadline)) > now
-                for ticket in tickets
-            ),
-            # Deliberately the ACTIVE-era count, not ``era_scores``. The only
-            # label this feeds is ``below_score_floor``, which compares a score
-            # against the active version's continuation floor -- a previous
-            # generation's composites are not on that scale, so admitting them
-            # here would decide a live-queue question with incomparable numbers.
-            score_count=len(canonical_scores),
-            highest_composite=(
-                max(score.composite for score in canonical_scores)
-                if canonical_scores
-                else None
-            ),
-            score_continuation_floor=score_continuation_floor,
-            benchmark_admitted=benchmark_admitted,
-            retired=agent_retired,
+        status=pipeline_status,
+        era_change=(
+            era_change(
+                bench_version=canonical_version,
+                rollout=pipeline_rollout,
+                previous_era_scored=pipeline_previous_era_scored,
+            )
+            if pipeline_status == "era_changed"
+            else None
         ),
         submission_family=submission_family,
         # Why this exact artifact is or is not earning, separate from ``status``
@@ -8581,6 +9455,11 @@ async def agent_pipeline(
                     memory_mean=score.memory_mean,
                     final_composite=score.composite,
                     details=(score.details if isinstance(score.details, dict) else {}),
+                ),
+                dueling_breakdown=public_dueling_breakdown(
+                    bench_version=_score_bench_version(score),
+                    dueling=getattr(score, "dueling", None),
+                    gate_evidence=getattr(score, "gate_evidence", None),
                 ),
                 v9_base=(
                     _safe_public_v9_base(score.details)
@@ -8736,6 +9615,34 @@ async def agent_pipeline(
             )
             for grant in inference_grants
         ],
+        harness_memory=(
+            PublicHarnessMemory(
+                runs=memory_rollup.runs,
+                peak_bytes_max=memory_rollup.peak_bytes_max,
+                p50_bytes_median=memory_rollup.p50_bytes_median,
+                p95_bytes_median=memory_rollup.p95_bytes_median,
+                p95_bytes_max=memory_rollup.p95_bytes_max,
+                limit_bytes_max=memory_rollup.limit_bytes_max,
+                last_recorded_at=memory_rollup.last_recorded_at,
+                recent_runs=[
+                    PublicHarnessMemoryRun(
+                        validator_hotkey=run.validator_hotkey,
+                        bench_version=run.bench_version,
+                        lease_issued_at=run.lease_issued_at,
+                        outcome="scored" if run.outcome == "scored" else "failed",
+                        peak_bytes=run.peak_bytes,
+                        p50_bytes=run.p50_bytes,
+                        p95_bytes=run.p95_bytes,
+                        samples=run.samples,
+                        sampled_seconds=run.sampled_seconds,
+                        limit_bytes=run.limit_bytes,
+                    )
+                    for run in memory_runs
+                ],
+            )
+            if memory_rollup is not None
+            else None
+        ),
         dispute=_public_dispute(dispute) if dispute is not None else None,
     )
 
@@ -9372,7 +10279,7 @@ async def bench_glossary(response: Response) -> PublicBenchGlossaryResponse:
 
 @router.get("/bench/rollout")
 async def benchmark_rollout_state(
-    response: Response, session: SessionDep, generator: GeneratorDep
+    request: Request, response: Response, session: SessionDep, generator: GeneratorDep
 ) -> PublicBenchRolloutResponse:
     """Expose desired/active versions and the frozen cohort's exact progress.
 
@@ -9386,5 +10293,13 @@ async def benchmark_rollout_state(
     state = await rollout_state(session)
     state["qualification_blockers"] = await rolling_qualification_blockers(
         session, generator_run_size=generator.run_size
+    )
+    state["dueling_season"] = _public_dueling_season(
+        await _request_season_gate(
+            request,
+            session,
+            now=datetime.now(UTC),
+            active_version=int(state["active_version"]),
+        )
     )
     return PublicBenchRolloutResponse.model_validate(state)

@@ -1,0 +1,19 @@
+---
+# Converge the generator-competition scorer on AWS. Same roles as
+# gcp-generator-scorer.yml; only the inventory differs. inventory/aws.yml
+# connects over SSM Session Manager and selects the aws-wif bearer source.
+#
+#   AWS_PROFILE=... ansible-playbook -i infra/ansible/inventory/aws.yml \
+#     infra/ansible/playbooks/aws-generator-scorer.yml \
+#     -e generator_scorer_revision=<released commit>
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_generator_scorer
+
+- name: Converge the generator competition scorer
+  hosts: role_generator_scorer
+  become: true
+  gather_facts: true
+  roles:
+    - base
+    - generator_scorer

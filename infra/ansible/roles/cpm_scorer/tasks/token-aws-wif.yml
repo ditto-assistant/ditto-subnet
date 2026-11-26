@@ -1,0 +1,106 @@
+---
+# AWS: the EC2 instance role ditto-cpm-scorer is federated into GCP Workload
+# Identity (gcp-platform/cpm-scorer.tf, cpm_scorer_aws_account_id). gcloud
+# signs an STS GetCallerIdentity request with the instance-role credentials
+# from IMDSv2 and exchanges it for a federated token that can read only
+# model-context-scorer-token-prod. The credential configuration names the
+# provider and IMDS endpoints; it holds no secret. Same flow as the generator
+# scorer's (roles/generator_scorer/tasks/token-aws-wif.yml).
+- name: Require the federation audience
+  ansible.builtin.assert:
+    that:
+      - cpm_scorer_gcp_project_number | string is match('^[0-9]+$')
+      - cpm_scorer_gcp_wif_pool | length > 0
+      - cpm_scorer_gcp_wif_provider | length > 0
+    fail_msg: aws-wif needs cpm_scorer_gcp_project_number, cpm_scorer_gcp_wif_pool and cpm_scorer_gcp_wif_provider
+    quiet: true
+
+- name: Check for the Google Cloud CLI
+  ansible.builtin.command: gcloud --version
+  register: cpm_scorer_gcloud_check
+  changed_when: false
+  failed_when: false
+  # Read-only probe: run it in --check too, so the install guard has an rc.
+  check_mode: false
+
+- name: Install the Google Cloud CLI
+  when: cpm_scorer_gcloud_check.rc != 0
+  block:
+    - name: Add the Google Cloud apt key
+      ansible.builtin.get_url:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        dest: /usr/share/keyrings/google-cloud.gpg
+        mode: "0644"
+        checksum: "sha256:{{ cpm_scorer_google_cloud_apt_key_sha256 }}"
+
+    - name: Add the Google Cloud apt repository
+      ansible.builtin.deb822_repository:
+        name: google-cloud-sdk
+        types: [deb]
+        uris: https://packages.cloud.google.com/apt
+        suites: [cloud-sdk]
+        components: [main]
+        signed_by: /usr/share/keyrings/google-cloud.gpg
+        state: present
+
+    - name: Install the Google Cloud CLI
+      ansible.builtin.apt:
+        name: google-cloud-cli
+        state: present
+        update_cache: true
+
+- name: Ensure the federation configuration directory
+  ansible.builtin.file:
+    path: "{{ cpm_scorer_gcp_wif_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Render the non-secret AWS external-account configuration
+  ansible.builtin.command:
+    argv:
+      - gcloud
+      - iam
+      - workload-identity-pools
+      - create-cred-config
+      - "projects/{{ cpm_scorer_gcp_project_number }}/locations/global/workloadIdentityPools/{{ cpm_scorer_gcp_wif_pool }}/providers/{{ cpm_scorer_gcp_wif_provider }}"
+      - --aws
+      - --enable-imdsv2
+      - "--output-file={{ cpm_scorer_gcp_wif_dir }}/credential.json"
+  environment:
+    CLOUDSDK_CONFIG: "{{ cpm_scorer_gcp_wif_dir }}/gcloud"
+  # Rendered every converge so a changed audience takes effect; the output is
+  # a deterministic function of the inputs above.
+  changed_when: false
+
+- name: Restrict the external-account configuration
+  ansible.builtin.file:
+    path: "{{ cpm_scorer_gcp_wif_dir }}/credential.json"
+    owner: root
+    group: root
+    mode: "0600"
+
+# --check skips the render above, so on a fresh host there is no credential
+# configuration to read with. A dry run never writes one just to fetch the
+# bearer: it reads only when the configuration already exists, and otherwise
+# skips the read (main.yml then skips the validation and the bearer file).
+- name: Inspect the external-account configuration
+  ansible.builtin.stat:
+    path: "{{ cpm_scorer_gcp_wif_dir }}/credential.json"
+  register: cpm_scorer_wif_credential
+
+# A pure read (secrets versions access writes nothing and rotates nothing), so
+# it runs in --check too.
+- name: Read the Platform bearer through the federated instance role
+  ansible.builtin.command: >-
+    gcloud secrets versions access latest
+    --secret={{ cpm_scorer_token_secret }} --project={{ cpm_scorer_gcp_project }}
+  environment:
+    CLOUDSDK_CONFIG: "{{ cpm_scorer_gcp_wif_dir }}/gcloud"
+    CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: "{{ cpm_scorer_gcp_wif_dir }}/credential.json"
+  register: cpm_scorer_token_read
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: not ansible_check_mode or cpm_scorer_wif_credential.stat.exists

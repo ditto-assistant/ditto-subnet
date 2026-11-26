@@ -58,7 +58,7 @@ from pathlib import PurePosixPath
 
 # Bump when extraction or normalization changes. Items from different
 # versions are never compared (the index stores the version per agent).
-ITEMS_VERSION = "dc2"
+ITEMS_VERSION = "dc3"
 
 KIND_TEXT = "text"
 KIND_SHORT = "short"
@@ -177,6 +177,43 @@ _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _CAMEL_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
 _JOIN_GAP_RE = re.compile(r"[\s+\\]*")
 _PY_PREFIX = frozenset("rRbBuUfF")
+_CONST_FIELD_RE = re.compile(r"\{[A-Z][A-Z0-9_]{2,}(?:[!:][^{}]*)?\}")
+
+
+def _blank_fstring_fields(value: str) -> str:
+    """Replace each code field of a Python f-string with ``{}``.
+
+    ``f"{json.dumps(receipt.args)}"`` is code, not text: left in, a renamed
+    variable reads as distinctive prose at full weight. A bare constant
+    (``{BLOCKED}``) stays for :func:`_resolve`; ``{{`` / ``}}`` are literal.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(value)
+    while i < n:
+        c = value[i]
+        if c in "{}" and value.startswith(c * 2, i):
+            out.append(c * 2)
+            i += 2
+            continue
+        if c != "{":
+            out.append(c)
+            i += 1
+            continue
+        depth = 0
+        j = i
+        while j < n:
+            if value[j] == "{":
+                depth += 1
+            elif value[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        field = value[i : j + 1]
+        out.append(field if _CONST_FIELD_RE.fullmatch(field) else "{}")
+        i = j + 1
+    return "".join(out)
 
 
 @dataclass(frozen=True)
@@ -286,6 +323,7 @@ def _scan(text: str, suffix: str) -> Iterator[tuple[str, str, int, int, int]]:
     n = len(text)
     i = 0
     line = 1
+    prefix = ""  # the Python string prefix just read, for the next literal
     while i < n:
         c = text[i]
         if c == "\n":
@@ -344,8 +382,16 @@ def _scan(text: str, suffix: str) -> Iterator[tuple[str, str, int, int, int]]:
                     break
                 j += 1
             value = text[buf_start:j]
+            newlines = value.count("\n")
+            # ``"\\b(x)"`` and ``r"\b(x)"`` are one string: a non-raw literal's
+            # escaped backslash is decoded so both spellings normalize alike.
+            if not raw_mode and "r" not in prefix:
+                value = value.replace("\\\\", "\\")
+            if "f" in prefix:
+                value = _blank_fstring_fields(value)
+            prefix = ""
             yield ("str", value, line, start, min(n, j + len(quote)))
-            line += value.count("\n")
+            line += newlines
             i = min(n, j + len(quote))
             continue
         if (c.isascii() and c.isalpha()) or c == "_":
@@ -360,6 +406,7 @@ def _scan(text: str, suffix: str) -> Iterator[tuple[str, str, int, int, int]]:
                 and m.end() < n
                 and text[m.end()] in "\"'"
             ):
+                prefix = word.lower()
                 i = m.end()
                 continue
             # Rust byte strings: ``b"..."`` continues at the quote, ``br#"..."#``

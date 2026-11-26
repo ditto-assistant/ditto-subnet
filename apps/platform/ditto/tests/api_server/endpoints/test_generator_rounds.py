@@ -71,15 +71,18 @@ from ditto.db.models import (
     Agent,
     BannedHotkey,
     GeneratorOperatorAction,
+    GeneratorProbeResult,
     GeneratorRound,
     GeneratorRoundAttempt,
     GeneratorRoundCaseVerdict,
+    GeneratorRun,
     GeneratorSubmission,
     ProviderOutageCircuit,
     ValidatorTicket,
 )
-from ditto.db.queries.generator import claimed_fingerprints
+from ditto.db.queries.generator import claimed_fingerprints, current_probe_epoch
 from ditto.db.queries.provider_outages import park_scoring_leases
+from ditto.tests.api_server.conftest import answer_registration_from_neurons
 from ditto.tests.api_server.endpoints.test_generator_competition import (
     _ADMIN,
     _ADMIN_TOKEN,
@@ -128,6 +131,7 @@ def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> MagicMock
     chain.read_epoch_schedule = AsyncMock(
         side_effect=lambda _netuid: _head_at(_LOOP_EPOCH["epoch"])
     )
+    answer_registration_from_neurons(chain)
 
     async def _chain() -> MagicMock:
         return chain
@@ -595,7 +599,10 @@ class TestRoundLifecycle:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         chain = _install(app, session_maker)
-        await _apply_settings(client, validator_rounds_enabled=True)
+        # Round 4 reruns round 3's matrix on purpose (fingerprint claims).
+        await _apply_settings(
+            client, validator_rounds_enabled=True, skip_unchanged_rounds=False
+        )
         agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
         _patch_panel(monkeypatch, agents)
         _patch_lane(monkeypatch)
@@ -832,7 +839,7 @@ class TestRoundLifecycle:
         assert held["grading_bench_version"] == 13
         # ``enforce`` marks the same qualified miner generators eligible and
         # changes nothing else about the ledger.
-        await _apply_settings(client, mode="enforce")
+        await _apply_settings(client, mode="enforce", skip_unchanged_rounds=False)
         enforced = (await client.get("/api/v1/generator/board")).json()
         assert enforced["mode"] == "enforce"
         assert [(e["miner_hotkey"], e["score"]) for e in enforced["entries"]] == [
@@ -868,7 +875,7 @@ class TestRoundLifecycle:
             assert row is not None
             row.scored_at = scored_at
             await session.commit()
-        await _apply_settings(client, mode="shadow")
+        await _apply_settings(client, mode="shadow", skip_unchanged_rounds=False)
         public = (await client.get("/api/v1/generator/rounds/3")).json()
         assert len(public["standings"]) == 3
         assert public["columns"][2]["miner_hotkey"] is None
@@ -946,6 +953,16 @@ class TestRoundLifecycle:
         miner = await _seed_generator(
             session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a"
         )
+        # The generator the miner's upload superseded on the same hotkey.
+        prior = await _seed_generator(
+            session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a0"
+        )
+        async with session_maker() as session, session.begin():
+            row = await session.get(GeneratorSubmission, prior)
+            assert row is not None
+            row.status = "superseded"
+            row.status_reason = f"superseded by {miner}"
+            row.submitted_at -= timedelta(hours=2)
         await _qualify_all(session_maker)
         await _advance(session_maker, 3)
         await _advance(session_maker, 4)
@@ -965,6 +982,11 @@ class TestRoundLifecycle:
             row = await session.get(GeneratorSubmission, miner)
             assert row is not None and row.status == "rejected"
             assert (row.status_reason or "").startswith("round_generation_failed")
+            # SN-487: the failed upload cannot freeze the generator it
+            # superseded; that one is back, to qualify and be re-measured.
+            restored = await session.get(GeneratorSubmission, prior)
+            assert restored is not None and restored.status == "active"
+            assert restored.qualified_at is None
             default = await session.get(GeneratorSubmission, UUID(default_id))
             assert default is not None and default.status == "active"
             rnd = await get_round(session, 1)
@@ -1479,6 +1501,528 @@ class TestRoundLifecycle:
         assert len(preview["columns"]) == 5 and len(preview["panel"]) == 3
 
 
+class TestChallengerColumns:
+    async def test_three_challengers_fill_an_eight_column_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Five counted columns plus three challengers freeze an 8-column
+        round; a ninth column is refused when the settings are written."""
+        _install(app, session_maker)
+        await _apply_settings(
+            client, counted_columns=5, challenger_columns=4, status=422
+        )
+        await _apply_settings(client, counted_columns=5, challenger_columns=3)
+        for index in range(9):
+            await _seed_generator(
+                session_maker,
+                hotkey=f"5ChallengerMiner{index}",
+                owner=f"coldkey:challenger-owner-{index}",
+                salt=f"challenger-{index}",
+            )
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        columns = preview["columns"]
+        assert [column["counted"] for column in columns] == [True] * 5 + [False] * 3
+        assert len({column["owner_key"] for column in columns}) == 8
+
+
+class TestChallengerQueue:
+    async def test_a_challenger_still_in_flight_is_not_picked_again(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A never-scored generator whose round has not finished is already
+        being measured there. The next round's challenger column goes to the
+        next generator in the queue instead of re-running it (round 26100
+        re-ran 6208f7cc because 26099 scored seven minutes after 26100 opened).
+        A void round measured nothing, so it puts the generator back first.
+        Both generators are one miner's, so the family takes one column a
+        round."""
+        _install(app, session_maker)
+        await _apply_settings(
+            client,
+            counted_columns=1,
+            challenger_columns=1,
+            validator_rounds_enabled=True,
+            skip_unchanged_rounds=False,
+        )
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        scored = await _seed_generator(
+            session_maker, hotkey="5GenScored", owner="coldkey:scored", salt="scored"
+        )
+        first = await _seed_generator(
+            session_maker, hotkey="5GenFirst", owner="coldkey:first", salt="first"
+        )
+        second = await _seed_generator(
+            session_maker, hotkey="5GenSecond", owner="coldkey:first", salt="second"
+        )
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            for submission_id, age, score in (
+                (scored, 3, 0.4),
+                (first, 2, None),
+                (second, 1, None),
+            ):
+                row = await session.get(GeneratorSubmission, submission_id)
+                assert row is not None
+                row.qualified_at = now - timedelta(hours=age)
+                row.round_score = score
+                row.round_scored_index = 1 if score is not None else None
+
+        async def challenger() -> list[str]:
+            preview = await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)
+            assert preview.status_code == 200, preview.text
+            return [
+                column["submission_id"]
+                for column in preview.json()["columns"]
+                if not column["counted"]
+            ]
+
+        assert await challenger() == [str(first)]
+        await _advance(session_maker, 9)  # commits round 3
+        await _advance(session_maker, 12)  # opens round 3
+        async with session_maker() as session:
+            opened = await get_round(session, 3)
+            assert opened is not None and opened.status == "generating"
+            assert [
+                (column["submission_id"], column["counted"])
+                for column in opened.columns or []
+            ] == [(str(scored), True), (str(first), False)]
+
+        # Round 3 is still measuring the first generator: the next challenger
+        # is the second one.
+        assert await challenger() == [str(second)]
+
+        voided = await client.post(
+            f"{_ROUNDS_URL}/3/void",
+            headers=_ADMIN,
+            json={
+                "expected_status": "generating",
+                "reason": "operator test void",
+                "actor": "backroom:test",
+                "confirmation": void_round_confirmation(3),
+            },
+        )
+        assert voided.status_code == 200, voided.text
+        assert await challenger() == [str(first)]
+
+    async def test_a_scored_challenger_still_in_flight_is_not_picked_again(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With no never-scored generator left, challenger columns re-measure
+        the next-best scored generators. One whose challenger round is still
+        in flight is skipped there too, so the column goes to the next one."""
+        _install(app, session_maker)
+        await _apply_settings(
+            client,
+            counted_columns=1,
+            challenger_columns=1,
+            validator_rounds_enabled=True,
+            skip_unchanged_rounds=False,
+        )
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        ids = {
+            name: await _seed_generator(
+                session_maker, hotkey=f"5Gen-{name}", owner=f"coldkey:{name}", salt=name
+            )
+            for name in ("top", "middle", "low")
+        }
+        async with session_maker() as session, session.begin():
+            for name, score in (("top", 0.6), ("middle", 0.4), ("low", 0.2)):
+                row = await session.get(GeneratorSubmission, ids[name])
+                assert row is not None
+                row.round_score = score
+                row.round_scored_index = 1
+
+        await _advance(session_maker, 9)  # commits round 3
+        await _advance(session_maker, 12)  # opens round 3
+        async with session_maker() as session:
+            opened = await get_round(session, 3)
+            assert opened is not None and opened.status == "generating"
+            assert [
+                (column["submission_id"], column["counted"])
+                for column in opened.columns or []
+            ] == [(str(ids["top"]), True), (str(ids["middle"]), False)]
+
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        assert [
+            (column["submission_id"], column["counted"])
+            for column in preview["columns"]
+        ] == [(str(ids["top"]), True), (str(ids["low"]), False)]
+
+    async def test_template_families_share_the_challenger_queue(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Three owners' builds of one template no longer take both challenger
+        columns ahead of a distinct generator, and the preview shows the whole
+        queue with what a round would do with each entry."""
+        _install(app, session_maker)
+        await _apply_settings(client, counted_columns=1, challenger_columns=2)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        layout = [
+            # name, owner, module, hours before now, scored
+            ("scored", "s", "example.com/scored", 6, True),
+            ("clone-a", "a", "example.com/clone", 5, False),
+            ("clone-b", "b", "example.com/clone", 4, False),
+            ("clone-c", "c", "example.com/clone", 3, False),
+            ("distinct", "x", "example.com/distinct", 2, False),
+            # Owner a's second generator: its family through the owner key.
+            ("second-a", "a", "example.com/other", 1, False),
+        ]
+        ids: dict[str, UUID] = {}
+        for name, owner, _, _, _ in layout:
+            ids[name] = await _seed_generator(
+                session_maker,
+                hotkey=f"5Gen-{name}",
+                owner=f"coldkey:{owner}",
+                salt=name,
+            )
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            for name, _, module, age, scored in layout:
+                row = await session.get(GeneratorSubmission, ids[name])
+                assert row is not None
+                row.module = module
+                row.qualified_at = now - timedelta(hours=age)
+                row.round_score = 0.3 if scored else None
+                row.round_scored_index = 1 if scored else None
+
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        assert [
+            (column["submission_id"], column["counted"])
+            for column in preview["columns"]
+        ] == [
+            (str(ids["scored"]), True),
+            (str(ids["clone-a"]), False),
+            (str(ids["distinct"]), False),
+        ]
+        queue = preview["challenger_queue"]
+        assert [
+            (
+                entry["submission_id"],
+                entry["queue_position"],
+                entry["status"],
+                entry["family_position"],
+            )
+            for entry in queue
+        ] == [
+            (str(ids["clone-a"]), 1, "challenger", 0),
+            (str(ids["distinct"]), 2, "challenger", 0),
+            (str(ids["clone-b"]), 3, "waiting", 1),
+            (str(ids["clone-c"]), 4, "waiting", 2),
+            (str(ids["second-a"]), 5, "owner_has_column", 3),
+        ]
+        clone_family = {
+            entry["family"]
+            for entry in queue
+            if entry["module"] != "example.com/distinct"
+        }
+        assert clone_family == {str(ids["clone-a"])}
+        assert {
+            entry["family_size"] for entry in queue if entry["family"] in clone_family
+        } == {4}
+        # The scored generator and the public default are never in the queue.
+        assert str(ids["scored"]) not in {entry["submission_id"] for entry in queue}
+
+    async def test_every_waiting_family_gets_a_column_next_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A generator qualified before a round opens is measured in it: each
+        waiting template family takes one challenger column past
+        challenger_columns, up to the round's eight columns. A family's other
+        builds wait for spare challenger room, an owner never holds two
+        columns, and challenger_columns 0 still seats none."""
+        _install(app, session_maker)
+        await _apply_settings(client, counted_columns=1, challenger_columns=1)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        layout = [
+            # name, owner, module, hours before now, scored
+            ("scored", "s", "example.com/scored", 7, True),
+            ("clone-a", "a", "example.com/clone", 6, False),
+            ("clone-b", "b", "example.com/clone", 5, False),
+            ("distinct", "x", "example.com/distinct", 4, False),
+            ("solo", "y", "example.com/solo", 3, False),
+            ("batch-1", "z", "example.com/batch-1", 2, False),
+            ("batch-2", "z", "example.com/batch-2", 1, False),
+        ]
+        ids: dict[str, UUID] = {}
+        for name, owner, _, _, _ in layout:
+            ids[name] = await _seed_generator(
+                session_maker,
+                hotkey=f"5Gen-{name}",
+                owner=f"coldkey:{owner}",
+                salt=name,
+            )
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            for name, _, module, age, scored in layout:
+                row = await session.get(GeneratorSubmission, ids[name])
+                assert row is not None
+                row.module = module
+                row.qualified_at = now - timedelta(hours=age)
+                row.round_score = 0.3 if scored else None
+                row.round_scored_index = 1 if scored else None
+
+        async def columns() -> list[tuple[str, bool]]:
+            preview = await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)
+            assert preview.status_code == 200, preview.text
+            return [
+                (column["submission_id"], column["counted"])
+                for column in preview.json()["columns"]
+            ]
+
+        assert await columns() == [
+            (str(ids["scored"]), True),
+            (str(ids["clone-a"]), False),
+            (str(ids["distinct"]), False),
+            (str(ids["solo"]), False),
+            (str(ids["batch-1"]), False),
+        ]
+
+        # A spare challenger column goes on down the queue: the clone family's
+        # second build, under another owner, is seated; batch-2 is owner z's.
+        await _apply_settings(client, counted_columns=1, challenger_columns=5)
+        assert await columns() == [
+            (str(ids["scored"]), True),
+            (str(ids["clone-a"]), False),
+            (str(ids["distinct"]), False),
+            (str(ids["solo"]), False),
+            (str(ids["batch-1"]), False),
+            (str(ids["clone-b"]), False),
+        ]
+
+        # Five counted columns leave room for three challengers: the fourth
+        # waiting family is measured next round.
+        await _apply_settings(client, counted_columns=5, challenger_columns=1)
+        for index in range(4):
+            extra = await _seed_generator(
+                session_maker,
+                hotkey=f"5Gen-top-{index}",
+                owner=f"coldkey:top-{index}",
+                salt=f"top-{index}",
+            )
+            async with session_maker() as session, session.begin():
+                row = await session.get(GeneratorSubmission, extra)
+                assert row is not None
+                row.module = f"example.com/top-{index}"
+                row.qualified_at = now - timedelta(hours=8)
+                row.round_score = 0.5
+                row.round_scored_index = 1
+        assert [counted for _, counted in await columns()] == [True] * 5 + [False] * 3
+
+        await _apply_settings(client, counted_columns=1, challenger_columns=0)
+        assert [counted for _, counted in await columns()] == [True]
+
+    async def test_exploration_slot_prevents_non_top5_starvation(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Scored generators outside the counted top-N rotate back in via the
+        reserved exploration slot (stalest owner first), even while fresh
+        challengers are waiting, and an owner with multiple hotkeys cannot jump
+        ahead using an older hotkey."""
+        _install(app, session_maker)
+        await _apply_settings(client, counted_columns=5, challenger_columns=3)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        now = datetime.now(UTC)
+
+        # 5 top counted owners (scored recently in round 26176), 2 non-top-5
+        # scored owners (one stale from 26138 like d9ca2ce6, one from 26152
+        # like ae6f499b), one multi-hotkey owner with an old hotkey at 26130
+        # and a recent hotkey at 26175, plus 3 waiting fresh challengers.
+        specs = [
+            # name, owner, score, scored_index
+            ("top-1", "top1", 0.50, 26176),
+            ("top-2", "top2", 0.45, 26176),
+            ("top-3", "top3", 0.40, 26176),
+            ("top-4", "top4", 0.35, 26176),
+            ("top-5", "top5", 0.30, 26176),
+            ("stale-old", "stale1", 0.09, 26138),
+            ("stale-mid", "stale2", 0.001, 26152),
+            ("multi-old", "multi", 0.05, 26130),
+            ("multi-new", "multi", 0.25, 26175),
+            ("fresh-1", "fresh1", None, None),
+            ("fresh-2", "fresh2", None, None),
+            ("fresh-3", "fresh3", None, None),
+        ]
+        ids: dict[str, UUID] = {}
+        for index, (name, owner, _, _) in enumerate(specs):
+            ids[name] = await _seed_generator(
+                session_maker,
+                hotkey=f"5Gen-{name}",
+                owner=f"coldkey:{owner}",
+                salt=f"{name}-{index}",
+            )
+        async with session_maker() as session, session.begin():
+            for index, (name, _, score, scored_index) in enumerate(specs):
+                row = await session.get(GeneratorSubmission, ids[name])
+                assert row is not None
+                row.module = f"example.com/{name}"
+                row.qualified_at = now - timedelta(hours=len(specs) - index)
+                row.round_score = score
+                row.round_scored_index = scored_index
+
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        columns = preview["columns"]
+        assert len(columns) == 8
+        counted_ids = [c["submission_id"] for c in columns if c["counted"]]
+        challenger_ids = [c["submission_id"] for c in columns if not c["counted"]]
+        assert counted_ids == [str(ids[f"top-{i}"]) for i in range(1, 6)]
+        # Exploration slot picks stale-old (26138), NOT multi-old (owner's
+        # latest scored round is 26175); remaining 2 slots go to waiting fresh
+        # challengers.
+        assert challenger_ids == [
+            str(ids["stale-old"]),
+            str(ids["fresh-1"]),
+            str(ids["fresh-2"]),
+        ]
+
+        # Once stale-old is re-scored in round 26177, the exploration slot
+        # advances to stale-mid (26152).
+        async with session_maker() as session, session.begin():
+            row = await session.get(GeneratorSubmission, ids["stale-old"])
+            assert row is not None
+            row.round_scored_index = 26177
+        preview2 = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        challenger_ids_2 = [
+            c["submission_id"] for c in preview2["columns"] if not c["counted"]
+        ]
+        assert challenger_ids_2 == [
+            str(ids["stale-mid"]),
+            str(ids["fresh-1"]),
+            str(ids["fresh-2"]),
+        ]
+
+        # Once fresh challengers drain, all spare challenger slots rotate
+        # stalest-owner-first (stale-mid 26152, then multi-new 26175 — picking
+        # multi's best active submission rather than multi-old — then stale-old
+        # 26177).
+        async with session_maker() as session, session.begin():
+            for name in ("fresh-1", "fresh-2", "fresh-3"):
+                row = await session.get(GeneratorSubmission, ids[name])
+                assert row is not None
+                row.status = "superseded"
+        preview3 = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        challenger_ids_3 = [
+            c["submission_id"] for c in preview3["columns"] if not c["counted"]
+        ]
+        assert challenger_ids_3 == [
+            str(ids["stale-mid"]),
+            str(ids["multi-new"]),
+            str(ids["stale-old"]),
+        ]
+
+    async def test_a_partial_probe_copy_waits_behind_new_cases(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Within one family position the queue takes the generator whose
+        current-epoch probe cases are new over one that half copies a scored
+        generator's, though the copy qualified first. Both families are
+        seated; the novel one takes the first challenger column."""
+        _install(app, session_maker)
+        await _apply_settings(client, counted_columns=1, challenger_columns=1)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        names = ("scored", "partial", "novel")
+        ids = {
+            name: await _seed_generator(
+                session_maker, hotkey=f"5Gen-{name}", owner=f"coldkey:{name}", salt=name
+            )
+            for name in names
+        }
+        probes = {
+            "scored": ["m1", "m2", "m3", "m4"],
+            "partial": ["m1", "m2", "p3", "p4"],
+            "novel": ["n1", "n2", "n3", "n4"],
+        }
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            epoch = await current_probe_epoch(session)
+            assert epoch is not None
+            for age, name in enumerate(reversed(names)):
+                row = await session.get(GeneratorSubmission, ids[name])
+                assert row is not None
+                row.module = f"example.com/{name}"
+                row.qualified_at = now - timedelta(hours=age + 1)
+                if name == "scored":
+                    row.round_score = 0.4
+                    row.round_scored_index = 1
+                run = GeneratorRun(
+                    run_id=uuid4(),
+                    submission_id=ids[name],
+                    attempt=1,
+                    seeds=["ab" * 32],
+                    probe_epoch=epoch.epoch,
+                    cases_per_seed=8,
+                    panel=[],
+                    settings_revision=1,
+                    status="qualified",
+                    outcome="qualified",
+                    leased_at=now,
+                    finished_at=now,
+                )
+                session.add(run)
+                await session.flush()
+                session.add(
+                    GeneratorProbeResult(
+                        submission_id=ids[name],
+                        epoch=epoch.epoch,
+                        run_id=run.run_id,
+                        fingerprints=[
+                            hashlib.sha256(tag.encode()).hexdigest()
+                            for tag in probes[name]
+                        ],
+                        recorded_at=now,
+                    )
+                )
+
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        assert [
+            column["submission_id"]
+            for column in preview["columns"]
+            if not column["counted"]
+        ] == [str(ids["novel"]), str(ids["partial"])]
+        assert [
+            (entry["submission_id"], entry["status"], entry["novelty"])
+            for entry in preview["challenger_queue"]
+        ] == [
+            (str(ids["novel"]), "challenger", 1.0),
+            (str(ids["partial"]), "challenger", 0.5),
+        ]
+
+
 class TestPanelFreshness:
     async def test_ineligible_ranked_agents_are_skipped_and_refilled_at_freeze(
         self,
@@ -1693,7 +2237,10 @@ class TestFaultOnlyRounds:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _install(app, session_maker)
-        await _apply_settings(client, validator_rounds_enabled=True)
+        # Round 2 reruns round 1's matrix on purpose (an infra-faulted rerun).
+        await _apply_settings(
+            client, validator_rounds_enabled=True, skip_unchanged_rounds=False
+        )
         agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
         _patch_panel(monkeypatch, agents)
         _patch_lane(monkeypatch)
@@ -1763,6 +2310,211 @@ class TestFaultOnlyRounds:
             ).all()
 
 
+async def _run_and_score_round(client: httpx.AsyncClient) -> None:
+    """Generate the open round, run every panel agent, score the matrix."""
+    case_ids = await _generate_round(client)
+    while (job := await _lease_job(client)) is not None:
+        await _report(client, job, case_ids)
+    work = (
+        await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+    ).json()["work"]
+    assert work["kind"] == "score"
+    resp = await client.post(
+        "/api/v1/generator-scorer/round-score",
+        headers=_SCORER,
+        json=_matrix_score(work),
+    )
+    assert resp.status_code == 200, resp.text
+
+
+class TestSkipUnchangedRounds:
+    async def test_an_unchanged_round_is_skipped_and_keeps_paying(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        app.state.generator_round_loop = None
+        await _apply_settings(client, validator_rounds_enabled=True)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(4)]
+        _patch_panel(monkeypatch, agents[:3])
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        await _seed_generator(
+            session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a"
+        )
+        await _qualify_all(session_maker)
+
+        # Round 1 is the first measurement: it runs and scores.
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        await _run_and_score_round(client)
+        scored = (await client.get("/api/v1/generator/board")).json()["entries"]
+        assert [(e["miner_hotkey"], e["round_index"]) for e in scored] == [
+            ("5GenMinerA", 1)
+        ]
+
+        # Round 2 would rerun the same generators on the same panel: skipped
+        # at opening, with nothing to generate and nothing to lease.
+        actions = await _advance(session_maker, 8)
+        assert (
+            "round 2: skipped (skipped_unchanged: same columns and panel as "
+            "round 1)" in actions
+        )
+        async with session_maker() as session:
+            row = await get_round(session, 2)
+            assert row is not None and row.status == "skipped"
+            assert row.seed is not None and row.dataset_sha256 is None
+            assert row.void_reason is None and row.closed_at is not None
+            source = await get_round(session, 1)
+            assert source is not None and len(row.panel or []) == 3
+            assert row.columns == source.columns
+            assert (row.generation or {})["skipped_unchanged"][
+                "carried_from_round"
+            ] == 1
+            assert not (
+                await session.scalars(
+                    select(GeneratorRoundAttempt).where(
+                        GeneratorRoundAttempt.round_index == 2
+                    )
+                )
+            ).all()
+        assert (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"] is None
+        assert await _lease_job(client) is None
+
+        detail = (await client.get(f"{_ROUNDS_URL}/2", headers=_ADMIN)).json()
+        assert detail["summary"]["status"] == "skipped"
+        assert detail["summary"]["skip_reason"] == "skipped_unchanged"
+        assert detail["summary"]["carried_from_round"] == 1
+        loop = (await client.get(f"{_ROUNDS_URL}/loop", headers=_ADMIN)).json()
+        assert loop["skip_unchanged_rounds"] is True
+        assert loop["skipped_rounds"] == 1
+        assert loop["last_skipped_round"]["round_index"] == 2
+        assert loop["last_skipped_round"]["reason"] == "skipped_unchanged"
+        assert loop["last_skipped_round"]["carried_from_round"] == 1
+
+        # The ledger keeps paying round 1, byte for byte.
+        carried = (await client.get("/api/v1/generator/board")).json()["entries"]
+        assert [(e["miner_hotkey"], e["round_index"], e["score"]) for e in carried] == [
+            (e["miner_hotkey"], e["round_index"], e["score"]) for e in scored
+        ]
+        # Round 1 scored before the window still pays: the skip re-dated it.
+        async with session_maker() as session:
+            source = await get_round(session, 1)
+            assert source is not None and source.scored_at is not None
+            source.scored_at -= timedelta(days=8)
+            await session.commit()
+        stale_source = (await client.get("/api/v1/generator/board")).json()
+        assert [e["round_index"] for e in stale_source["entries"]] == [1]
+        # ...and a skip older than the window does not.
+        async with session_maker() as session:
+            skipped = await get_round(session, 2)
+            assert skipped is not None and skipped.closed_at is not None
+            skipped.closed_at -= timedelta(days=8)
+            await session.commit()
+        assert (await client.get("/api/v1/generator/board")).json()["entries"] == []
+        async with session_maker() as session:
+            source = await get_round(session, 1)
+            skipped = await get_round(session, 2)
+            assert source is not None and skipped is not None
+            assert source.scored_at is not None and skipped.closed_at is not None
+            source.scored_at += timedelta(days=8)
+            skipped.closed_at += timedelta(days=8)
+            await session.commit()
+
+        # Round 3 is still unchanged: skipped again, carrying round 1.
+        assert any("round 3: skipped" in a for a in await _advance(session_maker, 12))
+
+        # A panel change (a new upload seated) re-measures: round 4 runs.
+        _patch_panel(monkeypatch, [agents[3], *agents[1:3]])
+        await _advance(session_maker, 16)
+        async with session_maker() as session:
+            row = await get_round(session, 4)
+            assert row is not None and row.status == "generating"
+        await _run_and_score_round(client)
+
+        # A new generator column re-measures too.
+        await _advance(session_maker, 20)
+        async with session_maker() as session:
+            row = await get_round(session, 5)
+            assert row is not None and row.status == "skipped"
+        await _seed_generator(
+            session_maker, hotkey="5GenMinerB", owner="coldkey:gb", salt="b"
+        )
+        await _advance(session_maker, 24)
+        async with session_maker() as session:
+            row = await get_round(session, 6)
+            assert row is not None and row.status == "generating"
+
+        # Skipped rounds reveal on the round schedule like any other.
+        await _advance(session_maker, 32)
+        public = (await client.get("/api/v1/generator/rounds/2")).json()
+        assert public["summary"]["status"] == "skipped"
+        assert public["summary"]["secret_hex"] is not None
+
+    async def test_skip_off_reruns_an_unchanged_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(
+            client, validator_rounds_enabled=True, skip_unchanged_rounds=False
+        )
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        await _run_and_score_round(client)
+        await _advance(session_maker, 8)
+        async with session_maker() as session:
+            row = await get_round(session, 2)
+            assert row is not None and row.status == "generating"
+        loop = (await client.get(f"{_ROUNDS_URL}/loop", headers=_ADMIN)).json()
+        assert loop["skip_unchanged_rounds"] is False
+        assert loop["last_skipped_round"] is None
+
+    async def test_an_incomplete_measurement_is_never_carried(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A scored round that dropped a panel agent measured less than the
+        next round would: the next round runs."""
+        _install(app, session_maker)
+        await _apply_settings(client, validator_rounds_enabled=True, panel_size=4)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(4)]
+        _patch_panel(monkeypatch, agents)
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        async with session_maker() as session, session.begin():
+            row = await get_round(session, 1, for_update=True)
+            assert row is not None and row.panel is not None
+            row.panel = [
+                {**slot, "dropped_reason": "test drop"} if i == 3 else slot
+                for i, slot in enumerate(row.panel)
+            ]
+        await _run_and_score_round(client)
+        await _advance(session_maker, 8)
+        async with session_maker() as session:
+            row = await get_round(session, 2)
+            assert row is not None and row.status == "generating"
+
+
 class TestOperatorControls:
     async def test_void_republish_tick_and_loop(
         self,
@@ -1787,6 +2539,7 @@ class TestOperatorControls:
                 last_epoch_block=8560,
                 tempo=360,
                 block=8565,
+                next_epoch_block=8920,
             )
         )
         chain.get_finalized_block_hash = AsyncMock(return_value=_BLOCK)
@@ -1795,6 +2548,7 @@ class TestOperatorControls:
         assert "round 6: committed" in tick["actions"]
         assert tick["schedule"]["current_round"] == 5
         assert tick["schedule"]["next_round_epoch"] == 24
+        assert tick["schedule"]["next_epoch_block"] == 8920
         # Platform never publishes the commitment itself: it waits for elected
         # validators, and the loop has no publication step any more.
         async with session_maker() as session:
@@ -2319,3 +3073,46 @@ def test_round_seconds_left_tracks_the_closing_boundary() -> None:
     # Past the closing epoch no time is left; before the round, no estimate.
     assert round_seconds_left(row, _head(epoch=32, last_epoch_block=0, block=1)) == 0
     assert round_seconds_left(row, _head(epoch=27, last_epoch_block=0, block=1)) is None
+
+
+def test_round_signature_ignores_labels_order_and_counted() -> None:
+    """The same generator sources on the same panel measure the same thing,
+    whichever column is counted; a different source or champion does not."""
+    from ditto.api_server.generator_rounds import _round_signature
+
+    a = {"submission_id": "a", "source_sha256": "1", "public_default": False}
+    b = {"submission_id": "b", "source_sha256": "2", "public_default": False}
+    panel = [
+        {"agent_id": "x", "champion": True},
+        {"agent_id": "y", "champion": False},
+    ]
+    params: dict[str, float | int] = {"min_panel": 3, "target_cases": 70}
+
+    def signature(columns: list[dict], seats: list[dict] = panel) -> str:
+        return _round_signature(
+            columns=columns,
+            panel=seats,
+            bench_version=15,
+            cases_per_column=70,
+            score_params=params,
+        )
+
+    base = signature(
+        [
+            {**a, "column_id": "c0", "counted": True},
+            {**b, "column_id": "c1", "counted": False},
+        ]
+    )
+    assert base == signature(
+        [
+            {**b, "column_id": "c0", "counted": True},
+            {**a, "column_id": "c1", "counted": False},
+        ]
+    )
+    assert base != signature(
+        [{**a, "column_id": "c0"}, {**b, "column_id": "c1", "source_sha256": "3"}]
+    )
+    assert base != signature(
+        [{**a, "column_id": "c0"}, {**b, "column_id": "c1"}],
+        [{"agent_id": "x", "champion": False}, {"agent_id": "y", "champion": True}],
+    )

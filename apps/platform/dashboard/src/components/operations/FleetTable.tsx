@@ -22,6 +22,7 @@ import { EntityButton } from "../ui/EntityButton";
 import {
   anyBenchmarkStage,
   cappedSlotIds,
+  memoryLimitedSlotIds,
   fleetStatusFor,
   fleetWork,
   fundedSlotCount,
@@ -538,6 +539,7 @@ function SlotRows(props: { entry: FleetEntryExt; slotPolicy: SlotPolicy | null }
     return { active, assigned, orphans };
   });
   const capped = createMemo(() => cappedSlotIds(props.entry));
+  const memoryLimited = createMemo(() => memoryLimitedSlotIds(props.entry));
   const cappedTitle = () =>
     props.slotPolicy && isFinite(Number(props.slotPolicy.max_concurrent_slots))
       ? "Operator cap: " +
@@ -559,8 +561,10 @@ function SlotRows(props: { entry: FleetEntryExt; slotPolicy: SlotPolicy | null }
     let idle = 0;
     let cappedCount = 0;
     let unavailable = 0;
+    let memoryLimitedCount = 0;
     inactiveSlots().forEach((slotId) => {
       if (props.entry.admission !== "accepting") unavailable += 1;
+      else if (memoryLimited()[slotId]) memoryLimitedCount += 1;
       else if ((props.entry.healthy_slots || []).indexOf(slotId) < 0) unavailable += 1;
       else if (capped()[slotId]) cappedCount += 1;
       else idle += 1;
@@ -572,6 +576,7 @@ function SlotRows(props: { entry: FleetEntryExt; slotPolicy: SlotPolicy | null }
       idle,
       capped: cappedCount,
       unavailable,
+      memoryLimited: memoryLimitedCount,
     };
   });
   const summary = () => {
@@ -581,12 +586,22 @@ function SlotRows(props: { entry: FleetEntryExt; slotPolicy: SlotPolicy | null }
     if (counts.idle) parts.push(counts.idle + " idle");
     if (counts.capped) parts.push(counts.capped + " capped");
     if (counts.unavailable) parts.push(counts.unavailable + " unavailable");
+    if (counts.memoryLimited) parts.push(counts.memoryLimited + " memory-limited");
     return parts.join(" · ");
   };
 
   const inactiveState = (slotId: string): { label: string; tone: string; title?: string } => {
+    // The validator's own admission wins; then memory explains a slot it does
+    // not offer (only those are ever marked memory-limited).
     if (props.entry.admission !== "accepting") {
       return { label: String(props.entry.admission), tone: "warn" };
+    }
+    if (memoryLimited()[slotId]) {
+      return {
+        label: "Memory-limited",
+        tone: "warn",
+        title: props.entry.memory_note || undefined,
+      };
     }
     if ((props.entry.healthy_slots || []).indexOf(slotId) < 0) {
       return { label: "Unavailable", tone: "warn" };

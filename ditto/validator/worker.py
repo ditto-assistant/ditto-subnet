@@ -19,6 +19,7 @@ import contextvars
 import inspect
 import logging
 import math
+import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -41,11 +42,13 @@ from ditto.api_models.confirmation_progress import (
 )
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.generator_round_validator import (
+    GENERATOR_FRONTIER_ORACLE_DATASET_MODE,
     GENERATOR_ROUND_BENCH_VERSIONS,
     LEGACY_SCORER_ROUND_BENCH_VERSIONS,
     GeneratorRoundCaseResult,
     GeneratorRoundJobResponse,
 )
+from ditto.api_models.model_context_ledger import ModelContextLedgerResponse
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import HostSpecs
@@ -54,6 +57,7 @@ from ditto.api_models.validator import (
 )
 from ditto.api_models.validator import (
     ConfirmationDatasetPin,
+    HarnessMemoryTelemetry,
     ValidatorHeartbeatRequest,
     ValidatorHeartbeatResponse,
     ValidatorRuntimeState,
@@ -96,11 +100,13 @@ from ditto.validator.errors import (
     PlatformError,
     PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
+    PlatformRetryLaterError,
     SandboxOomError,
     ValidatorInfrastructureError,
     WeightSubmissionError,
     container_log_tail,
     failure_detail,
+    harness_memory_of,
 )
 from ditto.validator.lease_roster import (
     RosterUnknown,
@@ -137,6 +143,7 @@ from ditto.validator.telemetry import (
 from ditto.validator.tracks import (
     TRACK_GENERATOR,
     TRACK_MEMORY,
+    TRACK_MODEL_CONTEXT,
     MemoryFoldParams,
     TrackFoldInputs,
     TrackRegistry,
@@ -169,6 +176,7 @@ from ditto.validator.weights import (
     owner_burn_destination_required,
     reign_seed_planning,
     resolve_miner_emission_share,
+    resolve_model_context_rank_shares,
     resolve_track_shares,
     select_champion,
     split_unpaid_share,
@@ -219,6 +227,7 @@ if TYPE_CHECKING:
     from ditto.validator.platform import PlatformClient
     from ditto.validator.stack_health import StackHealthCollector
 
+from ditto.validator.platform import last_job_decline_reason
 from ditto.validator.weight_receipts import WeightReceiptRelay
 
 logger = logging.getLogger(__name__)
@@ -283,7 +292,19 @@ def _ledger_crown_gate(ledger: LedgerResponse) -> CrownGate | None:
         or not 1 <= standing <= 5
     ):
         return None
-    return CrownGate(min_shared_seeds=min_seeds, standing_rank=standing)
+    # Protocol 35: a served title-duel window. Out of range reads as absent, so
+    # every validator falls back to the protocol-34 gate identically.
+    window = getattr(served, "duel_window_pairs", None)
+    duel_window = (
+        window
+        if isinstance(window, int)
+        and not isinstance(window, bool)
+        and 2 <= window <= TOP5_MAX_CONFIRMATION_SEEDS
+        else None
+    )
+    return CrownGate(
+        min_shared_seeds=min_seeds, standing_rank=standing, duel_window=duel_window
+    )
 
 
 def _ledger_rank_shares(
@@ -576,6 +597,33 @@ def _confirmation_pin_binding_mismatch(
     return None
 
 
+def _season_seed_matches(job: object) -> bool:
+    """Whether a season-scoped quorum seed (protocol 35) re-derives.
+
+    A title-duel quorum run scores a dueling season's shared seed, the same
+    champion-anchored CRN family a confirmation pin names, so it is verified
+    the same way: ``seed == crn_seed([seed_anchor_agent_id],
+    version=bench_version, k=seed_index, block_hash=dataset_seed_block_hash)``.
+    Any missing binding field is a mismatch: a season seed is never accepted
+    unverified, unlike a pre-derivation agent seed.
+    """
+    seed = getattr(job, "seed", None)
+    anchor = getattr(job, "seed_anchor_agent_id", None)
+    index = getattr(job, "seed_index", None)
+    block_hash = getattr(job, "dataset_seed_block_hash", None)
+    version = getattr(job, "bench_version", None)
+    if seed is None or anchor is None or index is None or not block_hash:
+        return False
+    if version is None or not crn_block_binding_active(int(version)):
+        return False
+    return (
+        crn_seed(
+            [str(anchor)], version=int(version), k=int(index), block_hash=block_hash
+        )
+        == seed
+    )
+
+
 def confirmation_failure_class(error: BaseException) -> str:
     """Map an exception to an allowlisted, low-cardinality failure slug.
 
@@ -637,6 +685,56 @@ _JOB_HEARTBEAT_REFRESH_SECONDS = 120.0
 # never re-dispatches its once-per-sweep retest lane. Until the heartbeat refresh
 # above, the stale-heartbeat 428 ended these sweeps at about this age.
 _IDLE_SWEEP_MAX_SECONDS = 300.0
+# How many consecutive 503 + ``Retry-After`` job refusals one slot rides out in
+# a sweep before isolating itself as for any other refusal. Platform answers a
+# bench v16+ seed's first lease this way while it prepares the dueling slice
+# (normally seconds, Retry-After 15s), so a few waits cover a fresh seed, while
+# a preparation stuck behind operator review cannot keep the slot spinning.
+_JOB_RETRY_LATER_MAX_CONSECUTIVE = 6
+# A 204 ``allocator_busy`` means another job transaction held Platform's
+# dispatch fence: the queue was never read, and the fence clears in
+# milliseconds. Retry the same slot soon, on its own jittered exponential
+# backoff, instead of waking every sibling into the same held fence.
+_ALLOCATOR_BUSY_BACKOFF_BASE_SECONDS = 1.0
+_ALLOCATOR_BUSY_BACKOFF_MAX_SECONDS = 15.0
+# After the generator-round lane comes back empty, no slot asks it again for
+# one idle repoll interval (``_IDLE_SLOT_REPOLL_SECONDS``). Every empty
+# canonical poll could otherwise elect a new round dispatcher, and because each
+# empty round poll also woke every waiting sibling, an idle host re-polled
+# ``/validator/job`` in a loop bounded only by round-poll latency.
+#
+# Spread of each idle wait around its nominal interval, and the most a slot
+# waits (as a share of that interval) after a sibling's lease change wakes it,
+# so a host's idle slots do not reach Platform's one dispatch fence together.
+_IDLE_REPOLL_JITTER_FRACTION = 0.25
+_WAKE_STAGGER_FRACTION = 1 / 15
+
+
+def _allocator_busy_backoff_seconds(streak: int) -> float:
+    """Full-jitter exponential backoff for the ``streak``-th busy in a row."""
+    # Capped before exponentiation: a long busy streak must not overflow the
+    # float conversion (2**1024) and crash the slot.
+    exponent = min(max(0, streak - 1), 32)
+    ceiling = min(
+        _ALLOCATOR_BUSY_BACKOFF_MAX_SECONDS,
+        _ALLOCATOR_BUSY_BACKOFF_BASE_SECONDS * 2**exponent,
+    )
+    return random.uniform(ceiling / 2, ceiling)
+
+
+def _lease_memory_limit_mib(lease: object) -> int | None:
+    """The harness memory cap a lease was issued under, when it names one."""
+    runtime = getattr(lease, "benchmark_runtime", None)
+    cap = getattr(runtime, "sandbox_memory_limit_mib", None)
+    if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0:
+        return cap
+    return None
+
+
+def _jittered(seconds: float) -> float:
+    spread = seconds * _IDLE_REPOLL_JITTER_FRACTION
+    return max(0.0, random.uniform(seconds - spread, seconds + spread))
+
 
 # Must stay exhaustive over ``BenchmarkProgressStage``: a missing stage raises
 # KeyError in ``_publish_benchmark_progress``, which the fail-open telemetry
@@ -736,6 +834,20 @@ def _attach_transform_audit(
     return representative.model_copy(update={"details": details})
 
 
+def worst_seed_memory(
+    measured: Sequence[HarnessMemoryTelemetry],
+) -> HarnessMemoryTelemetry | None:
+    """The heaviest seed's harness memory: highest P95, then highest peak.
+
+    SN-500: a multi-seed submission reports its worst seed, not the median
+    run, so a seed that needed the most memory is the one operators and miners
+    see. ``None`` when no seed was measured.
+    """
+    if not measured:
+        return None
+    return max(measured, key=lambda memory: (memory.p95_bytes, memory.peak_bytes))
+
+
 def _pooled_confirmation_stderr(
     composites: Sequence[float], single_run_stderr: float | None
 ) -> float | None:
@@ -797,6 +909,10 @@ class _SlotState:
     last_progress_heartbeat_monotonic: float | None = None
     last_progress_bucket: int | None = None
     retain_failed_progress_until: float = 0.0
+    # The harness memory cap this slot's running lease was issued under. Host
+    # memory admission reserves it in full while the lease runs, even after the
+    # operator lowers the live cap.
+    memory_limit_mib: int | None = None
     # Set when the platform's heartbeat roster stops listing this slot's lease.
     # Only ever *requests* a stop: the scoring path owns the unwind, so the
     # scorer-side container kill and the slot reset keep their single home.
@@ -908,6 +1024,32 @@ class PlatformGeneratorLedgerSource:
             return None
 
 
+class PlatformModelContextLedgerSource:
+    """Read of the model_context (CPM) ledger Platform publishes.
+
+    Returns ``None`` when the read fails. The track ships in shadow at 0 bps,
+    so the worker folds an empty ledger and the memory weight update proceeds
+    unchanged. Only if a later release made the track pay a governed share
+    would a failed read skip the epoch, exactly like the generator track.
+    """
+
+    def __init__(
+        self, read: Callable[[], Awaitable[ModelContextLedgerResponse]]
+    ) -> None:
+        self._read = read
+
+    async def fetch(self) -> ModelContextLedgerResponse | None:
+        try:
+            return await self._read()
+        except Exception:
+            logger.warning(
+                "model_context ledger read failed this epoch; folding an empty "
+                "ledger (shadow track, no weight change)",
+                exc_info=True,
+            )
+            return None
+
+
 class ValidatorWorker:
     """Owns one scoring sweep and the long-lived loop around it."""
 
@@ -926,6 +1068,7 @@ class ValidatorWorker:
         after_score: Callable[[UUID, int], None] | None = None,
         router_ledger_source: RouterLedgerSource | None = None,
         generator_ledger_source: PlatformGeneratorLedgerSource | None = None,
+        model_context_ledger_source: PlatformModelContextLedgerSource | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -978,6 +1121,8 @@ class ValidatorWorker:
         )
         # None folds an empty generator ledger (the shadow default).
         self._generator_ledger_source = generator_ledger_source
+        # None folds an empty model_context ledger (the track is shadow).
+        self._model_context_ledger_source = model_context_ledger_source
         self._platform_accepted = False
         self._bootstrap_resume_ready = False
         # Cooperative updater drains are acknowledged only after both the
@@ -1009,7 +1154,9 @@ class ValidatorWorker:
         )
         self._confirmation_progress: dict[str, ConfirmationProgress] = {}
         self._healthy_slots = set(self._slots)
+        self._scorer_narrowing_logged: tuple[int, int] | None = None
         self._scorer_runs_generator_rounds = False
+        self._scorer_runs_frontier_oracle = False
         self._scorer_round_bench_versions = LEGACY_SCORER_ROUND_BENCH_VERSIONS
         # Re-zeroed at the top of every sweep; seeded here so a hand-back from
         # outside a sweep (a drain, or a test driving the method directly)
@@ -1035,7 +1182,9 @@ class ValidatorWorker:
         # The harness memory cap host-memory admission sizes against: the
         # published envelope until a lease stamps the live Platform value.
         self._sandbox_memory_limit_mib = runtime_envelope().memory_limit_mib
-        self._memory_admitted_slots_logged: int | None = None
+        # (admitted, configured, cap, held) last logged, so the log fires on
+        # change, including a change in memory held by higher-cap leases.
+        self._memory_admitted_slots_logged: tuple[int, int, int, int] | None = None
         # Opaque per-run token for the active ticket, learned from the first
         # scorer snapshot that carries a run id (None for the pre-run stages).
         # Rides every published BenchmarkProgress so the platform can tell a
@@ -1295,6 +1444,9 @@ class ValidatorWorker:
             # is in flight per host; Platform decides whether a slot may take
             # it (it reserves round capacity per validator).
             round_dispatching = False
+            # Monotonic time before which no slot asks the round lane again,
+            # set when it last came back empty.
+            round_lane_quiet_until = 0.0
             # Set whenever a claim resolves or a slot finishes a lease, so a
             # waiting slot re-polls the instant the pool changes instead of
             # sitting out the interval. Cleared and read under ``budget_lock``
@@ -1310,9 +1462,12 @@ class ValidatorWorker:
                 nonlocal claimed, pending_claims, retest_dispatching
                 nonlocal retest_work_claimed, round_dispatching
                 nonlocal retests_dispatched, running, idle_since
+                nonlocal round_lane_quiet_until
                 slot_scored: list[ScoredAgentStat] = []
                 slot_failed = 0
                 slot_claimed = 0
+                retry_laters = 0
+                allocator_busy_streak = 0
                 token = _CURRENT_SLOT.set(slot_id)
                 try:
                     while not self._new_work_blocked(stop_requested, drain_requested):
@@ -1323,6 +1478,42 @@ class ValidatorWorker:
                             pending_claims += 1
                         try:
                             job = await self._request_job_with_fresh_heartbeat(slot_id)
+                        except PlatformRetryLaterError as error:
+                            async with budget_lock:
+                                claimed -= 1
+                                pending_claims -= 1
+                                lease_state_changed.set()
+                            retry_laters += 1
+                            if retry_laters > _JOB_RETRY_LATER_MAX_CONSECUTIVE:
+                                logger.warning(
+                                    "job request for %s deferred %d times in a "
+                                    "row; slot is isolated: %s",
+                                    slot_id,
+                                    retry_laters,
+                                    error,
+                                )
+                                slot_failed += 1
+                                break
+                            # Not a failure: Platform is preparing what this
+                            # claim needs and named when to ask again. Wait on
+                            # the same slot (stop/drain cut the wait short and
+                            # the loop guard then ends it) instead of idling it
+                            # until the longest sibling lease finishes.
+                            logger.info(
+                                "job request for %s deferred; retrying in %gs "
+                                "(%d/%d): %s",
+                                slot_id,
+                                error.retry_after_seconds,
+                                retry_laters,
+                                _JOB_RETRY_LATER_MAX_CONSECUTIVE,
+                                error,
+                            )
+                            await self._sleep_or_interrupt(
+                                error.retry_after_seconds,
+                                stop_requested,
+                                drain_requested,
+                            )
+                            continue
                         except PlatformError as error:
                             async with budget_lock:
                                 claimed -= 1
@@ -1335,6 +1526,46 @@ class ValidatorWorker:
                             )
                             slot_failed += 1
                             break
+                        retry_laters = 0
+                        if (
+                            job is None
+                            and last_job_decline_reason() == "allocator_busy"
+                        ):
+                            # Platform never read the queue for this poll. It
+                            # is neither an empty queue (no retest or round
+                            # election) nor a lease change (no sibling wakeup).
+                            async with budget_lock:
+                                claimed -= 1
+                                pending_claims -= 1
+                                if not (running or pending_claims):
+                                    # Let a sibling waiting on this last claim
+                                    # settle and decide whether to retire.
+                                    lease_state_changed.set()
+                                busy_sweep_expired = bool(
+                                    not running
+                                    and not retest_dispatching
+                                    and not round_dispatching
+                                    and time.monotonic() - idle_since
+                                    >= _IDLE_SWEEP_MAX_SECONDS
+                                )
+                            if busy_sweep_expired:
+                                break
+                            allocator_busy_streak += 1
+                            backoff = _allocator_busy_backoff_seconds(
+                                allocator_busy_streak
+                            )
+                            logger.debug(
+                                "job request for %s hit a busy allocator (%d in "
+                                "a row); retrying in %.2fs",
+                                slot_id,
+                                allocator_busy_streak,
+                                backoff,
+                            )
+                            await self._sleep_or_interrupt(
+                                backoff, stop_requested, drain_requested
+                            )
+                            continue
+                        allocator_busy_streak = 0
                         if job is None:
                             async with budget_lock:
                                 claimed -= 1
@@ -1360,6 +1591,7 @@ class ValidatorWorker:
                                     not dispatch_retests
                                     and not round_dispatching
                                     and self._scorer_runs_generator_rounds
+                                    and time.monotonic() >= round_lane_quiet_until
                                 )
                                 if dispatch_round:
                                     round_dispatching = True
@@ -1397,13 +1629,28 @@ class ValidatorWorker:
                                         retest_dispatching = False
                                         if retest_claimed:
                                             idle_since = time.monotonic()
-                                        lease_state_changed.set()
+                                        # An empty lane changed nothing a
+                                        # waiting sibling could claim; waking
+                                        # them all only sends them into the
+                                        # dispatch fence together. Wake them
+                                        # when work settled or when this was
+                                        # the last thing keeping them waiting.
+                                        if retest_claimed or not (
+                                            running
+                                            or pending_claims
+                                            or round_dispatching
+                                        ):
+                                            lease_state_changed.set()
                                 if not retest_claimed:
                                     # No retest: this slot may still ask for
                                     # round work, so a single-slot host is not
                                     # left without a round dispatcher.
                                     async with budget_lock:
-                                        take_round = not round_dispatching
+                                        take_round = (
+                                            not round_dispatching
+                                            and time.monotonic()
+                                            >= round_lane_quiet_until
+                                        )
                                         if take_round:
                                             round_dispatching = True
                                     if take_round:
@@ -1417,7 +1664,15 @@ class ValidatorWorker:
                                         finally:
                                             async with budget_lock:
                                                 round_dispatching = False
-                                                lease_state_changed.set()
+                                                if not retest_claimed:
+                                                    round_lane_quiet_until = (
+                                                        time.monotonic()
+                                                        + _IDLE_SLOT_REPOLL_SECONDS
+                                                    )
+                                                if retest_claimed or not (
+                                                    running or pending_claims
+                                                ):
+                                                    lease_state_changed.set()
                                 if retest_claimed:
                                     # The dispatcher itself becomes free only
                                     # after its retest work settles. Ask for
@@ -1442,7 +1697,20 @@ class ValidatorWorker:
                                         round_dispatching = False
                                         if round_claimed:
                                             idle_since = time.monotonic()
-                                        lease_state_changed.set()
+                                        else:
+                                            round_lane_quiet_until = (
+                                                time.monotonic()
+                                                + _IDLE_SLOT_REPOLL_SECONDS
+                                            )
+                                        # Same rule as the retest lane: an
+                                        # empty round poll wakes nobody unless
+                                        # it was the last thing in flight.
+                                        if round_claimed or not (
+                                            running
+                                            or pending_claims
+                                            or retest_dispatching
+                                        ):
+                                            lease_state_changed.set()
                                 if round_claimed:
                                     # The round run has settled; ask for
                                     # ordinary work before anything else.
@@ -1472,12 +1740,25 @@ class ValidatorWorker:
                             # platform's cap is set. The queue refills constantly
                             # (quorum openings, expiries, new submissions), so wait
                             # and ask again instead of leaving the sweep.
-                            await self._sleep_or_interrupt(
-                                _IDLE_SLOT_REPOLL_SECONDS,
+                            woken = await self._sleep_or_interrupt(
+                                _jittered(_IDLE_SLOT_REPOLL_SECONDS),
                                 stop_requested,
                                 drain_requested,
                                 lease_state_changed,
                             )
+                            if woken:
+                                # Every waiting sibling woke on the same event;
+                                # stagger them so they do not reach Platform's
+                                # one dispatch fence in the same instant.
+                                await self._sleep_or_interrupt(
+                                    random.uniform(
+                                        0,
+                                        _IDLE_SLOT_REPOLL_SECONDS
+                                        * _WAKE_STAGGER_FRACTION,
+                                    ),
+                                    stop_requested,
+                                    drain_requested,
+                                )
                             async with budget_lock:
                                 no_retest_work = bool(
                                     retests_dispatched
@@ -1578,6 +1859,7 @@ class ValidatorWorker:
                                 "scoring_error",
                                 failure_detail(error),
                                 container_log_tail(error),
+                                harness_memory_of(error),
                             )
                             slot_failed += 1
                         except SandboxOomError as error:
@@ -1593,6 +1875,7 @@ class ValidatorWorker:
                                 "sandbox_oom",
                                 failure_detail(error),
                                 container_log_tail(error),
+                                harness_memory_of(error),
                             )
                             slot_failed += 1
                         except (
@@ -1611,6 +1894,7 @@ class ValidatorWorker:
                                 "infrastructure",
                                 failure_detail(error),
                                 container_log_tail(error),
+                                harness_memory_of(error),
                             )
                             self._healthy_slots.discard(slot_id)
                             if any(
@@ -1638,6 +1922,7 @@ class ValidatorWorker:
                                 "scoring_error",
                                 failure_detail(error),
                                 container_log_tail(error),
+                                harness_memory_of(error),
                             )
                             slot_failed += 1
                         finally:
@@ -1711,23 +1996,33 @@ class ValidatorWorker:
         if self._admission != "accepting":
             return set()
         scorer_capacity = int(getattr(self._dittobench, "full_run_capacity", 1))
+        capacity = scorer_capacity
         memory_slots = self._memory_admitted_slots()
-        if memory_slots is not None and memory_slots < scorer_capacity:
-            scorer_capacity = memory_slots
+        if memory_slots is not None and memory_slots < capacity:
+            # Host memory binds; ``_memory_admitted_slots`` already logs it.
+            capacity = memory_slots
         unblocked = sorted(
             slot_id
             for slot_id in self._slots
             if self._resource_blocked_until.get(slot_id, 0.0) <= time.monotonic()
         )
-        if scorer_capacity < len(self._slots):
+        # Keyed on both counts the message names, so a memory change under a
+        # steady scorer mismatch still logs the new effective slot count.
+        narrowed = (
+            (scorer_capacity, capacity) if scorer_capacity < len(self._slots) else None
+        )
+        # Every heartbeat re-asks this, so log the scorer mismatch when it
+        # changes, not once per heartbeat for as long as it lasts.
+        if narrowed is not None and narrowed != self._scorer_narrowing_logged:
             logger.warning(
                 "configured validator capacity %s exceeds scorer capacity %s; "
-                "running the scorer's %s slot(s) until the stack agrees",
+                "running %s slot(s) until the stack agrees",
                 len(self._slots),
                 scorer_capacity,
-                scorer_capacity,
+                capacity,
             )
-        return set(unblocked[:scorer_capacity])
+        self._scorer_narrowing_logged = narrowed
+        return set(unblocked[:capacity])
 
     def _memory_admitted_slots(self) -> int | None:
         """Slots whose harness caps fit in host memory less the reserve.
@@ -1743,24 +2038,99 @@ class ValidatorWorker:
             return None
         if not isinstance(specs, HostSpecs):
             return None
-        admitted = self._resource_ceilings.memory_admitted_slots(
-            specs.memory_total_mib, self._sandbox_memory_limit_mib
+        cap = self._sandbox_memory_limit_mib
+        configured = len(self._slots)
+        # A running lease keeps the cap it was issued under. After the operator
+        # lowers the live cap, whatever those leases may use beyond it is host
+        # memory new slots cannot have, so it comes off the host before sizing.
+        over_cap = sum(
+            max(0, (slot.memory_limit_mib or cap) - cap)
+            for slot in self._slots.values()
+            if slot.active_agent_id is not None
         )
-        if (
-            admitted < len(self._slots)
-            and admitted != self._memory_admitted_slots_logged
-        ):
-            logger.warning(
-                "host memory admits %s of %s configured slot(s): %s MiB host, "
-                "%s MiB reserve, %s MiB harness cap",
-                admitted,
-                len(self._slots),
-                specs.memory_total_mib,
-                self._resource_ceilings.host_memory_reserve_mib,
-                self._sandbox_memory_limit_mib,
+        admitted = self._resource_ceilings.memory_admitted_slots(
+            specs.memory_total_mib - over_cap, cap
+        )
+        key = (admitted, configured, cap, over_cap)
+        if key != self._memory_admitted_slots_logged:
+            self._log_memory_admission(
+                admitted=admitted,
+                configured=configured,
+                cap=cap,
+                host_mib=specs.memory_total_mib,
+                held_mib=over_cap,
+                previously_limited=(
+                    self._memory_admitted_slots_logged is not None
+                    and self._memory_admitted_slots_logged[0]
+                    < self._memory_admitted_slots_logged[1]
+                ),
             )
-        self._memory_admitted_slots_logged = admitted
+        self._memory_admitted_slots_logged = key
         return admitted
+
+    def _log_memory_admission(
+        self,
+        *,
+        admitted: int,
+        configured: int,
+        cap: int,
+        host_mib: int,
+        previously_limited: bool,
+        held_mib: int = 0,
+    ) -> None:
+        """Say how many slots host memory admits, and what would admit them all.
+
+        Logged on change only. The validator's own log is the one place a
+        third-party operator is sure to look, so it carries the fix path in
+        host memory, not just the count. The figures are what to provision at
+        the live cap; ``held_mib`` is memory that running leases issued under a
+        higher cap hold until they finish, named separately because it drains
+        on its own and needs no new hardware.
+        """
+        reserve = self._resource_ceilings.host_memory_reserve_mib
+        needed_all = self._resource_ceilings.memory_required_mib(configured, cap)
+        held = (
+            f" A further {held_mib} MiB is held until leases issued under a "
+            "higher cap finish."
+            if held_mib > 0
+            else ""
+        )
+        if admitted == 0:
+            logger.error(
+                "host memory admits no benchmark slot at the %s MiB harness "
+                "cap (%s MiB host, %s MiB reserve): this validator cannot score. "
+                "It keeps heartbeating and setting weights. Needs at least %s "
+                "MiB for 1 slot and %s MiB for all %s configured slot(s).%s",
+                cap,
+                host_mib,
+                reserve,
+                self._resource_ceilings.memory_required_mib(1, cap),
+                needed_all,
+                configured,
+                held,
+            )
+        elif admitted < configured:
+            logger.warning(
+                "host memory admits %s of %s configured slot(s) at the %s MiB "
+                "harness cap (%s MiB host, %s MiB reserve); the rest are never "
+                "offered. Needs at least %s MiB for all %s.%s",
+                admitted,
+                configured,
+                cap,
+                host_mib,
+                reserve,
+                needed_all,
+                configured,
+                held,
+            )
+        elif previously_limited:
+            logger.info(
+                "host memory now admits all %s configured slot(s) at the %s MiB "
+                "harness cap (%s MiB host)",
+                configured,
+                cap,
+                host_mib,
+            )
 
     async def _scoring_preflight(self) -> bool:
         """Functionally probe scorer dependencies before requesting a lease."""
@@ -1992,6 +2362,10 @@ class ValidatorWorker:
                 scorer_benchmarks.status == "fresh_verified"
                 and scorer_benchmarks.generator_rounds
             )
+            self._scorer_runs_frontier_oracle = bool(
+                self._scorer_runs_generator_rounds
+                and scorer_benchmarks.generator_frontier_oracle
+            )
             self._scorer_round_bench_versions = (
                 scorer_benchmarks.generator_round_bench_versions
                 if scorer_benchmarks.generator_round_bench_versions is not None
@@ -2002,6 +2376,7 @@ class ValidatorWorker:
                     "scorer_benchmarks": scorer_benchmarks,
                     "treasury_weights": await self._treasury_weight_capability(),
                     "round_commitments": self._round_commitments.supported(),
+                    "season_commitments": (self._round_commitments.supports_seasons()),
                 }
             )
             # v9: per-component runtime health. A collector failure (or no
@@ -2073,6 +2448,7 @@ class ValidatorWorker:
             self._bootstrap_resume_ready = response.accepted and _stack_can_self_resume(
                 scorer_benchmarks, stack_health
             )
+            self._adopt_live_sandbox_cap(response.sandbox_memory_limit_mib)
             self._apply_lease_roster(response, advertised=capacity)
             return response.accepted
         except Exception as e:  # noqa: BLE001 - observability must never gate work
@@ -2084,6 +2460,29 @@ class ValidatorWorker:
             self._bootstrap_resume_ready = False
             logger.warning("validator heartbeat failed (scoring continues): %s", e)
             return False
+
+    def _adopt_live_sandbox_cap(self, cap_mib: int | None) -> None:
+        """Size host memory admission to the cap Platform says is live.
+
+        A lease also carries the cap, but a host whose memory admits no slot
+        never gets a lease, so without this it would judge itself against the
+        envelope default forever, whatever the operator set. ``None`` (an older
+        Platform, or a cap it could not read) keeps the cap last seen.
+        """
+        if (
+            not isinstance(cap_mib, int)
+            or isinstance(cap_mib, bool)
+            or cap_mib <= 0
+            or cap_mib == self._sandbox_memory_limit_mib
+        ):
+            return
+        logger.info(
+            "live harness memory cap is %s MiB (was %s MiB); re-sizing host "
+            "memory admission",
+            cap_mib,
+            self._sandbox_memory_limit_mib,
+        )
+        self._sandbox_memory_limit_mib = cap_mib
 
     def _apply_lease_roster(
         self, response: ValidatorHeartbeatResponse, *, advertised: BenchmarkCapacity
@@ -2445,6 +2844,7 @@ class ValidatorWorker:
         agent_id: UUID,
         ticket_deadline: datetime,
         bench_version: int = DEFAULT_BENCH_VERSION,
+        memory_limit_mib: int | None = None,
     ) -> None:
         """Reset progress throttling and publish artifact preparation promptly.
 
@@ -2454,6 +2854,13 @@ class ValidatorWorker:
         re-emit ``preparing`` or discard the progress already published for this
         exact lease.
         """
+        slot = self._slot_state()
+        if memory_limit_mib is not None:
+            slot.memory_limit_mib = memory_limit_mib
+        elif slot.memory_limit_mib is None:
+            # A lease that names no cap runs at the one this worker believes
+            # is live.
+            slot.memory_limit_mib = self._sandbox_memory_limit_mib
         if (
             self._active_agent_id == agent_id
             and self._active_ticket_deadline == ticket_deadline
@@ -2478,6 +2885,7 @@ class ValidatorWorker:
         self._last_progress_heartbeat_monotonic = None
         self._last_progress_bucket = None
         self._slot_state().bench_version = None
+        self._slot_state().memory_limit_mib = None
 
     async def _treasury_weight_capability(self) -> TreasuryWeightCapability | None:
         """Advertise only local crypto approval plus the actual queued backend guard."""
@@ -2691,6 +3099,8 @@ class ValidatorWorker:
             router_weight_eligible=self._config.router_weight_eligible,
             generator_state=TrackState(self._config.generator_track_state),
             generator_weight_eligible=self._config.generator_weight_eligible,
+            model_context_state=TrackState(self._config.model_context_track_state),
+            model_context_weight_eligible=self._config.model_context_weight_eligible,
         )
         router_ledger = await self._get_router_ledger()
         # None only for chain fakes without a metagraph read; a live read
@@ -2718,6 +3128,25 @@ class ValidatorWorker:
             # No generator share (shadow, or the compiled 0 bps default): the
             # track pays nothing, so an empty ledger changes no weight.
             generator_ledger = GeneratorLedgerResponse(count=0)
+        model_context_ledger = (
+            await self._model_context_ledger_source.fetch()
+            if self._model_context_ledger_source is not None
+            else ModelContextLedgerResponse()
+        )
+        if model_context_ledger is None:
+            if registry.shares_bps().get(TRACK_MODEL_CONTEXT, 0) > 0:
+                # Unreachable while the track is shadow (its effective share
+                # is 0 bps whatever Platform serves). Kept so a release that
+                # pays the track cannot fold an empty ledger and diverge from
+                # validators whose read succeeded.
+                logger.warning(
+                    "model_context ledger unavailable while the track holds a "
+                    "governed share; weights unchanged this epoch"
+                )
+                return _WeightOutcome(leaderboard=leaderboard)
+            # Shadow / 0 bps: the track pays nothing, so the memory weight
+            # update goes ahead exactly as if the ledger were empty.
+            model_context_ledger = ModelContextLedgerResponse()
         fold_inputs = TrackFoldInputs(
             memory_entries=registered_entries,
             memory_params=MemoryFoldParams(
@@ -2754,6 +3183,19 @@ class ValidatorWorker:
                 )
             ),
             generator_rank_shares=self._config.generator_rank_shares,
+            model_context_entries=tuple(
+                e
+                for e in model_context_ledger.entries
+                if (registered_hotkeys is None or e.hotkey in registered_hotkeys)
+                and (
+                    not isinstance(treasury_pin, EnforcingTreasuryPin)
+                    or e.hotkey != treasury_pin.policy.collector_hotkey
+                )
+            ),
+            model_context_rank_shares=resolve_model_context_rank_shares(
+                model_context_ledger.rank_shares,
+                default=self._config.model_context_rank_shares,
+            ),
         )
         track_vectors = {
             track.track_id: track.fold(fold_inputs) for track in registry.tracks
@@ -3444,13 +3886,41 @@ class ValidatorWorker:
         slot_token = None
         ticket_claimed = False
         try:
-            try:
-                job = await self._platform.request_top5_confirmation_job(
-                    slot_id=_slot_id
-                )
-            finally:
-                if _claim_resolved is not None:
-                    _claim_resolved.set()
+            retry_laters = 0
+            while True:
+                try:
+                    job = await self._platform.request_top5_confirmation_job(
+                        slot_id=_slot_id
+                    )
+                except PlatformRetryLaterError as error:
+                    # Platform is preparing this lease's dueling slice. The
+                    # lane runs once per sweep, so giving up here would defer
+                    # the retest a whole sweep; wait it out, bounded like the
+                    # canonical slot loop. Siblings' claims proceed meanwhile.
+                    retry_laters += 1
+                    if retry_laters > _JOB_RETRY_LATER_MAX_CONSECUTIVE:
+                        raise
+                    if _claim_resolved is not None:
+                        _claim_resolved.set()
+                    logger.info(
+                        "top-five confirmation claim for %s deferred; retrying "
+                        "in %gs (%d/%d): %s",
+                        _slot_id,
+                        error.retry_after_seconds,
+                        retry_laters,
+                        _JOB_RETRY_LATER_MAX_CONSECUTIVE,
+                        error,
+                    )
+                    await self._sleep_or_interrupt(
+                        error.retry_after_seconds, stop_requested, drain_requested
+                    )
+                    if self._new_work_blocked(stop_requested, drain_requested):
+                        return False
+                    continue
+                finally:
+                    if _claim_resolved is not None:
+                        _claim_resolved.set()
+                break
             if job is None:
                 return False
             # Mirrors the canonical path's slot-mismatch guard: binding an
@@ -3583,6 +4053,7 @@ class ValidatorWorker:
                 job.agent_id,
                 job.deadline,
                 job.bench_version or DEFAULT_BENCH_VERSION,
+                memory_limit_mib=_lease_memory_limit_mib(job),
             )
             # Bounded by the lease and by the roster, like canonical scoring. An
             # unwatched retest ignored ``slot.revoked``: an operator reject that
@@ -3732,6 +4203,10 @@ class ValidatorWorker:
             or not _runs_generator_round_version(
                 job.bench_version, self._scorer_round_bench_versions
             )
+            or (
+                job.dataset_mode == GENERATOR_FRONTIER_ORACLE_DATASET_MODE
+                and not self._scorer_runs_frontier_oracle
+            )
         ):
             await self._platform.fail_generator_round_job(
                 job, reason="infrastructure", detail="round_job_not_executable"
@@ -3772,7 +4247,10 @@ class ValidatorWorker:
         heartbeat_task: asyncio.Task[None] | None = None
         try:
             await self._begin_active_ticket(
-                job.agent_id, job.deadline, job.bench_version
+                job.agent_id,
+                job.deadline,
+                job.bench_version,
+                memory_limit_mib=_lease_memory_limit_mib(lease),
             )
             heartbeat_task = asyncio.create_task(
                 self._heartbeat_while_active(heartbeat_stop)
@@ -3790,6 +4268,13 @@ class ValidatorWorker:
                 )
                 for case in per_case
             ]
+            if job.oracle_case_ids is not None and sorted(
+                r.case_id for r in results
+            ) != sorted(job.oracle_case_ids):
+                # The scorer must answer exactly the oracle's cases; anything
+                # else (an older scorer running the whole dataset) is refused
+                # here rather than posted as an attestation.
+                raise DittobenchError("oracle run results do not match the job")
             accepted = await self._platform.submit_generator_round_score(
                 job, run_id=run_id, results=results
             )
@@ -3879,6 +4364,7 @@ class ValidatorWorker:
                 # 15-minute early-stage grace as a stalled benchmark. The scorer
                 # reports ``running`` with per-column case counts like any run.
                 progress_callback=self._on_dittobench_progress,
+                oracle_case_ids=job.oracle_case_ids,
             )
         finally:
             if broker is not None:
@@ -4490,6 +4976,7 @@ class ValidatorWorker:
         reason: FailJobReason,
         detail: str | None = None,
         log_tail: str | None = None,
+        harness_memory: HarnessMemoryTelemetry | None = None,
     ) -> None:
         """Best-effort hand-back of a failed ticket for immediate reissue.
 
@@ -4535,9 +5022,14 @@ class ValidatorWorker:
         if log_tail is not None:
             self._sweep_failures_with_log_tail += 1
         try:
+            # SN-500 telemetry rides only when measured, so a hand-back without
+            # it is unchanged on the wire and for every existing caller.
+            telemetry = (
+                {"harness_memory": harness_memory} if harness_memory is not None else {}
+            )
             await asyncio.wait_for(
                 self._platform.report_ticket_failed(
-                    job, reason, detail, container_log_tail=log_tail
+                    job, reason, detail, container_log_tail=log_tail, **telemetry
                 ),
                 timeout=_FAIL_REPORT_TIMEOUT_SECONDS,
             )
@@ -4787,8 +5279,15 @@ class ValidatorWorker:
                 f"benchmark v{job.bench_version} ticket did not declare its "
                 "policy-9 screened-image contract"
             )
+        if job.seed_scope == "season" and not _season_seed_matches(job):
+            raise ValidatorInfrastructureError(
+                f"season-scoped ticket seed {job.seed} for agent {job.agent_id} "
+                "does not re-derive from its season anchor; refusing to score",
+                code="seed_binding_mismatch",
+            )
         if (
-            job.seed is not None
+            job.seed_scope != "season"
+            and job.seed is not None
             and job.dataset_seed_block_hash
             and not seed_matches(
                 job.dataset_seed_block_hash,
@@ -4823,7 +5322,10 @@ class ValidatorWorker:
         # re-announces ``preparing`` for the run proper; re-announcing the first
         # stage of a lease is explicitly allowed and simply rebaselines.
         await self._begin_active_ticket(
-            job.agent_id, job.deadline, job.bench_version or DEFAULT_BENCH_VERSION
+            job.agent_id,
+            job.deadline,
+            job.bench_version or DEFAULT_BENCH_VERSION,
+            memory_limit_mib=_lease_memory_limit_mib(job),
         )
         try:
             broker = await self._activate_ticket_inference(job)
@@ -5002,6 +5504,12 @@ class ValidatorWorker:
         )
         return report
 
+    def _take_harness_memory(self, run_id: str) -> HarnessMemoryTelemetry | None:
+        """Consume the scorer's memory for ``run_id``, when the client keeps it."""
+        take = getattr(self._dittobench, "take_harness_memory", None)
+        memory = take(run_id) if callable(take) else None
+        return memory if isinstance(memory, HarnessMemoryTelemetry) else None
+
     async def _submit_report(
         self,
         agent_id: UUID,
@@ -5009,12 +5517,16 @@ class ValidatorWorker:
         report: ScoreReport,
         *,
         ticket_deadline: datetime | None = None,
+        harness_memory: HarnessMemoryTelemetry | None = None,
     ) -> ScoreReport:
         """Sign and submit an already-scored :class:`ScoreReport`. The signature
         binds ``(validator_hotkey, agent_id, ticket_deadline, run_id, composite,
         seed)`` of this exact run. The ticket deadline is the lease identity, so
         a late result cannot be replayed after reissue. Advisory
-        ``confirmation_composites`` rides unsigned (like ``composite_stderr``)."""
+        ``confirmation_composites`` rides unsigned (like ``composite_stderr``).
+
+        ``harness_memory`` overrides the run's own measurement: a multi-seed
+        caller passes its worst seed's memory (SN-500)."""
         if (
             ticket_deadline is not None
             and ticket_deadline.tzinfo is not None
@@ -5047,11 +5559,20 @@ class ValidatorWorker:
             transcript_sha256=transcript_sha256,
             base_evidence_sha256=base_evidence_sha256,
         )
+        own_memory = self._take_harness_memory(report.run_id)
+        if harness_memory is None:
+            harness_memory = own_memory
         await self._platform.submit_score(
             agent_id,
             signature=signature,
             report=report,
             ticket_deadline=ticket_deadline,
+            # SN-500 telemetry, unsigned and only when the scorer measured it.
+            **(
+                {"harness_memory": harness_memory}
+                if isinstance(harness_memory, HarnessMemoryTelemetry)
+                else {}
+            ),
         )
         if ticket_deadline is not None:
             self._resolve_ticket_deadline(agent_id, ticket_deadline)
@@ -5246,23 +5767,32 @@ class ValidatorWorker:
             )
             return None
         reports: list[ScoreReport] = []
+        # SN-500: every seed's measured memory, including a seed that failed,
+        # so the submission carries the worst seed rather than the median run.
+        seed_memory: list[HarnessMemoryTelemetry] = []
         for s in seeds:
             try:
-                reports.append(
-                    await self._evaluate(
-                        agent_id,
-                        expected_sha256,
-                        seed=s,
-                        bench_version=bench_version,
-                    )
+                report = await self._evaluate(
+                    agent_id,
+                    expected_sha256,
+                    seed=s,
+                    bench_version=bench_version,
                 )
             except (PlatformError, DittobenchError) as exc:
+                failed_memory = harness_memory_of(exc)
+                if failed_memory is not None:
+                    seed_memory.append(failed_memory)
                 logger.warning(
                     "re-score of stale agent %s (seed %d) failed; skipping seed: %s",
                     agent_id,
                     s,
                     exc,
                 )
+                continue
+            reports.append(report)
+            measured = self._take_harness_memory(report.run_id)
+            if measured is not None:
+                seed_memory.append(measured)
         if not reports:
             return None
         # Representative = the middle run by composite (a real run, so the signed
@@ -5291,7 +5821,12 @@ class ValidatorWorker:
                 }
             )
         representative = _attach_transform_audit(representative, reports)
-        return await self._submit_report(agent_id, miner_hotkey, representative)
+        return await self._submit_report(
+            agent_id,
+            miner_hotkey,
+            representative,
+            harness_memory=worst_seed_memory(seed_memory),
+        )
 
     async def run_forever(
         self,
@@ -5934,7 +6469,7 @@ class ValidatorWorker:
     @staticmethod
     async def _sleep_or_interrupt(
         seconds: float, *events: asyncio.Event | None
-    ) -> None:
+    ) -> bool:
         """Sleep up to ``seconds``, returning early if any event is set.
 
         The in-sweep twin of :meth:`_sleep_or_stop_or_drain`, which requires a
@@ -5942,17 +6477,22 @@ class ValidatorWorker:
         are optional, so a waiting slot has to tolerate having neither and still
         honour whichever it was given -- otherwise an idle slot's wait would add
         its full duration to every shutdown and drain.
+
+        Returns whether an event ended the wait, decided before the cleanup
+        below yields: a sibling may clear a shared event during that await, so
+        re-reading it afterwards can miss the wakeup.
         """
         waits = [
             asyncio.create_task(event.wait()) for event in events if event is not None
         ]
         if not waits:
             await asyncio.sleep(seconds)
-            return
+            return False
         try:
-            await asyncio.wait(
+            done, _pending = await asyncio.wait(
                 waits, timeout=seconds, return_when=asyncio.FIRST_COMPLETED
             )
+            return bool(done)
         finally:
             for task in waits:
                 task.cancel()

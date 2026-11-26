@@ -16,6 +16,20 @@ node read holds the current target for a bounded number of passes instead of
 flapping the MIG; see
 [`infra/docs/screener-scaling.md`](../../infra/docs/screener-scaling.md).
 
+An on-demand AWS EC2 primary (routing `aws` first) powers itself off when its
+workers go idle. When work is runnable, the primary is open and active, and
+the instance is stopped, the controller starts it under the fenced lease and
+reports `AWS_PRIMARY_WAKING`. It never starts it before its first renew, and it
+never stops or modifies it. The controller VM's Google identity assumes a
+narrow AWS role with a Google-signed ID token
+(`sts:AssumeRoleWithWebIdentity`), so there is no AWS key. A primary that is
+not ready within `--primary-wake-grace-seconds` (default 600), or whose
+describe or start fails (`primary_wake_failed`), is an outage: its backlog
+overflows to GCE as for any primary. A stopped primary with nothing runnable
+is `AWS_PRIMARY_ASLEEP`, not an outage. Configure it with
+`--aws-primary-instance-id` and `--aws-primary-role-arn` (Ansible
+`screener_capacity_aws_primary_*`); without both, the controller is GCE-only.
+
 The GCE autoscaler stays in `ONLY_SCALE_OUT`, including at a zero target. The
 controller pauses it only for a fenced manual resize and restores it even if
 the resize fails. The independent queue metric publishes zero while Platform

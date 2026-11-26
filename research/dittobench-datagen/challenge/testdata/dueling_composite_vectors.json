@@ -699,6 +699,732 @@
       ],
       "composite": 1,
       "composite_stderr": 0
+    },
+    {
+      "name": "v18 weights as v16",
+      "bench_version": 18,
+      "datagen_raw": 0.8123456789,
+      "datagen_gate": 1,
+      "datagen_stderr": 0.031,
+      "columns": [
+        {
+          "column_id": "c3",
+          "owner_key": "coldkey:o3",
+          "n": 7,
+          "sum": 3.95,
+          "sum_sq": 2.9524999999999997,
+          "substituted": false
+        },
+        {
+          "column_id": "c0",
+          "owner_key": "coldkey:o1",
+          "n": 8,
+          "sum": 5.55,
+          "sum_sq": 4.7725,
+          "substituted": false
+        },
+        {
+          "column_id": "c1",
+          "owner_key": "coldkey:o2",
+          "n": 6,
+          "sum": 3,
+          "sum_sq": 2.2,
+          "substituted": false
+        },
+        {
+          "column_id": "c2",
+          "owner_key": "coldkey:o2",
+          "n": 3,
+          "sum": 2.55,
+          "sum_sq": 2.1875,
+          "substituted": false
+        },
+        {
+          "column_id": "c4",
+          "owner_key": "",
+          "n": 6,
+          "sum": 4.2,
+          "sum_sq": 3.025,
+          "substituted": false
+        }
+      ],
+      "mask": [
+        "coldkey:o1"
+      ],
+      "composite": 0.7488359787685714,
+      "composite_stderr": 0.028517344048221357
+    },
+    {
+      "name": "v19 unmasked",
+      "bench_version": 19,
+      "datagen_raw": 0.9123456789,
+      "datagen_gate": 1,
+      "datagen_stderr": 0.031,
+      "columns": [
+        {
+          "column_id": "c3",
+          "owner_key": "coldkey:o3",
+          "n": 7,
+          "sum": 3.95,
+          "sum_sq": 2.9524999999999997,
+          "substituted": false
+        },
+        {
+          "column_id": "c0",
+          "owner_key": "coldkey:o1",
+          "n": 8,
+          "sum": 5.55,
+          "sum_sq": 4.7725,
+          "substituted": false
+        },
+        {
+          "column_id": "c1",
+          "owner_key": "coldkey:o2",
+          "n": 6,
+          "sum": 3,
+          "sum_sq": 2.2,
+          "substituted": false
+        },
+        {
+          "column_id": "c2",
+          "owner_key": "coldkey:o2",
+          "n": 3,
+          "sum": 2.55,
+          "sum_sq": 2.1875,
+          "substituted": false
+        },
+        {
+          "column_id": "c4",
+          "owner_key": "",
+          "n": 6,
+          "sum": 4.2,
+          "sum_sq": 3.025,
+          "substituted": false
+        }
+      ],
+      "mask": [],
+      "column_weight": 0.15,
+      "datagen_qualifier": 1,
+      "composite": 0.7242917768678571,
+      "composite_stderr": 0.038496257148108115
+    },
+    {
+      "name": "v19 self-mask",
+      "bench_version": 19,
+      "datagen_raw": 0.8123456789,
+      "datagen_gate": 1,
+      "datagen_stderr": 0.031,
+      "columns": [
+        {
+          "column_id": "c3",
+          "owner_key": "coldkey:o3",
+          "n": 7,
+          "sum": 3.95,
+          "sum_sq": 2.9524999999999997,
+          "substituted": false
+        },
+        {
+          "column_id": "c0",
+          "owner_key": "coldkey:o1",
+          "n": 8,
+          "sum": 5.55,
+          "sum_sq": 4.7725,
+          "substituted": false
+        },
+        {
+          "column_id": "c1",
+          "owner_key": "coldkey:o2",
+          "n": 6,
+          "sum": 3,
+          "sum_sq": 2.2,
+          "substituted": false
+        },
+        {
+          "column_id": "c2",
+          "owner_key": "coldkey:o2",
+          "n": 3,
+          "sum": 2.55,
+          "sum_sq": 2.1875,
+          "substituted": false
+        },
+        {
+          "column_id": "c4",
+          "owner_key": "",
+          "n": 6,
+          "sum": 4.2,
+          "sum_sq": 3.025,
+          "substituted": false
+        }
+      ],
+      "mask": [
+        "coldkey:o1"
+      ],
+      "column_weight": 0.15,
+      "datagen_qualifier": 1,
+      "composite": 0.7170811287028571,
+      "composite_stderr": 0.03471509111352595
+    },
+    {
+      "name": "v19 self-mask owner with two columns",
+      "bench_version": 19,
+      "datagen_raw": 0.86,
+      "datagen_gate": 0.95,
+      "datagen_stderr": 0.02,
+      "columns": [
+        {
+          "column_id": "c3",
+          "owner_key": "coldkey:o3",
+          "n": 7,
+          "sum": 3.95,
+          "sum_sq": 2.9524999999999997,
+          "substituted": false
+        },
+        {
+          "column_id": "c0",
+          "owner_key": "coldkey:o1",
+          "n": 8,
+          "sum": 5.55,
+          "sum_sq": 4.7725,
+          "substituted": false
+        },
+        {
+          "column_id": "c1",
+          "owner_key": "coldkey:o2",
+          "n": 6,
+          "sum": 3,
+          "sum_sq": 2.2,
+          "substituted": false
+        },
+        {
+          "column_id": "c2",
+          "owner_key": "coldkey:o2",
+          "n": 3,
+          "sum": 2.55,
+          "sum_sq": 2.1875,
+          "substituted": false
+        },
+        {
+          "column_id": "c4",
+          "owner_key": "",
+          "n": 6,
+          "sum": 4.2,
+          "sum_sq": 3.025,
+          "substituted": false
+        }
+      ],
+      "mask": [
+        "coldkey:o2"
+      ],
+      "column_weight": 0.15,
+      "datagen_qualifier": 1,
+      "composite": 0.7283700892857143,
+      "composite_stderr": 0.029171332353150618
+    },
+    {
+      "name": "v19 datagen at the qualifier floor",
+      "bench_version": 19,
+      "datagen_raw": 0.8,
+      "datagen_gate": 1,
+      "datagen_stderr": 0.02,
+      "columns": [
+        {
+          "column_id": "c3",
+          "owner_key": "coldkey:o3",
+          "n": 7,
+          "sum": 3.95,
+          "sum_sq": 2.9524999999999997,
+          "substituted": false
+        },
+        {
+          "column_id": "c0",
+          "owner_key": "coldkey:o1",
+          "n": 8,
+          "sum": 5.55,
+          "sum_sq": 4.7725,
+          "substituted": false
+        },
+        {
+          "column_id": "c1",
+          "owner_key": "coldkey:o2",
+          "n": 6,
+          "sum": 3,
+          "sum_sq": 2.2,
+          "substituted": false
+        },
+        {
+          "column_id": "c2",
+          "owner_key": "coldkey:o2",
+          "n": 3,
+          "sum": 2.55,
+          "sum_sq": 2.1875,
+          "substituted": false
+        },
+        {
+          "column_id": "c4",
+          "owner_key": "",
+          "n": 6,
+          "sum": 4.2,
+          "sum_sq": 3.025,
+          "substituted": false
+        }
+      ],
+      "mask": [
+        "coldkey:o3"
+      ],
+      "column_weight": 0.15,
+      "datagen_qualifier": 1,
+      "composite": 0.7315625,
+      "composite_stderr": 0.03314018351477338
+    },
+    {
+      "name": "v19 qualifier below one",
+      "bench_version": 19,
+      "datagen_raw": 0.6,
+      "datagen_gate": 0.95,
+      "datagen_stderr": 0.025,
+      "columns": [
+        {
+          "column_id": "c3",
+          "owner_key": "coldkey:o3",
+          "n": 7,
+          "sum": 3.95,
+          "sum_sq": 2.9524999999999997,
+          "substituted": false
+        },
+        {
+          "column_id": "c0",
+          "owner_key": "coldkey:o1",
+          "n": 8,
+          "sum": 5.55,
+          "sum_sq": 4.7725,
+          "substituted": false
+        },
+        {
+          "column_id": "c1",
+          "owner_key": "coldkey:o2",
+          "n": 6,
+          "sum": 3,
+          "sum_sq": 2.2,
+          "substituted": false
+        },
+        {
+          "column_id": "c2",
+          "owner_key": "coldkey:o2",
+          "n": 3,
+          "sum": 2.55,
+          "sum_sq": 2.1875,
+          "substituted": false
+        },
+        {
+          "column_id": "c4",
+          "owner_key": "",
+          "n": 6,
+          "sum": 4.2,
+          "sum_sq": 3.025,
+          "substituted": false
+        }
+      ],
+      "mask": [
+        "coldkey:o1"
+      ],
+      "column_weight": 0.15,
+      "datagen_qualifier": 0.7499999999999999,
+      "composite": 0.45040178571428563,
+      "composite_stderr": 0.02417651773695302
+    },
+    {
+      "name": "v19 pair-mask",
+      "bench_version": 19,
+      "datagen_raw": 0.6666666666666666,
+      "datagen_gate": 0.9,
+      "datagen_stderr": 0.0275,
+      "columns": [
+        {
+          "column_id": "c3",
+          "owner_key": "coldkey:o3",
+          "n": 7,
+          "sum": 3.95,
+          "sum_sq": 2.9524999999999997,
+          "substituted": false
+        },
+        {
+          "column_id": "c0",
+          "owner_key": "coldkey:o1",
+          "n": 8,
+          "sum": 5.55,
+          "sum_sq": 4.7725,
+          "substituted": false
+        },
+        {
+          "column_id": "c1",
+          "owner_key": "coldkey:o2",
+          "n": 6,
+          "sum": 3,
+          "sum_sq": 2.2,
+          "substituted": false
+        },
+        {
+          "column_id": "c2",
+          "owner_key": "coldkey:o2",
+          "n": 3,
+          "sum": 2.55,
+          "sum_sq": 2.1875,
+          "substituted": false
+        },
+        {
+          "column_id": "c4",
+          "owner_key": "",
+          "n": 6,
+          "sum": 4.2,
+          "sum_sq": 3.025,
+          "substituted": false
+        }
+      ],
+      "mask": [
+        "coldkey:o1",
+        "coldkey:o3"
+      ],
+      "column_weight": 0.15,
+      "datagen_qualifier": 0.8333333333333333,
+      "composite": 0.505625,
+      "composite_stderr": 0.022406250000000003
+    },
+    {
+      "name": "v19 pair-mask above the floor",
+      "bench_version": 19,
+      "datagen_raw": 0.9,
+      "datagen_gate": 1,
+      "datagen_stderr": 0.012,
+      "columns": [
+        {
+          "column_id": "c3",
+          "owner_key": "coldkey:o3",
+          "n": 7,
+          "sum": 3.95,
+          "sum_sq": 2.9524999999999997,
+          "substituted": false
+        },
+        {
+          "column_id": "c0",
+          "owner_key": "coldkey:o1",
+          "n": 8,
+          "sum": 5.55,
+          "sum_sq": 4.7725,
+          "substituted": false
+        },
+        {
+          "column_id": "c1",
+          "owner_key": "coldkey:o2",
+          "n": 6,
+          "sum": 3,
+          "sum_sq": 2.2,
+          "substituted": false
+        },
+        {
+          "column_id": "c2",
+          "owner_key": "coldkey:o2",
+          "n": 3,
+          "sum": 2.55,
+          "sum_sq": 2.1875,
+          "substituted": false
+        },
+        {
+          "column_id": "c4",
+          "owner_key": "",
+          "n": 6,
+          "sum": 4.2,
+          "sum_sq": 3.025,
+          "substituted": false
+        }
+      ],
+      "mask": [
+        "coldkey:o1",
+        "coldkey:o2"
+      ],
+      "column_weight": 0.15,
+      "datagen_qualifier": 1,
+      "composite": 0.8196428571428571,
+      "composite_stderr": 0.022845952617923552
+    },
+    {
+      "name": "v19 everything masked but the default",
+      "bench_version": 19,
+      "datagen_raw": 0.4,
+      "datagen_gate": 1,
+      "datagen_stderr": 0.05,
+      "columns": [
+        {
+          "column_id": "c3",
+          "owner_key": "coldkey:o3",
+          "n": 7,
+          "sum": 3.95,
+          "sum_sq": 2.9524999999999997,
+          "substituted": false
+        },
+        {
+          "column_id": "c0",
+          "owner_key": "coldkey:o1",
+          "n": 8,
+          "sum": 5.55,
+          "sum_sq": 4.7725,
+          "substituted": false
+        },
+        {
+          "column_id": "c1",
+          "owner_key": "coldkey:o2",
+          "n": 6,
+          "sum": 3,
+          "sum_sq": 2.2,
+          "substituted": false
+        },
+        {
+          "column_id": "c2",
+          "owner_key": "coldkey:o2",
+          "n": 3,
+          "sum": 2.55,
+          "sum_sq": 2.1875,
+          "substituted": false
+        },
+        {
+          "column_id": "c4",
+          "owner_key": "",
+          "n": 6,
+          "sum": 4.2,
+          "sum_sq": 3.025,
+          "substituted": false
+        }
+      ],
+      "mask": [
+        "coldkey:o1",
+        "coldkey:o2",
+        "coldkey:o3"
+      ],
+      "column_weight": 0.15,
+      "datagen_qualifier": 0.5,
+      "composite": 0.22250000000000003,
+      "composite_stderr": 0.021621748310439653
+    },
+    {
+      "name": "v19 substituted column",
+      "bench_version": 19,
+      "datagen_raw": 0.9,
+      "datagen_gate": 1,
+      "datagen_stderr": 0.015,
+      "columns": [
+        {
+          "column_id": "c3",
+          "owner_key": "coldkey:o3",
+          "n": 7,
+          "sum": 3.95,
+          "sum_sq": 2.9524999999999997,
+          "substituted": false
+        },
+        {
+          "column_id": "c0",
+          "owner_key": "coldkey:o1",
+          "n": 8,
+          "sum": 5.55,
+          "sum_sq": 4.7725,
+          "substituted": false
+        },
+        {
+          "column_id": "c1",
+          "owner_key": "",
+          "n": 4,
+          "sum": 2,
+          "sum_sq": 1.125,
+          "substituted": true
+        },
+        {
+          "column_id": "c2",
+          "owner_key": "coldkey:o2",
+          "n": 3,
+          "sum": 2.55,
+          "sum_sq": 2.1875,
+          "substituted": false
+        },
+        {
+          "column_id": "c4",
+          "owner_key": "",
+          "n": 6,
+          "sum": 4.2,
+          "sum_sq": 3.025,
+          "substituted": false
+        }
+      ],
+      "mask": [
+        "coldkey:o2"
+      ],
+      "column_weight": 0.15,
+      "datagen_qualifier": 1,
+      "composite": 0.7287053571428572,
+      "composite_stderr": 0.03304957358897789
+    },
+    {
+      "name": "v19 datagen zero",
+      "bench_version": 19,
+      "datagen_raw": 0,
+      "datagen_gate": 1,
+      "datagen_stderr": 0,
+      "columns": [
+        {
+          "column_id": "c3",
+          "owner_key": "coldkey:o3",
+          "n": 7,
+          "sum": 3.95,
+          "sum_sq": 2.9524999999999997,
+          "substituted": false
+        },
+        {
+          "column_id": "c0",
+          "owner_key": "coldkey:o1",
+          "n": 8,
+          "sum": 5.55,
+          "sum_sq": 4.7725,
+          "substituted": false
+        },
+        {
+          "column_id": "c1",
+          "owner_key": "coldkey:o2",
+          "n": 6,
+          "sum": 3,
+          "sum_sq": 2.2,
+          "substituted": false
+        },
+        {
+          "column_id": "c2",
+          "owner_key": "coldkey:o2",
+          "n": 3,
+          "sum": 2.55,
+          "sum_sq": 2.1875,
+          "substituted": false
+        },
+        {
+          "column_id": "c4",
+          "owner_key": "",
+          "n": 6,
+          "sum": 4.2,
+          "sum_sq": 3.025,
+          "substituted": false
+        }
+      ],
+      "mask": [],
+      "column_weight": 0.15,
+      "datagen_qualifier": 0,
+      "composite": 0,
+      "composite_stderr": 0
+    },
+    {
+      "name": "v19 gate zero",
+      "bench_version": 19,
+      "datagen_raw": 0.95,
+      "datagen_gate": 0,
+      "datagen_stderr": 0.02,
+      "columns": [
+        {
+          "column_id": "c3",
+          "owner_key": "coldkey:o3",
+          "n": 7,
+          "sum": 3.95,
+          "sum_sq": 2.9524999999999997,
+          "substituted": false
+        },
+        {
+          "column_id": "c0",
+          "owner_key": "coldkey:o1",
+          "n": 8,
+          "sum": 5.55,
+          "sum_sq": 4.7725,
+          "substituted": false
+        },
+        {
+          "column_id": "c1",
+          "owner_key": "coldkey:o2",
+          "n": 6,
+          "sum": 3,
+          "sum_sq": 2.2,
+          "substituted": false
+        },
+        {
+          "column_id": "c2",
+          "owner_key": "coldkey:o2",
+          "n": 3,
+          "sum": 2.55,
+          "sum_sq": 2.1875,
+          "substituted": false
+        },
+        {
+          "column_id": "c4",
+          "owner_key": "",
+          "n": 6,
+          "sum": 4.2,
+          "sum_sq": 3.025,
+          "substituted": false
+        }
+      ],
+      "mask": [
+        "coldkey:o1"
+      ],
+      "column_weight": 0.15,
+      "datagen_qualifier": 1,
+      "composite": 0,
+      "composite_stderr": 0
+    },
+    {
+      "name": "v19 perfect",
+      "bench_version": 19,
+      "datagen_raw": 1,
+      "datagen_gate": 1,
+      "datagen_stderr": 0,
+      "columns": [
+        {
+          "column_id": "c0",
+          "owner_key": "coldkey:o1",
+          "n": 2,
+          "sum": 2,
+          "sum_sq": 2,
+          "substituted": false
+        },
+        {
+          "column_id": "c1",
+          "owner_key": "coldkey:o2",
+          "n": 2,
+          "sum": 2,
+          "sum_sq": 2,
+          "substituted": false
+        },
+        {
+          "column_id": "c2",
+          "owner_key": "coldkey:o3",
+          "n": 2,
+          "sum": 2,
+          "sum_sq": 2,
+          "substituted": false
+        },
+        {
+          "column_id": "c3",
+          "owner_key": "coldkey:o4",
+          "n": 2,
+          "sum": 2,
+          "sum_sq": 2,
+          "substituted": false
+        },
+        {
+          "column_id": "c4",
+          "owner_key": "",
+          "n": 2,
+          "sum": 2,
+          "sum_sq": 2,
+          "substituted": false
+        }
+      ],
+      "mask": [
+        "coldkey:o4"
+      ],
+      "column_weight": 0.15,
+      "datagen_qualifier": 1,
+      "composite": 1,
+      "composite_stderr": 0
     }
   ]
 }

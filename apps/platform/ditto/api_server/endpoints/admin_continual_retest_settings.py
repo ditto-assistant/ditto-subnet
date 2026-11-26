@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.continual_retest_settings import (
+    CROWN_DUEL_PROTOCOL,
     CROWN_GATE_PROTOCOL,
     CROWN_INCUMBENT_PROTOCOL,
     AdminContinualRetestSettingsRequest,
@@ -209,6 +210,17 @@ async def get_settings(
         now=datetime.now(UTC),
         freshness=_FRESHNESS,
     )
+    crown_duel_fleet_ready = await live_weight_setter_fleet_supports_protocol(
+        session,
+        minimum_protocol=CROWN_DUEL_PROTOCOL,
+        now=datetime.now(UTC),
+        freshness=_FRESHNESS,
+    )
+    served_gate = crown_gate_for(
+        settings,
+        fleet_protocol_ready=crown_gate_fleet_ready,
+        duel_fleet_ready=crown_duel_fleet_ready,
+    )
     rollout = await open_rollout(session)
     desired_version = rollout.desired_version if rollout is not None else None
     authority_version = await active_bench_version(session, open_transition=rollout)
@@ -258,6 +270,11 @@ async def get_settings(
             )
             is not None,
             crown_gate_required_protocol=CROWN_GATE_PROTOCOL,
+            crown_duel_fleet_ready=crown_duel_fleet_ready,
+            # Served only riding a served crown gate.
+            crown_duel_active=served_gate is not None
+            and served_gate.duel_window is not None,
+            crown_duel_required_protocol=CROWN_DUEL_PROTOCOL,
             ledger_pin=await _ledger_pin_status(request, session, settings),
             max_age_seconds=resolver.ttl_seconds,
             open_rollout_desired_version=desired_version,

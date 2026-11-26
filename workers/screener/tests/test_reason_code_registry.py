@@ -28,6 +28,7 @@ from ditto_screening_protocol.reason_codes import (
     PROVIDER_BACKOFF_REASON_CODES,
     SCREENING_REASON_CODES,
     SEED_PROBE_REASON_CODES,
+    TOOL_CATALOG_PROBE_REASON_CODES,
     ReasonCodeClass,
     ReasonCodeProducer,
 )
@@ -47,6 +48,10 @@ _INFRA_CLASSES = frozenset(
 _SEED_OBSERVATIONS = frozenset({"seed-ok", "seed-envelope-usage"})
 # A whole code, not an f-string fragment such as ``"seed-"``.
 _SEED_CODE = re.compile(r"seed-[a-z0-9]+(?:-[a-z0-9]+)*")
+# ``tool-catalog-ok`` is a passing probe and ``tool-catalog-request-size`` the
+# measurement recorded on every probed screen; neither is a rejection.
+_TOOL_CATALOG_OBSERVATIONS = frozenset({"tool-catalog-ok", "tool-catalog-request-size"})
+_TOOL_CATALOG_CODE = re.compile(r"tool-catalog-[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 def _registry_constants() -> dict[str, str]:
@@ -262,6 +267,15 @@ def test_every_seed_rejection_is_a_registered_seed_probe_code() -> None:
         if _SEED_CODE.fullmatch(code) and code not in _SEED_OBSERVATIONS
     }
     assert worker_seed_codes == set(SEED_PROBE_REASON_CODES)
+
+
+def test_every_tool_catalog_rejection_is_a_registered_probe_code() -> None:
+    worker_codes = {
+        code
+        for code in _emitted_codes()
+        if _TOOL_CATALOG_CODE.fullmatch(code) and code not in _TOOL_CATALOG_OBSERVATIONS
+    }
+    assert worker_codes == set(TOOL_CATALOG_PROBE_REASON_CODES)
 
 
 def test_worker_constants_are_the_registry_codes() -> None:

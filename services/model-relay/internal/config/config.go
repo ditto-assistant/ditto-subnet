@@ -40,6 +40,14 @@ const (
 	PinnedEmbeddingDimensions = 768
 )
 
+// MaxInferenceTimeoutSeconds caps DITTO_INFERENCE_TIMEOUT_SECONDS below the
+// scorer broker's fixed 100 s client timeout
+// (services/dittobench-api/cmd/dittobench-api/inference_broker.go). The relay
+// bounds a request's whole provider ladder by this one budget; the 5 s margin
+// covers admission, settlement and the broker-to-relay hop, so a reply the
+// relay charges for is still inside the window the broker waits for it.
+const MaxInferenceTimeoutSeconds = 95
+
 // Routing modes accepted by DITTO_INFERENCE_ROUTING_MODE.
 const (
 	RoutingModeAggregateThroughput = "aggregate_throughput"
@@ -251,8 +259,12 @@ type InferenceProxyConfig struct {
 	Required      bool   // DITTO_INFERENCE_PROXY_REQUIRED, default false
 	PublicBaseURL string // DITTO_INFERENCE_PUBLIC_BASE_URL, default http://localhost:8000
 
-	OpenRouterAPIKey string // OPENROUTER_API_KEY; REQUIRED when Enabled
-	PerplexityAPIKey string // PERPLEXITY_API_KEY; optional
+	OpenRouterAPIKey   string // OPENROUTER_API_KEY; REQUIRED when Enabled
+	PerplexityAPIKey   string // PERPLEXITY_API_KEY; optional
+	DaniLabsAPIKey     string // DANILABS_API_KEY; optional, server-only
+	DaniLabsTrialUntil string // DANILABS_FREE_TRIAL_UNTIL; RFC3339, required to route
+	DaniLabsTrialScope string // DANILABS_TRIAL_SCOPE: canary or fleet
+	DaniLabsPercent    int    // live board selection percentage; defaults to zero
 
 	UpstreamURL          string // DITTO_INFERENCE_UPSTREAM_URL
 	EmbeddingUpstreamURL string // DITTO_EMBEDDING_UPSTREAM_URL
@@ -276,7 +288,7 @@ type InferenceProxyConfig struct {
 
 	RequestBodyBytes  int64 // DITTO_INFERENCE_REQUEST_BODY_BYTES, default 4 MiB, max 8 MiB
 	ResponseBodyBytes int64 // DITTO_INFERENCE_RESPONSE_BODY_BYTES, default 2 MiB, max 8 MiB
-	TimeoutSeconds    int   // DITTO_INFERENCE_TIMEOUT_SECONDS, default 90, range [1,120]
+	TimeoutSeconds    int   // DITTO_INFERENCE_TIMEOUT_SECONDS, default 90, range [1,MaxInferenceTimeoutSeconds]
 	MaxOutputTokens   int   // DITTO_INFERENCE_MAX_OUTPUT_TOKENS, default 32768, max 65536
 
 	// ConfirmationBackpressureRetry lets a confirmation lane re-dispatch a
@@ -583,8 +595,11 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		Required:      r.boolval("DITTO_INFERENCE_PROXY_REQUIRED", false),
 		PublicBaseURL: strings.TrimRight(r.str("DITTO_INFERENCE_PUBLIC_BASE_URL", "http://localhost:8000"), "/"),
 
-		OpenRouterAPIKey: r.str("OPENROUTER_API_KEY", ""),
-		PerplexityAPIKey: r.str("PERPLEXITY_API_KEY", ""),
+		OpenRouterAPIKey:   r.str("OPENROUTER_API_KEY", ""),
+		PerplexityAPIKey:   r.str("PERPLEXITY_API_KEY", ""),
+		DaniLabsAPIKey:     r.str("DANILABS_API_KEY", ""),
+		DaniLabsTrialUntil: r.str("DANILABS_FREE_TRIAL_UNTIL", ""),
+		DaniLabsTrialScope: r.str("DANILABS_TRIAL_SCOPE", ""),
 
 		UpstreamURL:          r.str("DITTO_INFERENCE_UPSTREAM_URL", "https://openrouter.ai/api/v1/chat/completions"),
 		EmbeddingUpstreamURL: r.str("DITTO_EMBEDDING_UPSTREAM_URL", "https://openrouter.ai/api/v1/embeddings"),
@@ -646,7 +661,7 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		DecisionGlobalRPM:            6000,
 	}
 
-	models := strings.Split(r.str("DITTO_INFERENCE_ALLOWED_MODELS", "qwen/qwen3-32b,openai/gpt-oss-20b"), ",")
+	models := strings.Split(r.str("DITTO_INFERENCE_ALLOWED_MODELS", "qwen/qwen3-32b,openai/gpt-oss-20b,z-ai/glm-5.3-flash"), ",")
 	for _, m := range models {
 		if m = strings.TrimSpace(m); m != "" {
 			ip.AllowedModels = append(ip.AllowedModels, m)
@@ -721,8 +736,9 @@ func validateInferenceProxy(r *envReader, ip *InferenceProxyConfig) {
 	pos("DITTO_INFERENCE_REQUEST_BODY_BYTES", ip.RequestBodyBytes, 8*1024*1024)
 	pos("DITTO_INFERENCE_RESPONSE_BODY_BYTES", ip.ResponseBodyBytes, 8*1024*1024)
 	pos("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", int64(ip.MaxOutputTokens), 65536)
-	if ip.TimeoutSeconds < 1 || ip.TimeoutSeconds > 120 {
-		r.fail("DITTO_INFERENCE_TIMEOUT_SECONDS out of range: %d (must be 1..120)", ip.TimeoutSeconds)
+	if ip.TimeoutSeconds < 1 || ip.TimeoutSeconds > MaxInferenceTimeoutSeconds {
+		r.fail("DITTO_INFERENCE_TIMEOUT_SECONDS out of range: %d (must be 1..%d)",
+			ip.TimeoutSeconds, MaxInferenceTimeoutSeconds)
 	}
 
 	hierarchy := func(names [3]string, a, b, c, cap int) {

@@ -8,6 +8,7 @@ import type { JSX } from "solid-js";
 
 import { ActivityBoard } from "../components/pipeline/ActivityBoard";
 import { createActivityStore } from "../components/pipeline/activity-store";
+import { SeasonNotice } from "../components/pipeline/SeasonNotice";
 import { agentCardOpen, hydrateOnAgentCardClose } from "../data/useEndpoint";
 import { REFRESH_MS } from "../lib/config";
 import { currentPageName } from "../lib/router";
@@ -83,6 +84,7 @@ export function SubmissionsPage(): JSX.Element {
 
   return (
     <section class="page active" data-page="submissions">
+      <SeasonNotice />
       <ActivityBoard store={store} />
     </section>
   );

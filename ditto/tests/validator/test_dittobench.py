@@ -37,6 +37,7 @@ from ditto.validator.dittobench import (
     SUPPORTED_BENCH_VERSIONS,
     DittobenchClient,
     DittobenchProgressSnapshot,
+    DuelingSlice,
     InferenceBrokerSession,
     _agent_attributable_failure_code,
     _sandbox_infrastructure_failure_code,
@@ -50,8 +51,10 @@ from ditto.validator.errors import (
     ValidatorInfrastructureError,
     container_log_tail,
     failure_detail,
+    harness_memory_of,
 )
 from ditto.validator.signing import score_signing_message
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 # The next epoch after the ceiling is the canonical *unsupported* version. It
 # moves with the shared derivation instead of being retyped each bump, which
@@ -516,6 +519,118 @@ async def test_scorer_round_column_size_is_forwarded(
     # heartbeat keeps its exact encoding.
     dumped = observed.model_dump(mode="json")
     assert ("generator_round_max_cases" in dumped) is (max_cases is not None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "features,oracle",
+    [
+        (["generator-round-v1"], False),
+        (["generator-round-v1", "generator-frontier-oracle-v1"], True),
+        # The oracle runs a round dataset, so it needs the round mode.
+        (["generator-frontier-oracle-v1"], False),
+    ],
+)
+async def test_scorer_frontier_oracle_mode_is_forwarded(features, oracle) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "software_version": "0.22.0",
+                "source_revision": _REVISION,
+                "supported_bench_versions": list(SUPPORTED_BENCH_VERSIONS),
+                "full_run_capacity": 2,
+                "features": features,
+            },
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.generator_frontier_oracle is oracle
+    # Absent from the signed bytes unless advertised.
+    assert ("generator_frontier_oracle" in observed.model_dump(mode="json")) is oracle
+
+
+_ORACLE_MODEL = "generator-frontier-oracle-model:z-ai/glm-5.3-flash"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "features,models",
+    [
+        # A scorer that predates the feature runs the oracle on the contract
+        # model only.
+        (["generator-round-v1", "generator-frontier-oracle-v1"], None),
+        (
+            ["generator-round-v1", "generator-frontier-oracle-v1", _ORACLE_MODEL],
+            ("z-ai/glm-5.3-flash",),
+        ),
+        # An oracle model without the oracle mode is never forwarded.
+        (["generator-round-v1", _ORACLE_MODEL], None),
+        # The capability's limit is carried whole.
+        (
+            [
+                "generator-round-v1",
+                "generator-frontier-oracle-v1",
+                *(f"generator-frontier-oracle-model:z-ai/m{i}" for i in range(4)),
+            ],
+            tuple(f"z-ai/m{i}" for i in range(4)),
+        ),
+        # Past it nothing is forwarded, never a partial list.
+        (
+            [
+                "generator-round-v1",
+                "generator-frontier-oracle-v1",
+                *(f"generator-frontier-oracle-model:z-ai/m{i}" for i in range(5)),
+            ],
+            None,
+        ),
+        # Malformed ids are dropped, duplicates collapse.
+        (
+            [
+                "generator-round-v1",
+                "generator-frontier-oracle-v1",
+                _ORACLE_MODEL,
+                _ORACLE_MODEL,
+                "generator-frontier-oracle-model:Bad Model",
+            ],
+            ("z-ai/glm-5.3-flash",),
+        ),
+    ],
+)
+async def test_scorer_frontier_oracle_models_are_forwarded(features, models) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "software_version": "0.22.0",
+                "source_revision": _REVISION,
+                "supported_bench_versions": list(SUPPORTED_BENCH_VERSIONS),
+                "full_run_capacity": 2,
+                "features": features,
+            },
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.generator_frontier_oracle_models == models
+    # Absent from the signed bytes unless advertised.
+    dumped = observed.model_dump(mode="json")
+    assert ("generator_frontier_oracle_models" in dumped) is (models is not None)
 
 
 @pytest.mark.asyncio
@@ -1232,6 +1347,18 @@ async def test_current_versions_use_versioned_route_and_bind_request(
     config = SimpleNamespace(
         dittobench_api_url="http://dittobench.test", run_size="full"
     )
+    # A dueling version (16+) is scored only with its generator slice.
+    slice_bytes = b'{"contract":"dittobench-dueling-slice/v1"}'
+    dueling = (
+        DuelingSlice(
+            slice_bytes=slice_bytes,
+            expected_slice_sha256=hashlib.sha256(slice_bytes).hexdigest(),
+            owner_key="",
+            season_id="0b6f1c1e-6a52-4d8e-9a57-3f0c2d1e4b5a",
+        )
+        if is_dueling_bench_version(bench_version)
+        else None
+    )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
             tarball_url="https://example.test/agent.tgz",
@@ -1244,9 +1371,12 @@ async def test_current_versions_use_versioned_route_and_bind_request(
             screened_image_ref=(
                 "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
             ),
+            dueling_slice=dueling,
         )
     assert seen["path"] == "/v2/score"
-    assert cast(dict[str, object], seen["body"])["bench_version"] == bench_version
+    body = cast(dict[str, object], seen["body"])
+    assert body["bench_version"] == bench_version
+    assert ("dueling_slice_mode" in body) == (dueling is not None)
 
 
 @pytest.mark.asyncio
@@ -1265,6 +1395,10 @@ async def test_v10_submit_forwards_platform_stamped_runtime_policy() -> None:
         relay_delay_fingerprint_mode="shadow",
         relay_delay_fingerprint_min_ms=40,
         relay_delay_fingerprint_max_ms=160,
+        # SN-500: the lease's memory-factor policy must reach the scorer.
+        memory_factor_posture="enforce",
+        memory_factor_free_mib=256,
+        memory_factor_floor_bps=9_500,
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
@@ -1280,6 +1414,11 @@ async def test_v10_submit_forwards_platform_stamped_runtime_policy() -> None:
         )
 
     assert seen["benchmark_runtime"] == runtime.model_dump(mode="json")
+    forwarded = seen["benchmark_runtime"]
+    assert isinstance(forwarded, dict)
+    assert forwarded["memory_factor_posture"] == "enforce"
+    assert forwarded["memory_factor_free_mib"] == 256
+    assert forwarded["memory_factor_floor_bps"] == 9_500
 
 
 @pytest.mark.asyncio
@@ -1327,6 +1466,47 @@ async def test_submit_admission_failure_is_validator_infrastructure(
                     "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
                 ),
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("respond", "code"),
+    [
+        (lambda: httpx.Response(500, text="panic"), "scorer_submit_unavailable"),
+        (lambda: httpx.Response(502, text="bad gateway"), "scorer_submit_unavailable"),
+        (
+            lambda: (_ for _ in ()).throw(httpx.ConnectError("connection refused")),
+            "scorer_unreachable",
+        ),
+    ],
+    ids=["500", "502", "transport-error"],
+)
+async def test_submit_scorer_fault_is_infrastructure_not_miner_fault(
+    respond: Callable[[], httpx.Response], code: str
+) -> None:
+    """A down or crashing local scorer is ours, not the miner's (SN-445)."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return respond()
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test", run_size="full"
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(ValidatorInfrastructureError) as caught:
+            await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
+                tarball_url="https://example.test/agent.tgz",
+                bench_version=8,
+                dataset_sha256="12" * 32,
+                screened_image_url="https://example.test/image.tar",
+                screened_image_sha256="34" * 32,
+                screened_image_size_bytes=123,
+                screened_image_id="sha256:" + "56" * 32,
+                screened_image_ref=(
+                    "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+                ),
+            )
+    assert caught.value.code == code
 
 
 @pytest.mark.asyncio
@@ -1695,15 +1875,11 @@ async def test_timeout_tolerates_older_scorer_without_cancel_route() -> None:
 @pytest.mark.parametrize(
     ("poll", "match"),
     [
-        (lambda: httpx.Response(503, text="scorer restarting"), "poll rejected"),
+        (lambda: httpx.Response(400, text="bad run id"), "poll rejected"),
         (lambda: httpx.Response(200, json=["running"]), "not a JSON object"),
         (lambda: httpx.Response(200, text="<html>bad gateway"), "not a JSON object"),
-        (
-            lambda: (_ for _ in ()).throw(httpx.ConnectError("connection reset")),
-            "poll failed",
-        ),
     ],
-    ids=["non-200", "non-object", "invalid-json", "transport-error"],
+    ids=["non-200", "non-object", "invalid-json"],
 )
 async def test_unreadable_poll_cancels_background_run(
     poll: Callable[[], httpx.Response], match: str
@@ -1727,6 +1903,103 @@ async def test_unreadable_poll_cancels_background_run(
             await client._poll("run-1", expected_bench_version=8)
 
     assert methods == ["GET", "DELETE"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "poll",
+    [
+        lambda: httpx.Response(503, text="scorer restarting"),
+        lambda: httpx.Response(502, text="bad gateway"),
+        lambda: httpx.Response(404, text="run not found"),
+        lambda: (_ for _ in ()).throw(httpx.ConnectError("connection reset")),
+    ],
+    ids=["503", "502", "lost-run-404", "transport-error"],
+)
+async def test_unavailable_scorer_poll_is_infrastructure_not_miner_fault(
+    poll: Callable[[], httpx.Response],
+) -> None:
+    """Our scorer restarting must not spend the miner's attempt (SN-445)."""
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        if request.method == "DELETE":
+            return httpx.Response(202, json={"status": "failed"})
+        return poll()
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_timeout_seconds=60,
+        dittobench_poll_seconds=0.01,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        with pytest.raises(ValidatorInfrastructureError) as caught:
+            await client._poll("run-1", expected_bench_version=8)
+
+    assert caught.value.code == "scorer_poll_unavailable"
+    assert methods == ["GET", "GET", "GET", "DELETE"]
+
+
+@pytest.mark.asyncio
+async def test_scorer_outage_that_outlasts_the_budget_is_infrastructure() -> None:
+    """An unreadable scorer at budget expiry is ours, not a miner timeout."""
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        if request.method == "DELETE":
+            return httpx.Response(202, json={"status": "failed"})
+        return httpx.Response(503, text="scorer restarting")
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_timeout_seconds=0.05,
+        dittobench_poll_seconds=0.2,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        with pytest.raises(ValidatorInfrastructureError) as caught:
+            await client._poll("run-1", expected_bench_version=8)
+
+    assert caught.value.code == "scorer_poll_unavailable"
+    assert "last 503: scorer restarting" in str(caught.value)
+    assert methods[-1] == "DELETE"
+    assert methods.count("GET") < 3
+
+
+@pytest.mark.asyncio
+async def test_scorer_poll_blip_recovers_without_failing_the_run() -> None:
+    responses = iter(
+        [
+            httpx.Response(503, text="scorer restarting"),
+            httpx.Response(502, text="bad gateway"),
+        ]
+    )
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        if request.method == "DELETE":
+            return httpx.Response(202, json={"status": "failed"})
+        try:
+            return next(responses)
+        except StopIteration:
+            return httpx.Response(400, text="stop here")
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_timeout_seconds=60,
+        dittobench_poll_seconds=0.01,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        # Two blips are ridden out; the third, readable poll decides the run.
+        with pytest.raises(DittobenchError, match="poll rejected"):
+            await client._poll("run-1", expected_bench_version=8)
+
+    assert methods == ["GET", "GET", "GET", "DELETE"]
 
 
 @pytest.mark.asyncio
@@ -3260,3 +3533,164 @@ def test_every_scorer_infrastructure_code_is_classified_by_the_validator() -> No
         f"scorer validator_infrastructure codes the validator would charge to "
         f"the miner as scoring_error: {sorted(unclassified)}"
     )
+
+
+_HARNESS_MEMORY_BLOCK = {
+    "peak_bytes": 1900 << 20,
+    "p50_bytes": 600 << 20,
+    "p95_bytes": 1700 << 20,
+    "samples": 812,
+    "sampled_seconds": 1624.0,
+    "limit_bytes": 2048 << 20,
+}
+
+
+@pytest.mark.asyncio
+async def test_scored_run_keeps_its_harness_memory_by_run_id() -> None:
+    """SN-500: a done run's memory is held for exactly its own run id."""
+    payload = _done_job()
+    payload["harness_memory"] = dict(_HARNESS_MEMORY_BLOCK)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        await client._poll_attaching_memory("run-1", expected_bench_version=8)
+        assert client.take_harness_memory("run-other") is None
+        memory = client.take_harness_memory("run-1")
+        assert memory is not None and memory.p95_bytes == 1700 << 20
+        # Consumed once.
+        assert client.take_harness_memory("run-1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "error_type"),
+    [
+        (
+            {"kind": "sandbox_failure", "code": "harness_oom", "retryable": False},
+            SandboxOomError,
+        ),
+        (
+            {
+                "kind": "validator_infrastructure",
+                "code": "host_memory_pressure",
+                "retryable": True,
+            },
+            ValidatorInfrastructureError,
+        ),
+    ],
+)
+async def test_failed_run_carries_its_harness_memory_on_the_error(
+    failure: dict[str, object], error_type: type[Exception]
+) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": "private",
+                "failure": failure,
+                "harness_memory": dict(_HARNESS_MEMORY_BLOCK),
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        with pytest.raises(error_type) as caught:
+            await client._poll_attaching_memory("run-1", expected_bench_version=8)
+    memory = harness_memory_of(caught.value)
+    assert memory is not None and memory.peak_bytes == 1900 << 20
+    assert client.take_harness_memory("run-1") is None
+
+
+@pytest.mark.asyncio
+async def test_generator_round_polls_never_cache_harness_memory() -> None:
+    """Raw polls have no consumer, so their memory must not crowd the cache."""
+    payload = _done_job()
+    payload["harness_memory"] = dict(_HARNESS_MEMORY_BLOCK)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        await client._poll_run(
+            "run-1",
+            progress_callback=None,
+            expected_bench_version=8,
+            ticket_deadline=None,
+            raw=True,
+        )
+        assert client.take_harness_memory("run-1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "inverted",
+    [
+        {"p50_bytes": 800 << 20, "p95_bytes": 600 << 20},
+        {"p95_bytes": 1950 << 20, "peak_bytes": 1900 << 20},
+    ],
+)
+async def test_inconsistent_harness_memory_is_dropped_not_forwarded(
+    inverted: dict[str, int],
+) -> None:
+    payload = _done_job()
+    payload["harness_memory"] = {**_HARNESS_MEMORY_BLOCK, **inverted}
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        await client._poll_attaching_memory("run-1", expected_bench_version=8)
+        assert client.take_harness_memory("run-1") is None
+
+
+@pytest.mark.asyncio
+async def test_refused_dueling_report_still_carries_its_harness_memory() -> None:
+    """A done run whose report fails dueling verification was still measured."""
+    payload = _done_job()  # its report has no details.dueling block
+    payload["harness_memory"] = dict(_HARNESS_MEMORY_BLOCK)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    dueling = DuelingSlice(
+        slice_bytes=b"slice",
+        expected_slice_sha256="a" * 64,
+        owner_key="coldkey:a",
+        season_id="s16-0001",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        with pytest.raises(ValidatorInfrastructureError) as refused:
+            await client._poll_attaching_memory(
+                "run-1", expected_bench_version=8, dueling_slice=dueling
+            )
+    assert refused.value.code == "dueling_report_invalid"
+    memory = harness_memory_of(refused.value)
+    assert memory is not None and memory.p95_bytes == 1700 << 20
+    assert client.take_harness_memory("run-1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "block", [None, "not-an-object", {"peak_bytes": -1}, {"p50_bytes": 1}]
+)
+async def test_missing_or_malformed_harness_memory_is_simply_absent(
+    block: object,
+) -> None:
+    payload = _done_job()
+    if block is not None:
+        payload["harness_memory"] = block
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        await client._poll_attaching_memory("run-1", expected_bench_version=8)
+        assert client.take_harness_memory("run-1") is None

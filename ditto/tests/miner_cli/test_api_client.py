@@ -44,6 +44,7 @@ from ditto.miner_cli.errors import (
     LoginRequiredError,
     PaymentAmountMismatchError,
     PaymentRecoveryExpiredError,
+    PaymentReplayedError,
     PreCheckRejectedError,
     SubmissionCooldownError,
     TransientApiError,
@@ -437,6 +438,7 @@ class TestUploadCheck:
         ("error_code", "error_type"),
         [
             (3203, PaymentAmountMismatchError),
+            (3207, PaymentReplayedError),
             (3208, PaymentRecoveryExpiredError),
         ],
     )
@@ -829,3 +831,27 @@ class TestRevokeMinerSession:
             client.revoke_miner_session("ditto_ms_" + "ab" * 32)
 
         assert paths == ["/api/v1/miner-auth/session/revoke"]
+
+
+class TestReadmissionCheckErrors:
+    """4607334560: a retryable status on the pre-payment check is transient."""
+
+    @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+    def test_retryable_statuses_are_transient(self, status: int) -> None:
+        with (
+            make_client(
+                lambda _request: httpx.Response(status, json={"message": "busy"})
+            ) as client,
+            pytest.raises(TransientApiError, match="readmission check"),
+        ):
+            client.post_readmission_check({"agent_id": str(UUID(int=1))})
+
+    def test_a_refusal_stays_a_refusal(self) -> None:
+        with (
+            make_client(
+                lambda _request: httpx.Response(400, json={"message": "nope"})
+            ) as client,
+            pytest.raises(ApiResponseError) as caught,
+        ):
+            client.post_readmission_check({"agent_id": str(UUID(int=1))})
+        assert not isinstance(caught.value, TransientApiError)

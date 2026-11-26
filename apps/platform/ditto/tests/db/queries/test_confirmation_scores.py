@@ -559,3 +559,72 @@ class TestConfirmationCatchupSeeds:
             anchored_seeds=[44, 33, 22, 11],
             seeds_by_agent={peer: [11, 22, 33, 44]},
         ) == (44, 33, 22, 11)
+
+
+async def test_duel_history_serves_the_newest_seasons_only(
+    session: AsyncSession,
+) -> None:
+    """Protocol 35: the title duel reads the newest ``seasons`` dueling seasons
+    of the version, nothing older, nothing below the dueling floor."""
+    from ditto.db.models import DuelingSeason
+    from ditto.db.queries.confirmation_scores import duel_history_by_agent
+
+    aid = await _seed_agent(session)
+    # Seasons 1-3 hold duel rows; season 4 is idle (opened, no duel ran) and
+    # must not push season 2 out of a two-season window.
+    season_ids = [uuid4() for _ in range(4)]
+    async with session.begin():
+        for index, season_id in enumerate(season_ids, start=1):
+            session.add(
+                DuelingSeason(
+                    id=season_id,
+                    bench_version=16,
+                    season_index=index,
+                    shadow=False,
+                    status="closed" if index < 4 else "open",
+                    commitment="ab" * 32,
+                    secret=bytes(32),
+                    committed_at=_NOW,
+                    rounds_per_season=1,
+                    anchor_block=index,
+                    anchor_block_hash="0x" + "ef" * 32,
+                    season_seed=f"{index:02x}" * 32,
+                    columns=[],
+                )
+            )
+    async with session.begin():
+        await append_confirmation_scores(
+            session,
+            rows=[
+                ConfirmationSeedScore(
+                    agent_id=aid,
+                    validator_hotkey="5V1",
+                    seed=index * 10,
+                    composite=0.7,
+                    run_id=f"duel-{index}",
+                    signature=None,
+                    dueling_season_id=season_id,
+                    dueling={"season_id": str(season_id)},
+                )
+                for index, season_id in enumerate(season_ids[:3], start=1)
+            ],
+            bench_version=16,
+            created_at=_NOW,
+        )
+    async with session.begin():
+        served = await duel_history_by_agent(
+            session, agent_ids=[aid], bench_version=16, seasons=2
+        )
+        assert sorted(row.seed for row in served[aid]) == [20, 30]
+        assert (
+            await duel_history_by_agent(
+                session, agent_ids=[aid], bench_version=15, seasons=5
+            )
+            == {}
+        )
+        assert (
+            await duel_history_by_agent(
+                session, agent_ids=[aid], bench_version=16, seasons=0
+            )
+            == {}
+        )

@@ -204,7 +204,7 @@ def response_model_matches(expected_model: str, response_model: object) -> bool:
 def _specialist_invariant_shapes_complete(
     pass_summaries: list[dict], policy_version: int
 ) -> bool:
-    if policy_version != 13:
+    if policy_version < 13:
         return True
     expected = {
         item.value for item in source_review_invariants_for_policy(policy_version)
@@ -1799,7 +1799,7 @@ async def review_archive(
     )
     started = time.monotonic()
     deadline = asyncio.get_running_loop().time() + global_timeout_seconds
-    discovery = semantic_discovery(str(archive)) if policy_version == 13 else None
+    discovery = semantic_discovery(str(archive)) if policy_version >= 13 else None
     semaphore = asyncio.Semaphore(concurrency)
     budget = FanoutBudget(
         max_requests=max_requests,

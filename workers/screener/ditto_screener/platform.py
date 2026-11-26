@@ -488,8 +488,12 @@ class PlatformClient:
         """Read the platform policy without claiming or mutating queue state."""
         url = f"{self._base}{_PREFIX}/queue"
         try:
+            # ``policy_only`` skips the queue query on Platform builds that know
+            # it; older builds ignore the parameter and answer one item.
             resp = await self._client.get(
-                url, params={"limit": 1}, headers=await self._auth_headers()
+                url,
+                params={"limit": 1, "policy_only": "true"},
+                headers=await self._auth_headers(),
             )
         except httpx.HTTPError as e:
             raise PlatformError(f"screening policy check failed: {e}") from e

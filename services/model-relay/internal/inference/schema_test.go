@@ -139,6 +139,29 @@ func TestOutputTokenLimit(t *testing.T) {
 	}
 }
 
+// TestFrontierOracleModelGetsTheReasoningContract: an oracle grant is pinned
+// to frontierOracleModel (SN-496), and its reasoning block must be pinned and
+// excluded exactly as the bench model's, never left to provider defaults.
+func TestFrontierOracleModelGetsTheReasoningContract(t *testing.T) {
+	reason := func(body string, bench int32) (map[string]any, *httpError) {
+		return benchmarkReasoningForRequest(parsePayload(t, body), frontierOracleModel, bench)
+	}
+	if block, err := reason(`{}`, 18); err != nil || block["effort"] != "medium" || block["exclude"] != true {
+		t.Fatalf("oracle default: got %v %v", block, err)
+	}
+	if block, err := reason(`{"reasoning":{"effort":"high"}}`, 18); err != nil || block["effort"] != "high" || block["exclude"] != true {
+		t.Fatalf("oracle agent effort: got %v %v", block, err)
+	}
+	if _, err := reason(`{"reasoning":{"effort":"low","exclude":false}}`, 18); err == nil {
+		t.Fatal("oracle model accepted exclude=false")
+	}
+	// The relay's contract set and the Python proxy's must name the same
+	// oracle model.
+	if frontierOracleModel != "z-ai/glm-5.3-flash" || !hasReasoningContract(frontierOracleModel) {
+		t.Fatal("frontier oracle model lost its reasoning contract")
+	}
+}
+
 func TestBenchmarkReasoningForRequest(t *testing.T) {
 	reason := func(body string, bench int32) (map[string]any, *httpError) {
 		return benchmarkReasoningForRequest(parsePayload(t, body), v7Model, bench)

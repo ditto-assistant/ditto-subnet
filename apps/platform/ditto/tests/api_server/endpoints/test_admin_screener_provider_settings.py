@@ -28,6 +28,7 @@ from ditto.db.models import (
     ScreenerReplayProcessKey,
     TrustedImageBuild,
 )
+from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 pytestmark = pytest.mark.asyncio
 
@@ -690,7 +691,7 @@ async def test_independent_replay_capacity_is_guarded_and_audited(
                 instance_id="subnet-screener-2-worker-1",
                 software_version="v0.999.0",
                 protocol_version=7,
-                policy_version=13,
+                policy_version=SCREENING_POLICY_VERSION,
                 state="polling",
                 first_seen_at=now - timedelta(minutes=10),
                 reported_at=now - timedelta(minutes=10),
@@ -698,7 +699,7 @@ async def test_independent_replay_capacity_is_guarded_and_audited(
                 signature="ab" * 64,
                 system_metrics={
                     "release": {
-                        "builtin_policy_version": 13,
+                        "builtin_policy_version": SCREENING_POLICY_VERSION,
                         "revision": "a" * 40,
                         "version": "v0.999.0",
                         "activated_at": int(now.timestamp()),
@@ -720,10 +721,10 @@ async def test_independent_replay_capacity_is_guarded_and_audited(
             ScreenerHeartbeat, (replay_hotkey, "subnet-screener-2-worker-1")
         )
         assert heartbeat is not None
-        heartbeat.policy_version = 13
+        heartbeat.policy_version = SCREENING_POLICY_VERSION
         heartbeat.system_metrics = {
             "release": {
-                "builtin_policy_version": 13,
+                "builtin_policy_version": SCREENING_POLICY_VERSION,
                 "revision": "a" * 40,
                 "version": "v0.998.9",
                 "activated_at": int(now.timestamp()),
@@ -737,7 +738,7 @@ async def test_independent_replay_capacity_is_guarded_and_audited(
         assert heartbeat is not None
         heartbeat.system_metrics = {
             "release": {
-                "builtin_policy_version": 13,
+                "builtin_policy_version": SCREENING_POLICY_VERSION,
                 "revision": "a" * 40,
                 "version": "v0.999.0",
                 "activated_at": int(now.timestamp()),
@@ -749,7 +750,7 @@ async def test_independent_replay_capacity_is_guarded_and_audited(
                 instance_id="subnet-screener-2-worker-2",
                 software_version="v0.998.9",
                 protocol_version=7,
-                policy_version=13,
+                policy_version=SCREENING_POLICY_VERSION,
                 state="polling",
                 first_seen_at=now,
                 reported_at=now,
@@ -757,7 +758,7 @@ async def test_independent_replay_capacity_is_guarded_and_audited(
                 signature="cd" * 64,
                 system_metrics={
                     "release": {
-                        "builtin_policy_version": 13,
+                        "builtin_policy_version": SCREENING_POLICY_VERSION,
                         "revision": "b" * 40,
                         "version": "v0.998.9",
                         "activated_at": int(now.timestamp()),
@@ -774,7 +775,7 @@ async def test_independent_replay_capacity_is_guarded_and_audited(
         assert heartbeat is not None
         heartbeat.system_metrics = {
             "release": {
-                "builtin_policy_version": 13,
+                "builtin_policy_version": SCREENING_POLICY_VERSION,
                 "revision": "b" * 40,
                 "version": "v0.999.0",
                 "activated_at": int(now.timestamp()),

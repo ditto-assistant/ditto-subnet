@@ -19,6 +19,7 @@ boot are handled by the `platform_app` Ansible role.
 | `ditto-platform-dev` / `ditto-platform-prod` app VMs (`app-small`, public IP) | one per deploy env |
 | `ditto-platform-agents-{dev,prod}` GCS buckets + one HMAC key | S3-interop blob storage |
 | Secret Manager: `platform-db-password`, `platform-storage-hmac-secret`, `platform-{dev,prod}-pylon-open-access-token`, `platform-github-deploy-key`, `platform-taostats-api-key`, and empty Coding Hippius credential containers | values from `TF_VAR_*`; deploy/provider credential versions are set out of band and never enter Terraform state |
+| Secret Manager: empty `model-context-scorer-token-prod` container, Platform's read grant, and the `cpm-scorer-aws` WIF pool for the AWS CPM scorer (`cpm-scorer.tf`) | off by default (`enable_model_context_scorer_secret`, `cpm_scorer_aws_account_id`); the bearer value is added out of band |
 | _(not here)_ `DITTO_UPLOAD_PAYMENT_ADDRESS` | deploy-time from the ditto-subnet repo's GitHub env secret |
 | A records `platform-api[-dev].heyditto.ai` → app VM IPs (Cloudflare, DNS-only) | only when `manage_dns = true` |
 | Hosted deploy identities (`identity.tf`, `trusted-builds.tf`) | exact protected `dev`/`prod` environment principals for `ditto-subnet` |

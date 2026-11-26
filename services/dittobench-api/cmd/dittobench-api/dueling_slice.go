@@ -65,7 +65,7 @@ func hasDuelingSliceFields(req submitRequest) bool {
 // bench >= 16 and not a generator round (a round at a dueling version is a
 // private pack dataset and never carries a slice).
 func requiresDuelingSlice(req submitRequest) bool {
-	return protocol.DuelingBenchVersion(req.BenchVersion) && req.PrivateDatasetMode != generatorRoundMode
+	return protocol.DuelingBenchVersion(req.BenchVersion) && !isGeneratorRoundMode(req.PrivateDatasetMode)
 }
 
 // validateDuelingSliceRequest admits the slice fields exactly on a canonical
@@ -92,6 +92,47 @@ func validateDuelingSliceRequest(req submitRequest, enabled bool) error {
 		return errors.New("dueling_owner_key is too long")
 	}
 	return nil
+}
+
+// validatePracticeDuelingSlice admits a slice on practice only for the miner
+// kit's LOCAL slice rehearsal (scripts/local-rehearsal.py at bench >= 16): a
+// scorer started with DITTOBENCH_ALLOW_PRIVATE_HARNESS, which can never also
+// load screened images (validatePrivateHarnessPosture), so neither hosted
+// practice nor a validator stack takes one here. The slice must be complete
+// and bound to an explicit seed, because decodeDuelingSlice requires
+// run_seed == seed and a practice seed is otherwise fresh. A practice run at
+// >= 16 without slice fields still scores the datagen half only. Returns ""
+// when admitted.
+func validatePracticeDuelingSlice(req submitRequest, localScorer bool) string {
+	if !hasDuelingSliceFields(req) {
+		return ""
+	}
+	if !localScorer {
+		return "dueling slices are not accepted on practice"
+	}
+	// A practice slice is never a scored run: a scored /v1/submit (an expected
+	// dataset digest) with a slice would skip /v2/score's ticket and inference
+	// checks, so refuse it here.
+	if runScope(req) == scorer.ScopeScored {
+		return "a local dueling slice rehearsal cannot be a scored run (omit dataset_sha256)"
+	}
+	if req.Seed == 0 {
+		return "a local dueling slice rehearsal requires an explicit seed (the slice is built for it)"
+	}
+	if err := validateDuelingSliceRequest(req, true); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// practiceBodyBytes is the /v1/submit body cap: tiny on hosted practice, and
+// large enough for a base64 slice on a local private-harness scorer.
+func (s *server) practiceBodyBytes() int64 {
+	limit := int64(maxSubmitBody)
+	if s.allowPrivate {
+		limit += int64((challenge.MaxRoundDatasetBytes + 2) / 3 * 4)
+	}
+	return limit
 }
 
 // duelingSlice is a decoded, verified slice ready to execute.
@@ -165,6 +206,9 @@ type duelingSliceEnv struct {
 	concurrency  int
 	// progress, when set, reports cumulative executed slice cases.
 	progress func(done int)
+	// budget, when set, is the run's bench v18 cost budget; a slice case it
+	// refuses never runs and scores 0 (run_budget.go).
+	budget *runBudget
 }
 
 // duelingSliceResult is everything about a slice run that leaves the scorer:
@@ -206,7 +250,28 @@ func executeDuelingSlice(ctx context.Context, slice *duelingSlice, env duelingSl
 			GradingBenchVersion: col.Column.GradingBenchVersion, Substituted: col.Column.Substituted,
 		}
 		wanted := include[id]
-		if len(wanted) > 0 {
+		if len(wanted) > 0 && env.budget.isExhausted() {
+			// A cancelled run takes the cancellation path, as Execute would.
+			if err := ctx.Err(); err != nil {
+				return duelingSliceResult{}, err
+			}
+			// Bench v18: the budget is already spent, so every case would be
+			// refused at admission; refuse them here instead of seeding the
+			// column's waves, which would only spend embeddings past it.
+			note := env.budget.refusalNote()
+			for _, c := range col.Pack.Cases {
+				if !wanted[c.ID] {
+					continue
+				}
+				env.budget.refuse("slice")
+				agg.N++
+				agg.BudgetExhausted++
+				result.rows = append(result.rows, budgetExhaustedCase(challenge.RoundCaseID(id, c.ID), challenge.SliceCaseCategory, protocol.KindMemory, note))
+			}
+			if env.progress != nil {
+				env.progress(len(result.rows))
+			}
+		} else if len(wanted) > 0 {
 			outcomes, err := challengerun.Execute(ctx, env.harnessURL, col.Pack, challengerun.Options{
 				Concurrency: env.concurrency,
 				// The agent runs at the run's bench version; each case is graded at
@@ -221,6 +286,15 @@ func executeDuelingSlice(ctx context.Context, slice *duelingSlice, env duelingSl
 				ToolEndpoint:  prepareCase,
 				ObservedCalls: env.toolSrv.Observed,
 				Include:       func(packCaseID string) bool { return wanted[packCaseID] },
+				Admit: func() bool {
+					if env.budget.admit() {
+						return true
+					}
+					env.budget.refuse("slice")
+					return false
+				},
+				RefusalNote: env.budget.refusalNote,
+				Exhausted:   env.budget.isExhausted,
 			})
 			if err != nil {
 				return duelingSliceResult{}, fmt.Errorf("column %s: %w", id, err)
@@ -232,15 +306,27 @@ func executeDuelingSlice(ctx context.Context, slice *duelingSlice, env duelingSl
 				if o.Fault || math.IsNaN(score) {
 					score = 0
 				}
+				if o.BudgetExhausted {
+					// Bench v18: never run; scores 0 inside the column, like a
+					// datagen case the budget refused.
+					score = 0
+					agg.BudgetExhausted++
+				}
 				agg.N++
 				agg.Sum += score
 				agg.SumSq += score * score
-				result.rows = append(result.rows, protocol.CaseScore{
-					CaseID:   challenge.RoundCaseID(id, o.CaseID),
-					Category: challenge.SliceCaseCategory,
-					Kind:     protocol.KindMemory,
-					Score:    score,
-				})
+				row := protocol.CaseScore{
+					CaseID:          challenge.RoundCaseID(id, o.CaseID),
+					Category:        challenge.SliceCaseCategory,
+					Kind:            protocol.KindMemory,
+					Score:           score,
+					BudgetExhausted: o.BudgetExhausted,
+				}
+				if o.BudgetExhausted {
+					// The refusal's specific reason (spent budget or lost meter).
+					row.Notes = append([]string(nil), o.Notes...)
+				}
+				result.rows = append(result.rows, row)
 			}
 			if env.progress != nil {
 				env.progress(len(result.rows))
@@ -269,10 +355,13 @@ func duelingSelfMask(ownerKey string) map[string]bool {
 }
 
 // duelingOrdinaryScore is the composite the datagen-only gate stack (v9 score
-// gates) then scales: gate_datagen x ((1 - w x |U|) x datagen + w x sum col_c)
-// with the composite gate alone, quantized to micros like every ordinary
-// composite. Every gate input is a datagen case: the generator slice lowers a
-// score through its column means, never through a gate.
+// gates) then scales: gate_datagen x q x ((1 - w x |U|) x datagen + w x sum
+// col_c) with the composite gate alone, quantized to micros like every
+// ordinary composite. w and q are the bench version's weighting
+// (challenge.DuelingWeightingForVersion: from bench 19 w = 0.15 and the datagen
+// qualifier q = min(1, datagen / 0.8)). Every gate input is a datagen case: the
+// generator slice lowers a score through its column means, never through a
+// gate.
 //
 // The stderr is deliberately at the composite gate only, like the composite:
 // applyV9BaseEvidence then scales both by the applied v9 factor
@@ -280,25 +369,31 @@ func duelingSelfMask(ownerKey string) map[string]bool {
 // signed effective_stderr_micros. DuelingCompositeStderr is linear in the
 // gate, so the result matches details.dueling.composite_stderr (computed with
 // the post-v9 gate) to within micro rounding.
-func duelingOrdinaryScore(half scorer.DatagenHalf, columns []protocol.DuelingColumnDetails, ownerKey string) (composite, stderr float64, err error) {
+func duelingOrdinaryScore(benchVersion int, half scorer.DatagenHalf, columns []protocol.DuelingColumnDetails, ownerKey string) (composite, stderr float64, err error) {
 	aggs := duelingAggregates(columns)
 	if err := challenge.CheckDuelingColumns(aggs); err != nil {
 		return 0, 0, err
 	}
+	weighting := challenge.DuelingWeightingForVersion(benchVersion, half.Raw)
 	mask := duelingSelfMask(ownerKey)
-	composite = challenge.DuelingComposite(half.Raw, half.Gate, aggs, mask)
-	stderr = challenge.DuelingCompositeStderr(half.RawStderr, half.Gate, aggs, mask)
+	composite = challenge.DuelingComposite(weighting, half.Raw, half.Gate, aggs, mask)
+	stderr = challenge.DuelingCompositeStderr(weighting, half.RawStderr, half.Gate, aggs, mask)
 	return math.Round(composite*1e6) / 1e6, math.Round(stderr*1e6) / 1e6, nil
 }
 
 // duelingReportDetails is the details.dueling block. datagenGate is the
-// product of every factor applied to the run's composite: the composite gate,
+// product of every factor applied to the run's composite: the composite gate
+// (from bench 16 already carrying the applied priced-cost factor,
+// applyPricedCostToHalf),
 // the token-efficiency multiplier (always 1 under the v7+ quality-only
 // contract, carried so the identity holds by construction) and, from v9, the
-// applied score-gate factor of the signed base evidence. With it
-// the validator fold recomputes the composite under any owner mask; under the
-// self mask it reproduces the reported composite to within its micro rounding.
-func duelingReportDetails(slice *duelingSlice, half scorer.DatagenHalf, efficiency *protocol.TokenEfficiency, v9 *protocol.V9BaseDetails, columns []protocol.DuelingColumnDetails) *protocol.DuelingDetails {
+// applied score-gate factor of the signed base evidence. column_weight is the
+// bench version's column weight, and from bench 19 datagen_qualifier carries
+// the qualifier apart from the gate (absent below bench 19, so those reports
+// are unchanged). With them the validator fold recomputes the composite under
+// any owner mask; under the self mask it reproduces the reported composite to
+// within its micro rounding.
+func duelingReportDetails(benchVersion int, slice *duelingSlice, half scorer.DatagenHalf, efficiency *protocol.TokenEfficiency, v9 *protocol.V9BaseDetails, columns []protocol.DuelingColumnDetails) *protocol.DuelingDetails {
 	gate := half.Gate
 	if efficiency != nil {
 		gate = gate * efficiency.Multiplier
@@ -307,17 +402,23 @@ func duelingReportDetails(slice *duelingSlice, half scorer.DatagenHalf, efficien
 		gate = gate * (float64(v9.AppliedGateFactorBPS) / float64(scoregates.BasisPointScale))
 	}
 	aggs := duelingAggregates(columns)
-	return &protocol.DuelingDetails{
+	weighting := challenge.DuelingWeightingForVersion(benchVersion, half.Raw)
+	details := &protocol.DuelingDetails{
 		SeasonID:        slice.dataset.SeasonID,
 		SeasonIndex:     slice.dataset.SeasonIndex,
 		SliceSHA256:     slice.sha256,
 		OwnerKey:        slice.ownerKey,
 		DatagenRaw:      half.Raw,
 		DatagenGate:     gate,
-		ColumnWeight:    protocol.DuelingColumnWeight,
+		ColumnWeight:    weighting.ColumnWeight,
 		Columns:         columns,
-		CompositeStderr: challenge.DuelingCompositeStderr(half.RawStderr, gate, aggs, duelingSelfMask(slice.ownerKey)),
+		CompositeStderr: challenge.DuelingCompositeStderr(weighting, half.RawStderr, gate, aggs, duelingSelfMask(slice.ownerKey)),
 	}
+	if protocol.DuelingHeldOutBenchVersion(benchVersion) {
+		q := weighting.Qualifier
+		details.DatagenQualifier = &q
+	}
+	return details
 }
 
 // relayDatagenInterval is a dueling run's relay accounting up to the

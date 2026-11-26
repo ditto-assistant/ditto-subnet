@@ -57,6 +57,9 @@ export function compactScreeningSubmissions(
         agent_name: submission.agent_name,
         agent_version: submission.agent_version,
         agent_status: submission.agent_status,
+        // SN-483: the status the miner sees; a closed row can still store
+        // `evaluating`.
+        public_status: submission.public_status,
         submitted_at: submission.submitted_at,
         artifact_sha256: submission.artifact_sha256,
       } as ResponseRow
@@ -226,10 +229,12 @@ function versionHistogram(
     serving: boolean
   }>,
 ): VersionHistogramRow[] {
-  const groups = new Map<string, VersionHistogramRow>()
+  // A missing value (null) and an empty one ('') are different facts, e.g. a
+  // scorer that reports no dueling versions versus one that omits the field.
+  const groups = new Map<string | null, VersionHistogramRow>()
   for (const row of rows) {
     const value = row.value ?? null
-    const key = value === null ? '' : String(value)
+    const key = value === null ? null : String(value)
     const current = groups.get(key) ?? {
       value,
       count: 0,
@@ -243,7 +248,12 @@ function versionHistogram(
   }
   return [...groups.values()].sort((left, right) => {
     if (right.count !== left.count) return right.count - left.count
-    return String(left.value ?? '').localeCompare(String(right.value ?? ''))
+    // null (missing) sorts before every value, so ties never follow input order.
+    if (left.value === null || right.value === null) {
+      if (left.value === right.value) return 0
+      return left.value === null ? -1 : 1
+    }
+    return String(left.value).localeCompare(String(right.value))
   })
 }
 
@@ -296,6 +306,17 @@ export function compactValidatorFleet(response: ValidatorFleetObservability) {
       ),
       scorer_source_revisions: versionHistogram(
         rolloutRows((row) => row.scorer?.source_revision ?? null),
+      ),
+      // Sorted, deduplicated and comma-joined so one version set is one bucket
+      // and "16" and "" (forwards none) bucket separately; a
+      // v16 canary or rollout needs validators in a bucket that names 16.
+      dueling_slice_bench_versions: versionHistogram(
+        rolloutRows((row) => {
+          const versions = row.scorer?.dueling_slice_bench_versions
+          return versions === undefined || versions === null
+            ? null
+            : [...new Set(versions)].sort((a, b) => a - b).join(',')
+        }),
       ),
     },
     validators,

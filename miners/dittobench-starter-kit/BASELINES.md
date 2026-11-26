@@ -1,9 +1,65 @@
 # Reference baseline
 
-What the stock kit (unmodified `baseline.rs`) scores under the locked model. This
+What the stock kit (unmodified `baseline.rs`) scores under the locked model.
+From bench 18 the stock kit serves the Jev hybrid by default (`src/hybrid.rs`):
+it switches on any tool menu over 64k estimated tokens, because scored runs
+send wire `bench_version: 9` whatever the contract. Older benches keep the
+classic `Baseline::run` path. This
 is the target to beat: a competitive submission has to clear the composite below,
 and the weakest categories are where the reference harness leaves the most on the
 table.
+
+## bench_version 18: classic path vs the Jev hybrid (2026-11-07)
+
+The **v18 reference baseline is the hybrid `full` row: 0.263.** The unmodified
+kit serves it at bench 18+ (since 2026-11-08); the classic rows are what you
+get with `DITTOBENCH_JEV_HYBRID=0`.
+
+- Harness: this kit. The classic path is `Baseline::run`
+  (`DITTOBENCH_JEV_HYBRID=0`). The hybrid is the bench 18+ default; these runs
+  set `DITTOBENCH_JEV_HYBRID=1`, which takes the same path (see the README,
+  *Reference: Jev decides, the chat model writes*).
+- Contract: bench v18 from the #3412–#3430 stack. One seed (42), `run_size=full`,
+  350 cases: the 175-case datagen half plus the local 175-case public-generator
+  slice. Local scorer, observed tool endpoint, 8 cases in flight.
+- Inference: `openai/gpt-oss-20b` and `typesafe/jev-1.14` through OpenRouter (chat
+  and System One), metered by `scripts/rehearsal_cost.py`. Prices are the
+  contract's locked rates: chat prompt $0.07/M, completion $0.15/M, decision
+  input $0.042/M. The cost factor is priced-cost-v2 ($0.50 reference, 0.3
+  floor).
+
+| Path | composite | tool_mean | memory_mean | datagen raw | priced cost / 350 cases | factor | chat prompt tokens | decision input tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| classic, unmodified | 0.000 | 0.000 | 0.000 | 0.000 | $0.00 (every call refused) | 1.00 | 0 | 0 |
+| classic, `DITTOBENCH_PRELOAD_TOP_K=32` | 0.093 | 0.351 | 0.164 | 0.258 | $0.856 | 0.50 | 11,145,866 | 0 |
+| hybrid, `full` menu (the v18 default) | **0.263** | **0.527** | **0.276** | 0.402 | **$0.270** | **1.00** | 1,561,140 | 3,119,715 |
+| hybrid, `DITTOBENCH_JEV_MENU=grouped` | **0.268** | 0.508 | **0.276** | 0.392 | **$0.197** | **1.00** | 1,573,963 | 1,323,333 |
+
+Read the rows this way:
+
+- **The classic path cannot run v18.** A seed's 1,454-tool menu is
+  152,270 tokens of tool input, and gpt-oss-20b's context is 131,072. Every
+  chat call is refused with a 400 before any token is billed. This was probed
+  directly against OpenRouter with the seed-42 menu. This is why the hybrid
+  is the v18 default. If you opt out, set `DITTOBENCH_PRELOAD_TOP_K` first.
+- **Classic with a 32-tool preload works, but it is expensive**: 11.1M chat
+  prompt tokens, because 32 schemas and 24 memories ride on every turn. The
+  factor halves its composite.
+- **The hybrid's chat prompts are small**: a median of 1,967 prompt tokens
+  per case (p90 13,174, from multi-call encounters), a median largest single
+  prompt of 1,219 tokens (max 5,236), and a median of 4 tools offered. Jev
+  reads the menu only on cases it routes to act: 43 of 344 logged. Those
+  cost about 56k decision tokens each with the full menu and about 14.6k
+  grouped. Every other case costs about 2.3k.
+- On this seed the hybrid is **3.2x (full) to 4.3x (grouped) cheaper** and
+  scores higher on every axis. Both hybrid runs stay under the $0.50
+  reference, so their factor is 1.0.
+
+Limits: this is one seed, a local scorer and OpenRouter-served models, not
+validator scoring, and the slice is the public default generator only.
+`world-story-*` (35 cases) scores 0.0 on every path here, and absence
+families are weak (0.08–0.21). Those are the next levers for both paths, not
+artifacts of the hybrid. Total spend for these runs: $2.16.
 
 ## bench_version 6 (2026-07-21)
 

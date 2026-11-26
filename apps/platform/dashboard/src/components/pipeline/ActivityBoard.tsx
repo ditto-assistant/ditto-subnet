@@ -38,7 +38,7 @@ import type { ActivityStatusEntry } from "./status";
 type ActivityRow = ActivityStatusEntry & { artifact_release?: ArtifactRelease | null };
 
 function rowAriaLabel(e: ActivityRow): string {
-  const stage = activityStage(e.status);
+  const stage = activityStage(e.status, e);
   const sourceCopy = artifactReleaseCopy(e.artifact_release);
   return (
     "View details for " +

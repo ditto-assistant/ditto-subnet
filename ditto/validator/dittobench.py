@@ -15,6 +15,7 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import json
 import logging
 import re
 import time
@@ -25,12 +26,15 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 from uuid import UUID, uuid4
 
 import httpx
+from pydantic import ValidationError
 
 from ditto.api_models.benchmark_progress import (
     MAX_BENCHMARK_CHECKS,
     BenchmarkProgressStage,
 )
 from ditto.api_models.generator_round_validator import (
+    GENERATOR_FRONTIER_ORACLE_DATASET_MODE,
+    GENERATOR_FRONTIER_ORACLE_FEATURE,
     GENERATOR_ROUND_BENCH_FEATURE_PREFIX,
     GENERATOR_ROUND_BENCH_VERSIONS,
     GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX,
@@ -39,6 +43,7 @@ from ditto.api_models.generator_round_validator import (
 from ditto.api_models.validator import (
     ArtifactResponse,
     BenchmarkRuntimeSettings,
+    HarnessMemoryTelemetry,
     JobResponse,
     ScoreReport,
 )
@@ -50,6 +55,7 @@ from ditto.api_models.validator_capabilities import (
     ScorerProbeReason,
     V14ScoredRuntimeEnvEvidence,
     V15ScoredRuntimeEnvEvidence,
+    V16ScoredRuntimeEnvEvidence,
     ValidatorStackIdentity,
 )
 from ditto.api_models.validator_confirmation import (
@@ -94,7 +100,18 @@ logger = logging.getLogger(__name__)
 
 # Dataset modes /v2/score accepts with private bytes: the Platform-private
 # benchmark artifact and a generator-competition round dataset.
-_PRIVATE_DATASET_MODES = frozenset({"platform-private-v1", "generator-round-v1"})
+_PRIVATE_DATASET_MODES = frozenset(
+    {
+        "platform-private-v1",
+        "generator-round-v1",
+        GENERATOR_FRONTIER_ORACLE_DATASET_MODE,
+    }
+)
+# Private modes that carry a generator-round dataset: a panel run or a
+# frontier oracle run on the round's unsolved cases.
+_ROUND_DATASET_MODES = frozenset(
+    {"generator-round-v1", GENERATOR_FRONTIER_ORACLE_DATASET_MODE}
+)
 # The scorer runs a screened image without the source tarball. Advertised
 # upward so Platform stops handing this validator miner source.
 SOURCE_FREE_SCREENED_IMAGE_FEATURE = "screened-image-source-free-v1"
@@ -102,6 +119,46 @@ SOURCE_FREE_SCREENED_IMAGE_FEATURE = "screened-image-source-free-v1"
 _ROUND_MAX_CASES_FEATURE = re.compile(
     re.escape(GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX) + r"([1-9][0-9]{0,3})"
 )
+
+
+# ``ScorerBenchmarkCapability.generator_frontier_oracle_models`` holds at most
+# this many models.
+MAX_FRONTIER_ORACLE_MODELS = 4
+_FRONTIER_ORACLE_MODEL_FEATURE = re.compile(
+    r"generator-frontier-oracle-model:([a-z0-9][a-z0-9._/:-]{2,127})"
+)
+
+
+def scorer_frontier_oracle_models(features: object) -> tuple[str, ...] | None:
+    """The models the scorer lets a frontier oracle run answer on.
+
+    The scorer advertises ``generator-frontier-oracle-model:<model>`` for each
+    pinned oracle route it accepts (``llm.FrontierOracleModel``). ``None`` when
+    it advertises none: Platform then runs the oracle on the bench contract's
+    harness model only. More than the capability's limit is a scorer contract
+    error: nothing is forwarded (never a partial list Platform would read as
+    the scorer's whole support), so this validator's oracle runs stay on the
+    contract model, and the overflow is logged.
+    """
+    if not isinstance(features, list):
+        return None
+    models = sorted(
+        {
+            match.group(1)
+            for feature in features
+            if isinstance(feature, str)
+            and (match := _FRONTIER_ORACLE_MODEL_FEATURE.fullmatch(feature))
+        }
+    )
+    if len(models) > MAX_FRONTIER_ORACLE_MODELS:
+        logger.warning(
+            "scorer advertises %d frontier oracle models, more than the %d a "
+            "capability carries; forwarding none",
+            len(models),
+            MAX_FRONTIER_ORACLE_MODELS,
+        )
+        return None
+    return tuple(models) or None
 
 
 def scorer_generator_round_max_cases(features: object) -> int | None:
@@ -271,6 +328,27 @@ def dueling_slice_from_lease(job: JobResponse) -> DuelingSlice | None:
             f"{job.expected_slice_sha256}",
             code="dueling_slice_digest_mismatch",
         )
+    # The slice names its own season; a lease that pins another one would only
+    # be caught after a full scoring run (verify_dueling_report), so refuse it
+    # before anything runs.
+    try:
+        header = json.loads(slice_bytes)
+    except (ValueError, RecursionError) as exc:  # UnicodeDecodeError, deep nesting
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} is not valid JSON",
+            code="dueling_slice_undecodable",
+        ) from exc
+    if not isinstance(header, dict):
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} is not a JSON object",
+            code="dueling_slice_undecodable",
+        )
+    if header.get("season_id") != job.dueling_season_id:
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} does not match its lease "
+            f"season {job.dueling_season_id}",
+            code="dueling_slice_season_mismatch",
+        )
     return DuelingSlice(
         slice_bytes=slice_bytes,
         expected_slice_sha256=job.expected_slice_sha256,
@@ -279,12 +357,15 @@ def dueling_slice_from_lease(job: JobResponse) -> DuelingSlice | None:
     )
 
 
-def verify_dueling_report(report: ScoreReport, dueling_slice: DuelingSlice) -> None:
+def verify_dueling_report(
+    report: ScoreReport, dueling_slice: DuelingSlice, *, bench_version: int
+) -> None:
     """Refuse a dueling report that does not describe the forwarded slice.
 
     The scorer echoes the slice digest, owner and season in ``details.dueling``
-    (spec 7.5). A missing or contradicting block means the run did not score the
-    leased slice, so it must not be signed.
+    (spec 7.5), weighted for the lease's bench version (column weight 0.15 and
+    the datagen qualifier from v19). A missing or contradicting block means the
+    run did not score the leased slice, so it must not be signed.
     """
     details = report.details if isinstance(report.details, dict) else {}
     try:
@@ -303,6 +384,13 @@ def verify_dueling_report(report: ScoreReport, dueling_slice: DuelingSlice) -> N
             "scorer details.dueling does not match the leased slice",
             code="dueling_report_mismatch",
         )
+    try:
+        dueling.check_bench_version(bench_version)
+    except ValueError as exc:
+        raise ValidatorInfrastructureError(
+            "scorer details.dueling is not weighted for the leased bench version",
+            code="dueling_report_mismatch",
+        ) from exc
 
 
 # Terminal job states reported by dittobench-api's store.
@@ -313,6 +401,9 @@ _FAILED = "failed"
 # by design: it is spent out of the lease's reporting margin.
 _CANCEL_TIMEOUT_SECONDS = 15.0
 _UNCHANGED_PROGRESS_TIMEOUT_SECONDS = 15 * 60.0
+# Consecutive unreadable polls (transport error, 5xx, or 404 for our own run)
+# tolerated before the run is handed back as validator infrastructure.
+_SCORER_UNAVAILABLE_POLL_LIMIT = 3
 _CONFIRMATION_FAILURE_CLASS_HEADER = "X-Ditto-Confirmation-Failure-Class"
 _CONFIRMATION_FAILURE_STATUS_HEADER = "X-Ditto-Confirmation-Failure-Status"
 _CONFIRMATION_ZERO_STATUS_FAILURES = frozenset(
@@ -478,9 +569,10 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
     # as this code with no cap or host evidence. It stays no-fault.
     "sandbox_oom",
     "sandbox_tmpfs_exhausted",
-    # An OOM kill the evidence cannot pin on the harness's own cap: the cgroup
-    # stayed below its limit, or host MemAvailable fell under the published
-    # floor before the kill. docs/RUNTIME-ENVELOPE.md publishes the rule.
+    # An OOM kill the evidence cannot pin on the harness's own cap: its cgroup
+    # never recorded an ``oom``, and its peak stayed below the cap or host
+    # MemAvailable fell under the published floor before the kill. Genuine
+    # validator infrastructure, retried. docs/RUNTIME-ENVELOPE.md publishes it.
     "host_memory_pressure",
     # A SIGKILL (exit 137) with no OOM flag. Nothing proves who sent it, so the
     # attempt is no-fault; Platform counts a repeat on a second validator as
@@ -644,10 +736,12 @@ _AGENT_ATTRIBUTABLE_INFERENCE_CODES = frozenset(
     }
 )
 
-# The one sandbox resource verdict that is the agent's: an OOM kill at the
-# harness's own published cap while the host kept headroom. The scorer sends it
-# as terminal ``sandbox_failure`` / ``retryable: false`` so the wire kind matches
-# the charge; it reaches Platform as ``sandbox_oom`` with this detail.
+# The one sandbox resource verdict that is the agent's, as a failed run and
+# never an infra retry: an OOM kill at the harness's own cap -- proven by its
+# cgroup's memory.events ``oom``, or a peak at the cap while the host kept
+# headroom. The scorer sends it as terminal ``sandbox_failure`` /
+# ``retryable: false`` so the wire kind matches the charge; it reaches Platform
+# as ``sandbox_oom`` with this detail.
 _HARNESS_OOM = "harness_oom"
 
 assert not (_AGENT_ATTRIBUTABLE_INFERENCE_CODES & _SANDBOX_INFRASTRUCTURE_CODES)
@@ -868,6 +962,9 @@ class DittobenchClient:
         # so one mutable slot is insufficient. Keep a small insertion-ordered
         # cache; publication consumes the selected entry.
         self._transcripts: dict[str, bytes] = {}
+        # SN-500: each run's harness memory, keyed by run id like transcripts,
+        # because concurrent slots share this client.
+        self._harness_memory: dict[str, HarnessMemoryTelemetry] = {}
         # Backward-compatible diagnostic view of the most recent run.
         self.last_transcript: bytes | None = None
         self.full_run_capacity = (
@@ -892,6 +989,33 @@ class DittobenchClient:
     def take_transcript(self, run_id: str) -> bytes | None:
         """Consume the verified transcript belonging to exactly ``run_id``."""
         return self._transcripts.pop(run_id, None)
+
+    def take_harness_memory(self, run_id: str) -> HarnessMemoryTelemetry | None:
+        """Consume the harness memory the scorer measured for ``run_id``."""
+        return self._harness_memory.pop(run_id, None)
+
+    def _remember_harness_memory(self, run_id: str, job: dict) -> None:
+        """Keep a terminal run's harness memory, ignoring a malformed block."""
+        raw = job.get("harness_memory")
+        if not isinstance(raw, dict):
+            return
+        try:
+            memory = HarnessMemoryTelemetry.model_validate(raw)
+        except ValidationError:
+            logger.warning("run %s harness memory block was malformed", run_id)
+            return
+        # The scorer's percentiles are ordered and clamped to the peak by
+        # construction; a block that is not is dropped here rather than
+        # rejected at the Platform wire, where it would fail the score it
+        # rides with.
+        if memory.p50_bytes > memory.p95_bytes or (
+            memory.peak_bytes > 0 and memory.p95_bytes > memory.peak_bytes
+        ):
+            logger.warning("run %s harness memory percentiles are inconsistent", run_id)
+            return
+        self._harness_memory[run_id] = memory
+        while len(self._harness_memory) > 64:
+            self._harness_memory.pop(next(iter(self._harness_memory)))
 
     def _control_headers(self) -> dict[str, str]:
         """Authorize this validator on the scorer's control plane.
@@ -1482,6 +1606,19 @@ class DittobenchClient:
                     v15_scored_runtime_env = v15_candidate
             except ValueError:
                 pass
+        v16_scored_runtime_env = None
+        if (
+            16 in observed_versions
+            and payload.get("v16_scored_runtime_env") is not None
+        ):
+            try:
+                v16_candidate = V16ScoredRuntimeEnvEvidence.model_validate(
+                    payload["v16_scored_runtime_env"]
+                )
+                if v16_candidate.source_revision == source_revision:
+                    v16_scored_runtime_env = v16_candidate
+            except ValueError:
+                pass
         try:
             generator_rounds = (
                 13 in observed_versions
@@ -1505,6 +1642,16 @@ class DittobenchClient:
                     and "platform-private-v1" in payload["features"]
                 ),
                 generator_rounds=generator_rounds,
+                generator_frontier_oracle=(
+                    generator_rounds
+                    and GENERATOR_FRONTIER_ORACLE_FEATURE in payload["features"]
+                ),
+                generator_frontier_oracle_models=(
+                    scorer_frontier_oracle_models(payload.get("features"))
+                    if generator_rounds
+                    and GENERATOR_FRONTIER_ORACLE_FEATURE in payload["features"]
+                    else None
+                ),
                 source_free_screened_images=source_free_screened_images,
                 generator_round_max_cases=(
                     scorer_generator_round_max_cases(payload.get("features"))
@@ -1528,6 +1675,7 @@ class DittobenchClient:
                 scored_runtime_env=scored_runtime_env,
                 v14_scored_runtime_env=v14_scored_runtime_env,
                 v15_scored_runtime_env=v15_scored_runtime_env,
+                v16_scored_runtime_env=v16_scored_runtime_env,
                 probe=self._record_scorer_probe(
                     "served",
                     observed_at=observed_at,
@@ -1712,15 +1860,13 @@ class DittobenchClient:
             benchmark_runtime=benchmark_runtime,
             dueling_slice=dueling_slice,
         )
-        report = await self._poll(
+        return await self._poll_attaching_memory(
             run_id,
             progress_callback=progress_callback,
             expected_bench_version=bench_version,
             ticket_deadline=ticket_deadline,
+            dueling_slice=dueling_slice,
         )
-        if dueling_slice is not None:
-            verify_dueling_report(report, dueling_slice)
-        return report
 
     async def run_generator_round(
         self,
@@ -1744,9 +1890,14 @@ class DittobenchClient:
         bench_version: int = 13,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
         progress_callback: ProgressCallback | None = None,
+        oracle_case_ids: list[str] | None = None,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Run a generator-round dataset against one screened image at the
         round's frozen ``bench_version`` (Platform's job carries it).
+
+        With ``oracle_case_ids`` this is a frontier oracle run
+        (``generator-frontier-oracle-v1``): only those cases, each answered
+        from its bounded oracle context.
 
         Returns the scorer run id and the raw per-case results (case ids are
         ``column/case``; faults carry the ``generator_round_fault`` category).
@@ -1758,8 +1909,13 @@ class DittobenchClient:
             tarball_sha256=tarball_sha256,
             seed=seed,
             dataset_sha256=dataset_sha256,
-            private_dataset_mode="generator-round-v1",
+            private_dataset_mode=(
+                GENERATOR_FRONTIER_ORACLE_DATASET_MODE
+                if oracle_case_ids is not None
+                else "generator-round-v1"
+            ),
             private_dataset_bytes=dataset_bytes,
+            oracle_case_ids=oracle_case_ids,
             run_size="full",
             bench_version=bench_version,
             screened_image_url=screened_image_url,
@@ -1831,8 +1987,13 @@ class DittobenchClient:
         ticket_deadline: datetime | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
         dueling_slice: DuelingSlice | None = None,
+        oracle_case_ids: list[str] | None = None,
     ) -> str:
         del ticket_deadline  # Manual retry policy forbids admission replay.
+        if (oracle_case_ids is not None) != (
+            private_dataset_mode == GENERATOR_FRONTIER_ORACLE_DATASET_MODE
+        ):
+            raise DittobenchError("oracle cases require the frontier oracle mode")
         if bench_version is None or bench_version not in SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
         body: dict[str, object] = {"run_size": run_size or self._config.run_size}
@@ -1917,7 +2078,7 @@ class DittobenchClient:
             # runs at any round contract (the pack grading policies) it froze.
             allowed_versions = (
                 GENERATOR_ROUND_BENCH_VERSIONS
-                if private_dataset_mode == "generator-round-v1"
+                if private_dataset_mode in _ROUND_DATASET_MODES
                 else (13,)
             )
             if (
@@ -1933,6 +2094,8 @@ class DittobenchClient:
             body["private_dataset_bytes"] = base64.b64encode(
                 private_dataset_bytes
             ).decode("ascii")
+            if oracle_case_ids is not None:
+                body["oracle_case_ids"] = list(oracle_case_ids)
         # A canonical bench >= 16 run carries its season slice (spec 7.5); a
         # generator round at a dueling version is a private pack dataset and
         # never does. Below v16 the fields are never sent.
@@ -1973,7 +2136,16 @@ class DittobenchClient:
                 url, json=body, headers=self._control_headers()
             )
         except httpx.HTTPError as e:
-            raise DittobenchError(f"submit failed: {e}") from e
+            # The local scorer is ours: unreachable means our infrastructure,
+            # not the miner's artifact (SN-445 / SN-426).
+            raise ValidatorInfrastructureError(
+                f"scorer unreachable at submit: {e}", code="scorer_unreachable"
+            ) from e
+        if resp.status_code >= 500 and resp.status_code != 503:
+            raise ValidatorInfrastructureError(
+                f"scorer failed at submit ({resp.status_code}): {resp.text[:200]}",
+                code="scorer_submit_unavailable",
+            )
         if resp.status_code in (429, 503):
             raise ValidatorInfrastructureError(
                 f"scorer admission unavailable ({resp.status_code}); "
@@ -1993,6 +2165,40 @@ class DittobenchClient:
             "screened image" if screened_image_url else "tarball build",
         )
         return str(run_id)
+
+    async def _poll_attaching_memory(
+        self,
+        run_id: str,
+        *,
+        progress_callback: ProgressCallback | None = None,
+        expected_bench_version: int,
+        ticket_deadline: datetime | None = None,
+        dueling_slice: DuelingSlice | None = None,
+    ) -> ScoreReport:
+        """:meth:`_poll` plus dueling verification, with a failed run's
+        harness memory on its error.
+
+        SN-500: the worker that reports a failure never sees the run id, so
+        the memory measured for that run rides on the raised error. That
+        includes a done run whose report then fails dueling verification. A
+        scored run's memory stays keyed by run id for
+        :meth:`take_harness_memory`.
+        """
+        try:
+            report = await self._poll(
+                run_id,
+                progress_callback=progress_callback,
+                expected_bench_version=expected_bench_version,
+                ticket_deadline=ticket_deadline,
+            )
+            if dueling_slice is not None:
+                verify_dueling_report(
+                    report, dueling_slice, bench_version=expected_bench_version
+                )
+            return report
+        except DittobenchError as failed:
+            failed.harness_memory = self._harness_memory.pop(run_id, None)
+            raise
 
     async def _poll(
         self,
@@ -2052,9 +2258,41 @@ class DittobenchClient:
         # lease from continued progress on the previous run and rebaseline the
         # monotonicity guard accordingly.
         run_token = hashlib.sha256(run_id.encode()).hexdigest()[:16]
+        unavailable_polls = 0
+        detail = ""
         try:
             while time.monotonic() - started <= budget:
-                resp = await self._client.get(url, headers=self._control_headers())
+                # The scorer is validator-owned. A transport error, 5xx, or a
+                # 404 for the run id we were just handed (the scorer restarted
+                # and lost it) says nothing about the miner's artifact: ride
+                # out a short blip, then hand back as infrastructure so the
+                # miner's attempt is not charged (SN-445 / SN-426).
+                try:
+                    resp = await self._client.get(url, headers=self._control_headers())
+                    unavailable = resp.status_code == 404 or resp.status_code >= 500
+                    detail = f"{resp.status_code}: {resp.text[:200]}"
+                except httpx.HTTPError as e:
+                    unavailable, detail = True, f"transport: {e}"
+                if unavailable:
+                    unavailable_polls += 1
+                    remaining = budget - (time.monotonic() - started)
+                    # Below the limit with budget left: ride out the blip. With
+                    # no budget left the run's fate is unknowable, and that is
+                    # still our outage, not a miner timeout.
+                    if unavailable_polls < _SCORER_UNAVAILABLE_POLL_LIMIT and (
+                        remaining > 0
+                    ):
+                        await asyncio.sleep(
+                            min(self._config.dittobench_poll_seconds, remaining)
+                        )
+                        continue
+                    await self._cancel(run_id)
+                    raise ValidatorInfrastructureError(
+                        f"scorer unavailable while polling run {run_id} "
+                        f"({unavailable_polls} consecutive polls; last {detail})",
+                        code="scorer_poll_unavailable",
+                    )
+                unavailable_polls = 0
                 # A poll that cannot be read says nothing about the run itself,
                 # which is still live in the sandbox. Cancel it like every other
                 # non-terminal exit so it cannot keep the sandbox after the
@@ -2082,6 +2320,10 @@ class DittobenchClient:
                             "dittobench progress callback failed; scoring continues"
                         )
                 status = data.get("status")
+                if status in (_DONE, _FAILED) and not raw:
+                    # Raw polls are generator rounds: no consumer takes their
+                    # memory, so caching it would only evict a scored run's.
+                    self._remember_harness_memory(run_id, data)
                 if status == _DONE:
                     rep = data.get("report")
                     details = rep.get("details") if isinstance(rep, dict) else None
@@ -2278,11 +2520,20 @@ class DittobenchClient:
                 )
         except httpx.HTTPError as e:
             await self._cancel(run_id)
-            raise DittobenchError(f"poll failed: {e}") from e
+            raise ValidatorInfrastructureError(
+                f"poll failed: {e}", code="scorer_poll_unavailable"
+            ) from e
         except asyncio.CancelledError:
             await self._cancel(run_id)
             raise
         await self._cancel(run_id)
+        if unavailable_polls:
+            # The budget ran out while the scorer was still unreadable.
+            raise ValidatorInfrastructureError(
+                f"scorer unavailable while polling run {run_id} when its budget "
+                f"ran out ({unavailable_polls} consecutive polls; last {detail})",
+                code="scorer_poll_unavailable",
+            )
         elapsed = time.monotonic() - started
         if lease_bound and ticket_deadline is not None:
             # Name the binding constraint. An operator reading this must be able

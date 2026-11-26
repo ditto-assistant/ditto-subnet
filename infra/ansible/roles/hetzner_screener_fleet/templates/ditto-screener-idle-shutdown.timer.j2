@@ -1,0 +1,11 @@
+[Unit]
+Description=Check whether the on-demand Ditto screener node can power off
+
+[Timer]
+# Give a fresh boot time to enroll and run its first release check.
+OnBootSec={{ screener_fleet_idle_shutdown_on_boot_sec }}
+OnUnitActiveSec=60s
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

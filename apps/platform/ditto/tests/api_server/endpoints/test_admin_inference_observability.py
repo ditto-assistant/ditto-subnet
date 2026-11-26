@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.inference_observability import RuntimeProfileArtifact
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.endpoints.admin_inference_observability import _danilabs_binding
 from ditto.db.models import ProviderOutageCircuit
 
 pytestmark = pytest.mark.asyncio
@@ -22,6 +23,47 @@ _HEADERS = {
     "X-Admin-Actor": "operator@example.com",
 }
 _PROFILE_ID = UUID("11111111-1111-4111-8111-111111111111")
+
+
+async def test_danilabs_binding_requires_complete_valid_process_metrics() -> None:
+    samples = (
+        "ditto_danilabs_binding_key_present 1\n"
+        "ditto_danilabs_binding_scope 1\n"
+        "ditto_danilabs_binding_router_competition 1\n"
+        "ditto_danilabs_binding_deadline_seconds 1.7944128e+09\n"
+    )
+    binding = _danilabs_binding(samples)
+    assert binding is not None
+    assert binding.key_present is True
+    assert binding.router_competition is True
+    assert binding.scope == "canary"
+    assert binding.deadline == datetime(2026, 11, 11, 16, tzinfo=UTC)
+    assert _danilabs_binding("") is None  # old relay: unknown, not disabled
+    assert (
+        _danilabs_binding(
+            samples.replace("ditto_danilabs_binding_router_competition 1\n", "")
+        )
+        is None
+    )
+    assert (
+        _danilabs_binding(
+            samples.replace("router_competition 1", "router_competition 2")
+        )
+        is None
+    )
+    assert _danilabs_binding(samples.replace("scope 1", "scope 3")) is None
+    assert _danilabs_binding(samples + "ditto_danilabs_binding_scope 1\n") is None
+    unset = _danilabs_binding(
+        samples.replace("key_present 1", "key_present 0")
+        .replace("scope 1", "scope 0")
+        .replace("1.7944128e+09", "0")
+    )
+    assert unset is not None
+    assert (unset.key_present, unset.scope, unset.deadline) == (
+        False,
+        "unset_or_invalid",
+        None,
+    )
 
 
 def _artifact() -> RuntimeProfileArtifact:

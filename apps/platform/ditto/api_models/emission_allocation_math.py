@@ -51,7 +51,7 @@ KIND_BURN = "burn"
 KIND_TRACK = "track"
 KIND_GAMMA = "gamma"
 KINDS = (KIND_BURN, KIND_TRACK, KIND_GAMMA)
-KNOWN_TRACKS = ("memory", "coding", "router", "generator")
+KNOWN_TRACKS = ("memory", "coding", "router", "generator", "model_context")
 """Track ids the validator registry knows, in its registration order."""
 PAYABLE_TRACKS = ("memory", "generator")
 """Tracks a shipped validator pays (protocol 33). Others may only appear at 0."""

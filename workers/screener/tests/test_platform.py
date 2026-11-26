@@ -371,6 +371,8 @@ async def test_policy_preflight_is_read_only(
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.path == "/api/v1/screener/queue"
+        # The policy read never asks Platform to build the queue.
+        assert request.url.params["policy_only"] == "true"
         _assert_auth(request)
         return httpx.Response(
             200,

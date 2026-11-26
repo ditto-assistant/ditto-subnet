@@ -99,6 +99,7 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
                 "chat_request_budget",
                 "chat_token_budget",
                 "decision_lane",
+                "danilabs_percent",
                 "embedding_global_concurrency",
                 "embedding_global_requests_per_minute",
                 "embedding_per_ticket_concurrency",
@@ -192,6 +193,10 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
                 "tie_weighting_mode",
                 "statistical_band_mode",
                 "crown_gate_mode",
+                "crown_duel_mode",
+                "retest_mode",
+                "season_duel_seeds",
+                "season_duel_rotation_seeds",
                 "min_dethrone_confirmations",
                 "champion_standing_rank",
                 "wave_membership",
@@ -202,7 +207,6 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
         QueuePolicySettings,
         frozenset(
             (
-                "deferred_source_review",
                 "fresh_submission_slots",
                 "lane_cycle_size",
                 "owner_concurrent_submission_limit",
@@ -269,6 +273,9 @@ _NESTED_FIELDS: dict[str, tuple[str, ...]] = {
         "relay_delay_fingerprint_min_ms",
         "relay_delay_fingerprint_max_ms",
         "sandbox_memory_limit_mib",
+        "memory_factor_posture",
+        "memory_factor_free_mib",
+        "memory_factor_floor_bps",
     ),
     "decision_lane": (
         "enabled",
@@ -297,15 +304,6 @@ _NESTED_FIELDS: dict[str, tuple[str, ...]] = {
         "dedupe_scope",
         "require_desired_era_drained",
         "require_cohort_complete",
-    ),
-    "deferred_source_review": (
-        "mode",
-        "integrity_double_check_mode",
-        "min_cohort_size",
-        "composite_mad_multiplier",
-        "axis_mad_multiplier",
-        "min_composite_delta",
-        "min_axis_delta",
     ),
 }
 

@@ -100,6 +100,53 @@ class ValidatorCapacityAssignment(BaseModel):
     ] = None
 
 
+SlotUnusableReason = Literal[
+    "admission_draining",
+    "admission_paused",
+    "admission_resource_constrained",
+    "host_memory_admission",
+    "validator_unhealthy",
+    "bench_scorer_unverified",
+    "bench_software_obsolete",
+    "issuance_paused",
+    "platform_slot_cap",
+]
+"""Why one configured slot cannot take a ticket, in the order it is judged.
+
+The first three are the validator's own admission: a host that is not
+``accepting`` offers no healthy slot. ``host_memory_admission`` is a slot past
+``(host memory - reserve) // harness cap``, derived here from the host's
+announced memory and the live sandbox memory cap -- the validator withholds it
+because that many harnesses at the cap would overcommit the host.
+``validator_unhealthy`` is any other slot the validator did not offer (a
+sibling infrastructure failure, a resource-blocked slot, scorer capacity
+below the configured count). The last three are Platform's: the validator
+cannot serve the active benchmark, Backroom paused its issuance, or the
+operator slot cap (or a tripped resource breaker) funds fewer slots than the
+validator offers.
+"""
+
+
+class ValidatorCapacitySlot(BaseModel):
+    """One configured slot and what it is doing, or why it cannot work."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    slot_id: str
+    state: Annotated[
+        Literal["claimed", "free", "reserved_round", "unusable"],
+        Field(
+            description=(
+                "`claimed` holds a lease or signed occupancy; `free` can take "
+                "canonical or retest work now; `reserved_round` is held back for "
+                "generator-round runs; `unusable` cannot take any ticket, and "
+                "`reason` says why."
+            )
+        ),
+    ]
+    reason: SlotUnusableReason | None = None
+
+
 class ValidatorCapacityEntry(BaseModel):
     """One live validator's ordinary slot capacity and live assignments."""
 
@@ -146,6 +193,51 @@ class ValidatorCapacityEntry(BaseModel):
         ),
     ]
     assignments: list[ValidatorCapacityAssignment]
+    memory_admitted_slots: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Derived: harnesses at the live sandbox memory cap this host's "
+                "announced memory admits after the published host reserve. Null "
+                "when the host announced no memory. A validator with a custom "
+                "reserve may admit slightly fewer or more."
+            ),
+        ),
+    ]
+    memory_required_mib: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Derived: the least host memory that admits every configured "
+                "slot at the live sandbox memory cap. Null when unknown."
+            ),
+        ),
+    ]
+    memory_note: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "When memory admits fewer slots than configured: how many, and "
+                "the host memory needed for one slot (if none) and for all."
+            ),
+        ),
+    ]
+    unusable_slots: Annotated[
+        int,
+        Field(ge=0, description="Configured slots whose `state` is `unusable`."),
+    ] = 0
+    slots: Annotated[
+        list[ValidatorCapacitySlot],
+        Field(
+            default_factory=list,
+            description="Every configured slot with its state or unusable reason.",
+        ),
+    ]
 
 
 class RelayLaneSaturation(BaseModel):
@@ -182,7 +274,42 @@ class ValidatorCapacitySummary(BaseModel):
             description="Live validators with at least one serviceable slot.",
         ),
     ]
+    configured_slots: Annotated[
+        int,
+        Field(ge=0, description="Sum of every live validator's configured slots."),
+    ] = 0
+    memory_admitted_slots: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Sum over live validators that announced memory of "
+                "`min(memory_admitted_slots, configured_slots)`: the most "
+                "slots this fleet's hosts can run at the live cap, whatever "
+                "`configured_slots` says."
+            ),
+        ),
+    ] = 0
     serviceable_slots: Annotated[int, Field(ge=0)]
+    unusable_slots_by_reason: Annotated[
+        dict[str, int],
+        Field(
+            default_factory=dict,
+            description=(
+                "Configured slots that cannot take a ticket, by reason, across "
+                "every live validator. Claimed slots are never counted here."
+            ),
+        ),
+    ]
+    sandbox_memory_limit_mib: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description=(
+                "The live per-harness memory cap `memory_admitted_slots` uses."
+            ),
+        ),
+    ]
     claimed_slots: Annotated[int, Field(ge=0)]
     active_assignment_count: Annotated[int, Field(ge=0)]
     estimated_remaining_slot_minutes: Annotated[

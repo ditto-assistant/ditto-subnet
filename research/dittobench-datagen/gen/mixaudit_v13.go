@@ -93,6 +93,9 @@ func v13MixFamily(c ArtifactCase, stories map[string]mixFamily) (mixFamily, bool
 	if f, ok := stories[c.ID+"/"+c.QuestionType]; ok {
 		return f, true
 	}
+	if f, ok := v19BreakerMix[c.QuestionType]; ok {
+		return f, true
+	}
 	switch c.QuestionType {
 	case universe.V13ProgramQuestionType, universe.V13PersonalQuestionType, universe.V13EnterpriseQuestionType:
 		if c.V10Provenance == nil || c.V10Provenance.Program.Op == "" {

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ditto.api_models.validator import HarnessMemoryTelemetry
+
 
 class ValidatorError(Exception):
     """Base class for validator-worker failures."""
@@ -44,6 +46,9 @@ class DittobenchError(ValidatorError):
         super().__init__(*args)
         self.code = code
         self.container_log_tail = container_log_tail
+        # SN-500: the run's harness memory, when the scorer measured it. Set
+        # after the raise by the client, which knows the run it came from.
+        self.harness_memory: HarnessMemoryTelemetry | None = None
 
 
 class ValidatorInfrastructureError(DittobenchError):
@@ -116,10 +121,11 @@ class LeaseRevokedError(ValidatorError):
 
 
 class SandboxOomError(DittobenchError):
-    """The harness reached its own published memory cap on a healthy host.
+    """The harness reached its own memory cap: a failed agent run.
 
-    Raised only for the scorer's ``harness_oom`` verdict (OOM kill, cgroup peak
-    at the cap, host MemAvailable above the published floor). An artifact-
+    Raised only for the scorer's ``harness_oom`` verdict: an OOM kill proven by
+    the harness cgroup's own ``memory.events`` ``oom``, or a peak at the cap
+    while host MemAvailable stayed above the published floor. An artifact-
     specific terminal outcome, not evidence that the validator's shared
     infrastructure is unhealthy: the worker hands the lease back as
     ``sandbox_oom`` with detail ``harness_oom`` and continues with another
@@ -138,6 +144,20 @@ class PlatformInfrastructureError(PlatformError):
 
 class PlatformHeartbeatRequiredError(PlatformError):
     """Platform refused a work claim (428) until it sees a fresh heartbeat."""
+
+
+class PlatformRetryLaterError(PlatformError):
+    """Platform refused a work claim (503) for now and said when to ask again.
+
+    Raised only for a 503 that carries a delta-seconds ``Retry-After`` (for
+    example while Platform prepares a bench v16+ seed's dueling slice).
+    ``retry_after_seconds`` is already bounded by the client; a 503 without a
+    usable ``Retry-After`` stays a plain :class:`PlatformError`.
+    """
+
+    def __init__(self, message: str, *, retry_after_seconds: float) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 class WeightReceiptConflictError(PlatformError):
@@ -240,6 +260,12 @@ and loses the whole hand-back, turning a diagnosis into a silent expiry.
 Duplicated rather than imported to keep this module dependency-free, exactly as
 :data:`FAILURE_DETAIL_MAX_LENGTH` is. The wire model is the enforcing side.
 """
+
+
+def harness_memory_of(error: BaseException) -> HarnessMemoryTelemetry | None:
+    """The failed run's harness memory, or ``None`` when none was measured."""
+    memory = getattr(error, "harness_memory", None)
+    return memory if isinstance(memory, HarnessMemoryTelemetry) else None
 
 
 def container_log_tail(error: BaseException) -> str | None:

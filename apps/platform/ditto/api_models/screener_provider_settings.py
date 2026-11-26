@@ -7,7 +7,11 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-ScreenerCapacityProvider = Literal["hetzner", "targon", "gcp"]
+ScreenerCapacityProvider = Literal["hetzner", "aws", "targon", "gcp"]
+
+# Providers whose enrolled node can be the audited primary in front of GCE
+# overflow. Hetzner is the fixed-cost host; AWS is the on-demand EC2 host.
+PRIMARY_SCREENER_PROVIDERS: tuple[ScreenerCapacityProvider, ...] = ("hetzner", "aws")
 
 
 class ScreenerProviderSettings(BaseModel):
@@ -15,8 +19,8 @@ class ScreenerProviderSettings(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    # An unconfigured installation has no enrolled Hetzner node. The audited
-    # production revision selects Hetzner primary with GCE fallback explicitly.
+    # An unconfigured installation has no enrolled primary node. The audited
+    # production revision selects the primary with GCE fallback explicitly.
     runtime_provider_priority: tuple[ScreenerCapacityProvider, ...] = ("gcp",)
     source_review_provider_priority: tuple[ScreenerCapacityProvider, ...] = ("gcp",)
     build_provider_priority: tuple[ScreenerCapacityProvider, ...] = ("gcp",)
@@ -55,11 +59,16 @@ class ScreenerProviderSettings(BaseModel):
                 ),
                 ("build_provider_priority", self.build_provider_priority),
             ):
-                if providers[0] != "hetzner" or "gcp" not in providers:
+                if providers[0] not in PRIMARY_SCREENER_PROVIDERS:
                     raise ValueError(
-                        f"{field} must be Hetzner-first with GCP available "
-                        "when overflow is enabled"
+                        f"{field} must be primary-first (Hetzner or AWS) with "
+                        "GCP available when overflow is enabled"
                     )
+            if self.primary_provider() is None:
+                raise ValueError(
+                    "every lane must name the same primary provider first "
+                    "when overflow is enabled"
+                )
         return self
 
     def all_lanes_gcp_only(self) -> bool:
@@ -69,12 +78,17 @@ class ScreenerProviderSettings(BaseModel):
             and self.build_provider_priority == ("gcp",)
         )
 
-    def all_lanes_hetzner_first(self) -> bool:
-        return (
-            self.runtime_provider_priority[0] == "hetzner"
-            and self.source_review_provider_priority[0] == "hetzner"
-            and self.build_provider_priority[0] == "hetzner"
-        )
+    def primary_provider(self) -> ScreenerCapacityProvider | None:
+        """The primary provider every lane names first, if they agree on one."""
+        first = {
+            self.runtime_provider_priority[0],
+            self.source_review_provider_priority[0],
+            self.build_provider_priority[0],
+        }
+        if len(first) != 1:
+            return None
+        (provider,) = first
+        return provider if provider in PRIMARY_SCREENER_PROVIDERS else None
 
 
 class ScreenerProviderSettingsRevision(BaseModel):

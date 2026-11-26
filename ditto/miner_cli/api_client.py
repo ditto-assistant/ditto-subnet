@@ -92,7 +92,10 @@ from ditto.miner_cli.errors import (
     NameClaimRejectedError,
     PaymentAmountMismatchError,
     PaymentRecoveryExpiredError,
+    PaymentReplayedError,
     PreCheckRejectedError,
+    ReadmissionPaymentRejectedError,
+    ReadmissionUnavailableError,
     SubmissionCooldownError,
     TransientApiError,
     UploadAgentRejectedError,
@@ -118,6 +121,7 @@ _ERROR_CODE_HOTKEY_AGENT_NOT_FOUND = 1201
 _ERROR_CODE_SUBMISSION_COOLDOWN = 1105
 _ERROR_CODE_PAYMENT_AMOUNT_MISMATCH = 3203
 _ERROR_CODE_PAYMENT_RECOVERY_EXPIRED = 3208
+_ERROR_CODE_PAYMENT_REPLAYED = 3207
 # Generator fee refusals the same proof can never overcome. 3201 (extrinsic not
 # found) is left out: an archive node that has not caught up yet reports it.
 _DEFINITIVE_GENERATOR_PAYMENT_CODES = frozenset(
@@ -298,6 +302,11 @@ class ApiClient:
             raise PaymentRecoveryExpiredError(
                 _format_error(response, prefix="upload-check")
             )
+        if (
+            response.status_code == 402
+            and envelope.get("error_code") == _ERROR_CODE_PAYMENT_REPLAYED
+        ):
+            raise PaymentReplayedError(_format_error(response, prefix="upload-check"))
         if response.status_code != 200:
             raise PreCheckRejectedError(_format_error(response, prefix="upload-check"))
         return UploadCheckResponse.model_validate(response.json())
@@ -410,6 +419,50 @@ class ApiClient:
             raise AttestationRejectedError(_format_error(response, prefix="owner-link"))
         return OwnerLinkResponse.model_validate(response.json())
 
+    # ---- /readmission (SN-485) ------------------------------------------
+
+    def post_readmission_check(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Pre-payment readmission check; ``ok=False`` is returned, not raised.
+
+        Raises :class:`ReadmissionUnavailableError` on a Platform without the
+        endpoint, so nothing is ever paid against one.
+        """
+        response = self._request("POST", "/api/v1/readmission/check", json=body)
+        if response.status_code == 404:
+            raise ReadmissionUnavailableError(
+                "this Platform does not offer readmission yet; no payment was sent"
+            )
+        if response.status_code in _RETRYABLE_UPLOAD_STATUS_CODES:
+            raise TransientApiError(_format_error(response, prefix="readmission check"))
+        if response.status_code != 200:
+            raise ApiResponseError(_format_error(response, prefix="readmission check"))
+        result: dict[str, Any] = response.json()
+        return result
+
+    def post_readmission_commit(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Commit a paid readmission: admitted, or credited when refused after
+        payment. A definitive proof refusal raises
+        :class:`ReadmissionPaymentRejectedError`."""
+        response = self._request(
+            "POST",
+            "/api/v1/readmission/commit",
+            json=body,
+            timeout=UPLOAD_TIMEOUT_S,
+        )
+        if response.status_code != 200:
+            message = _format_error(response, prefix="readmission")
+            if (
+                response.status_code == 402
+                and _safe_envelope(response).get("error_code")
+                in _DEFINITIVE_GENERATOR_PAYMENT_CODES
+            ):
+                raise ReadmissionPaymentRejectedError(message)
+            if response.status_code in _RETRYABLE_UPLOAD_STATUS_CODES:
+                raise TransientApiError(message)
+            raise ApiResponseError(message)
+        result: dict[str, Any] = response.json()
+        return result
+
     # ---- /generator (generator competition, shadow) ---------------------
 
     def post_generator_submission(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -468,6 +521,56 @@ class ApiClient:
         response = self._request("GET", "/api/v1/generator/board")
         if response.status_code != 200:
             raise ApiResponseError(_format_error(response, prefix="generator board"))
+        result: dict[str, Any] = response.json()
+        return result
+
+    # ---- /model-context (CPM competition, shadow) ------------------------
+
+    def get_model_context_upload_terms(
+        self, *, hotkey: str | None = None
+    ) -> dict[str, Any]:
+        params = {"hotkey": hotkey} if hotkey is not None else None
+        response = self._request(
+            "GET", "/api/v1/model-context/upload-terms", params=params
+        )
+        if response.status_code != 200:
+            raise ApiResponseError(
+                _format_error(response, prefix="model-context upload terms")
+            )
+        result: dict[str, Any] = response.json()
+        return result
+
+    def post_model_context_submission(self, body: dict[str, Any]) -> dict[str, Any]:
+        response = self._request("POST", "/api/v1/model-context/submissions", json=body)
+        if response.status_code != 200:
+            message = _format_error(response, prefix="model-context submit")
+            if response.status_code in _RETRYABLE_UPLOAD_STATUS_CODES:
+                raise TransientApiError(message)
+            raise ApiResponseError(message)
+        result: dict[str, Any] = response.json()
+        return result
+
+    def list_model_context_submissions(
+        self, *, hotkey: str, limit: int = 25
+    ) -> dict[str, Any]:
+        response = self._request(
+            "GET",
+            "/api/v1/model-context/submissions",
+            params={"hotkey": hotkey, "limit": limit},
+        )
+        if response.status_code != 200:
+            raise ApiResponseError(
+                _format_error(response, prefix="model-context submissions")
+            )
+        result: dict[str, Any] = response.json()
+        return result
+
+    def get_model_context_board(self) -> dict[str, Any]:
+        response = self._request("GET", "/api/v1/model-context/board")
+        if response.status_code != 200:
+            raise ApiResponseError(
+                _format_error(response, prefix="model-context board")
+            )
         result: dict[str, Any] = response.json()
         return result
 

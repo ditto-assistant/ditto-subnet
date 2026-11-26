@@ -22,16 +22,10 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.api_models.screener_review_settings import (
-    ScreenerReviewSettings,
-    policy_manifest_digest,
-)
 from ditto.api_server.dependencies import get_session
 from ditto.db.models import (
     Agent,
-    BenchmarkRollout,
     Score,
-    ScoredPolicyRescreenRelease,
     ScoredScreeningSnapshotRestoration,
     ScreenerHeartbeat,
     ScreeningAttempt,
@@ -39,7 +33,6 @@ from ditto.db.models import (
 from ditto.db.queries.screener_policy_activation import (
     insert_screener_policy_activation,
 )
-from ditto.db.queries.screening_review_deadlines import POLICY_V13_DOCUMENT_DIGEST
 from ditto_screening_protocol import (
     SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
     SCREENING_FLOOR_POLICY_VERSION,
@@ -53,122 +46,6 @@ _HEADERS = {"Authorization": f"Bearer {_ADMIN_TOKEN}"}
 _URL = "/api/v1/admin/screener-policy-activation"
 _CONFIRMATION = "SCHEDULE SCREENER POLICY ACTIVATION"
 _RESTORE_CONFIRMATION = "RESTORE SCORED SCREENING SNAPSHOT"
-_ADVANCE_CONFIRMATION = "ADVANCE SCORED POLICY RESCREEN"
-_CLOCK_URL = f"{_URL}/review-clock"
-
-
-async def test_v13_review_clock_is_default_off_and_schedule_is_guarded(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    activation_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    _install(app, activation_maker)
-    assert (await client.get(_CLOCK_URL)).status_code == 401
-    empty = await client.get(_CLOCK_URL, headers=_HEADERS)
-    assert empty.status_code == 200
-    assert empty.json()["latest"] is None
-    assert empty.json()["finalizer_state"] == "not_configured"
-    public_empty = await client.get("/api/v1/public/v13-review-clock")
-    assert public_empty.status_code == 200
-    assert public_empty.headers["cache-control"] == "no-store, max-age=0"
-    assert public_empty.json()["due_revision"] is None
-    assert public_empty.json()["revisions"] == []
-    settings = ScreenerReviewSettings()
-    body = {
-        "expected_revision": 0,
-        "policy_version": 13,
-        "policy_document_digest": POLICY_V13_DOCUMENT_DIGEST,
-        "policy_manifest_digest": policy_manifest_digest(
-            settings.policy_manifest_profile, settings.policy_manifest_rotation_id
-        ),
-        "activate_at": _future(2),
-        "window_seconds": 7200,
-        "reason": "published first-claim review window",
-        "actor": "operator@example.com",
-        "confirmation": "SCHEDULE V13 REVIEW CLOCK",
-    }
-    assert (await client.post(_CLOCK_URL, json=body)).status_code == 401
-    wrong_digest = await client.post(
-        _CLOCK_URL,
-        headers=_HEADERS,
-        json={**body, "policy_document_digest": "0" * 64},
-    )
-    assert wrong_digest.status_code == 409
-    too_soon = await client.post(
-        _CLOCK_URL,
-        headers=_HEADERS,
-        json={**body, "activate_at": _future(0.5)},
-    )
-    assert too_soon.status_code == 422
-    inside_publication_margin = await client.post(
-        _CLOCK_URL,
-        headers=_HEADERS,
-        json={**body, "activate_at": _future(1.02)},
-    )
-    assert inside_publication_margin.status_code == 422
-    scheduled = await client.post(_CLOCK_URL, headers=_HEADERS, json=body)
-    assert scheduled.status_code == 200, scheduled.text
-    latest = scheduled.json()["latest"]
-    assert latest["revision"] == 1
-    assert latest["policy_document_digest"] == POLICY_V13_DOCUMENT_DIGEST
-    assert latest["policy_manifest_digest"] == body["policy_manifest_digest"]
-    assert latest["start_event"] == "first-v13-screening-claim"
-    assert latest["window_seconds"] == 7200
-    assert latest["state"] == "pending"
-    public_scheduled = await client.get("/api/v1/public/v13-review-clock")
-    assert public_scheduled.status_code == 200
-    assert public_scheduled.headers["cache-control"] == "no-store, max-age=0"
-    public_body = public_scheduled.json()
-    assert public_body["due_revision"] is None
-    assert public_body["revisions"][0]["window_seconds"] == 7200
-    assert public_body["revisions"][0]["state"] == "pending"
-    assert "actor" not in public_body["revisions"][0]
-    assert "reason" not in public_body["revisions"][0]
-    stale = await client.post(_CLOCK_URL, headers=_HEADERS, json=body)
-    assert stale.status_code == 409
-
-
-async def test_v13_clock_rechecks_database_notice_after_schedule_lock(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    activation_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install(app, activation_maker)
-    settings = ScreenerReviewSettings()
-    activate_at = datetime.now(UTC) + timedelta(hours=2)
-
-    async def delayed_database_clock(session: AsyncSession) -> datetime:
-        assert session.in_transaction()
-        # The request initially has two hours of notice, but loses almost
-        # all of it while waiting for the serialized write boundary.
-        return activate_at - timedelta(minutes=30)
-
-    monkeypatch.setattr(
-        "ditto.api_server.endpoints.admin_screener_policy_activation._review_clock_database_now",
-        delayed_database_clock,
-    )
-    response = await client.post(
-        _CLOCK_URL,
-        headers=_HEADERS,
-        json={
-            "expected_revision": 0,
-            "policy_version": 13,
-            "policy_document_digest": POLICY_V13_DOCUMENT_DIGEST,
-            "policy_manifest_digest": policy_manifest_digest(
-                settings.policy_manifest_profile, settings.policy_manifest_rotation_id
-            ),
-            "activate_at": activate_at.isoformat(),
-            "window_seconds": 7200,
-            "reason": "publish a durable first-claim window",
-            "actor": "operator@example.com",
-            "confirmation": "SCHEDULE V13 REVIEW CLOCK",
-        },
-    )
-    assert response.status_code == 422
-    schedule = await client.get(_CLOCK_URL, headers=_HEADERS)
-    assert schedule.status_code == 200
-    assert schedule.json()["latest"] is None
 
 
 @pytest.fixture
@@ -257,173 +134,48 @@ class TestDefaultAndRoundTrip:
         assert body["latest"] is None
         assert body["revisions"] == []
 
-    async def test_pending_schedule_keeps_the_floor_version(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        activation_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, activation_maker)
-        response = await client.post(_URL, json=_payload(), headers=_HEADERS)
-        assert response.status_code == 200, response.text
-        body = response.json()
-        # A future activation is notice, not activation: the queue still
-        # requires the floor version until activate_at passes.
-        assert body["effective_policy_version"] == SCREENING_FLOOR_POLICY_VERSION
-        assert body["latest"]["state"] == "pending"
-        assert body["latest"]["revision"] == 1
-        assert (
-            body["latest"]["target_policy_version"]
-            == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
-        )
-        assert body["latest"]["canary_only"] is False
 
-    async def test_history_is_newest_first(
+class TestRetiredWrites:
+    """Source review is retired (2026-11-07): nothing schedules a review policy."""
+
+    @pytest.mark.parametrize("path", ["", "/advance-scored-rescreen", "/review-clock"])
+    async def test_scheduling_writes_answer_gone(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        activation_maker: async_sessionmaker[AsyncSession],
+        path: str,
+    ) -> None:
+        _install(app, activation_maker)
+        response = await client.post(f"{_URL}{path}", json=_payload(), headers=_HEADERS)
+        assert response.status_code == 410, response.text
+        assert "source review is retired" in response.text
+        body = (await client.get(_URL, headers=_HEADERS)).json()
+        assert body["latest"] is None
+        assert body["revisions"] == []
+
+    async def test_history_written_before_the_retirement_stays_readable(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         activation_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         _install(app, activation_maker)
-        first = await client.post(_URL, json=_payload(), headers=_HEADERS)
-        assert first.status_code == 200
-        second = await client.post(
-            _URL,
-            json=_payload(
-                expected_revision=1,
-                rescreen_scored=False,
-                activate_at=_future(hours=48.0),
-            ),
-            headers=_HEADERS,
-        )
-        assert second.status_code == 200, second.text
-        body = second.json()
+        async with activation_maker() as session, session.begin():
+            for revision in (1, 2):
+                await insert_screener_policy_activation(
+                    session,
+                    parent_revision=revision - 1,
+                    target_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
+                    activate_at=datetime.now(UTC) + timedelta(hours=24 * revision),
+                    rescreen_scored=revision == 1,
+                    canary_only=False,
+                    reason="historical schedule",
+                    actor="operator@example.com",
+                )
+        body = (await client.get(_URL, headers=_HEADERS)).json()
         assert [r["revision"] for r in body["revisions"]] == [2, 1]
         assert body["revisions"][0]["rescreen_scored"] is False
-
-
-class TestWriteGuards:
-    async def test_confirmation_phrase_is_enforced(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        activation_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, activation_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(confirmation="APPLY QUEUE POLICY SETTINGS"),
-            headers=_HEADERS,
-        )
-        assert response.status_code == 409
-        assert _CONFIRMATION in response.json()["message"]
-
-    async def test_past_activate_at_is_rejected(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        activation_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, activation_maker)
-        past = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
-        response = await client.post(
-            _URL, json=_payload(activate_at=past), headers=_HEADERS
-        )
-        assert response.status_code == 422
-        assert "future" in response.json()["message"]
-
-    async def test_target_at_the_floor_is_accepted_for_incident_rollback(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        activation_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, activation_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(
-                target_policy_version=SCREENING_FLOOR_POLICY_VERSION,
-                rescreen_scored=False,
-            ),
-            headers=_HEADERS,
-        )
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["latest"]["target_policy_version"] == SCREENING_FLOOR_POLICY_VERSION
-        assert body["latest"]["rescreen_scored"] is False
-
-    async def test_target_below_the_floor_is_rejected(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        activation_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, activation_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(target_policy_version=SCREENING_FLOOR_POLICY_VERSION - 1),
-            headers=_HEADERS,
-        )
-        assert response.status_code == 422
-
-    async def test_target_above_the_build_is_rejected(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        activation_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, activation_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(target_policy_version=SCREENING_POLICY_VERSION + 1),
-            headers=_HEADERS,
-        )
-        assert response.status_code == 422
-        assert "implements" in response.json()["message"]
-
-    async def test_a_target_above_the_published_ceiling_is_not_activation_ready(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        activation_maker: async_sessionmaker[AsyncSession],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        # The ceiling guard is checked separately from the build's implemented
-        # version: distributed-but-incomplete policy code must never be
-        # presented as activation-ready even when the build implements it.
-        from ditto.api_server.endpoints import admin_screener_policy_activation
-
-        monkeypatch.setattr(
-            admin_screener_policy_activation,
-            "SCREENING_ACTIVATION_CEILING_POLICY_VERSION",
-            SCREENING_POLICY_VERSION - 1,
-        )
-        _install(app, activation_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(target_policy_version=SCREENING_POLICY_VERSION),
-            headers=_HEADERS,
-        )
-
-        assert response.status_code == 422
-        assert "not activation-ready" in response.json()["message"]
-        assert str(SCREENING_POLICY_VERSION - 1) in response.text
-
-    async def test_stale_expected_revision_conflicts(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        activation_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, activation_maker)
-        assert (
-            await client.post(_URL, json=_payload(), headers=_HEADERS)
-        ).status_code == 200
-        response = await client.post(
-            _URL, json=_payload(expected_revision=0), headers=_HEADERS
-        )
-        assert response.status_code == 409
-        assert "refresh" in response.json()["message"]
 
 
 class TestResolverDueActivation:
@@ -745,229 +497,6 @@ class TestRestoreScoredSnapshot:
         assert "expected 1, current 0" in response.json()["message"]
 
 
-class TestScoredPolicyRescreenCheckpoint:
-    async def test_isolated_canary_requires_an_immutable_l4_enforce_revision(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        activation_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """No V11 canary may escape the global review-off posture unaudited."""
-        _install(app, activation_maker)
-        async with activation_maker() as session:
-            activation = await insert_screener_policy_activation(
-                session,
-                parent_revision=0,
-                target_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
-                activate_at=datetime.now(UTC) - timedelta(minutes=5),
-                rescreen_scored=True,
-                canary_only=True,
-                reason="test canary must bind immutable L4-enforce settings",
-                actor="test",
-            )
-            await session.commit()
-
-        response = await client.post(
-            f"{_URL}/advance-scored-rescreen",
-            headers=_HEADERS,
-            json={
-                "expected_activation_revision": activation.revision,
-                "expected_agent_id": str(uuid4()),
-                "reason": "do not release a canary without a fixed L4 posture",
-                "confirmation": _ADVANCE_CONFIRMATION,
-            },
-        )
-
-        assert response.status_code == 422
-        assert "immutable L4-enforce review settings" in response.json()["message"]
-
-    async def test_fills_a_bounded_top_down_window_without_changing_the_board(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        activation_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """A V11 policy activation cannot de-list the V10 board as a batch."""
-        _install(app, activation_maker)
-        now = datetime.now(UTC)
-        first_id, second_id, third_id = uuid4(), uuid4(), uuid4()
-        async with activation_maker() as session:
-            activation = await insert_screener_policy_activation(
-                session,
-                parent_revision=0,
-                target_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
-                activate_at=now - timedelta(minutes=5),
-                rescreen_scored=True,
-                reason="canary v11 scored policy rollout retains the v10 board",
-                actor="test",
-            )
-            session.add(
-                BenchmarkRollout(
-                    rollout_id=uuid4(),
-                    from_version=11,
-                    desired_version=12,
-                    status="activated",
-                    cohort_size=5,
-                    created_at=now - timedelta(days=1),
-                    activated_at=now - timedelta(hours=1),
-                )
-            )
-            for agent_id, name, composite in (
-                (first_id, "first", 0.9),
-                (second_id, "second", 0.8),
-                (third_id, "third", 0.7),
-            ):
-                session.add(
-                    Agent(
-                        agent_id=agent_id,
-                        miner_hotkey=f"5HK-rescreen-{name}",
-                        name=name,
-                        sha256=("ab" if name == "first" else "cd") * 32,
-                        status=AgentStatus.SCORED,
-                        screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
-                    )
-                )
-                for index in range(3):
-                    session.add(
-                        Score(
-                            agent_id=agent_id,
-                            validator_hotkey=f"5Validator-{name}-{index}",
-                            bench_version=12,
-                            run_id=f"run-{name}-{index}",
-                            signature=None,
-                            seed=42,
-                            composite=composite,
-                            tool_mean=composite,
-                            memory_mean=composite,
-                            median_ms=100,
-                            n=10,
-                            details=None,
-                            generated_at=now - timedelta(hours=2),
-                        )
-                    )
-            await session.commit()
-
-        checkpoint = await client.get(f"{_URL}/scored-rescreen", headers=_HEADERS)
-        assert checkpoint.status_code == 200, checkpoint.text
-        assert checkpoint.json() == {
-            "activation_revision": activation.revision,
-            "target_policy_version": SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
-            "current": None,
-            "active": [],
-            "next_agent_id": str(first_id),
-            "next_position": 1,
-        }
-
-        first_release = {
-            "expected_activation_revision": activation.revision,
-            "expected_agent_id": str(first_id),
-            "max_active_releases": 2,
-            "reason": "release the first v11 result for operator inspection",
-            "confirmation": _ADVANCE_CONFIRMATION,
-        }
-        response = await client.post(
-            f"{_URL}/advance-scored-rescreen",
-            headers=_HEADERS,
-            json=first_release,
-        )
-        assert response.status_code == 200, response.text
-        assert response.json()["current"] == {
-            "activation_revision": activation.revision,
-            "target_policy_version": SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
-            "agent_id": str(first_id),
-            "position": 1,
-            "state": "pending",
-            "attempt_id": None,
-            "review_settings_revision": None,
-        }
-        assert [row["agent_id"] for row in response.json()["active"]] == [
-            str(first_id),
-            str(second_id),
-        ]
-        # The rollout window is full. The original V10 scores remain eligible
-        # while the two V11 attestations wait, and no whole-board requeue can
-        # be smuggled through a second checkpoint call.
-        blocked = await client.post(
-            f"{_URL}/advance-scored-rescreen",
-            headers=_HEADERS,
-            json=first_release,
-        )
-        assert blocked.status_code == 409
-        async with activation_maker() as session:
-            first = await session.get(Agent, first_id)
-            second = await session.get(Agent, second_id)
-            third = await session.get(Agent, third_id)
-            assert first is not None and first.status == AgentStatus.SCORED
-            assert second is not None and second.status == AgentStatus.SCORED
-            assert third is not None and third.status == AgentStatus.SCORED
-            release = await session.scalar(
-                select(ScoredPolicyRescreenRelease).where(
-                    ScoredPolicyRescreenRelease.agent_id == first_id
-                )
-            )
-            assert release is not None
-            release.state = "terminal"
-            first.screening_policy_version = SCREENING_POLICY_VERSION
-            await session.commit()
-
-        # A terminal verdict frees exactly one slot. The next explicit
-        # checkpoint backfills it with the next ranked agent, not every stale
-        # score on the board.
-        next_checkpoint = await client.get(f"{_URL}/scored-rescreen", headers=_HEADERS)
-        assert next_checkpoint.status_code == 200, next_checkpoint.text
-        assert next_checkpoint.json()["current"]["agent_id"] == str(second_id)
-        assert [row["agent_id"] for row in next_checkpoint.json()["active"]] == [
-            str(second_id)
-        ]
-        assert next_checkpoint.json()["next_agent_id"] == str(third_id)
-        assert next_checkpoint.json()["next_position"] == 3
-
-        refill = await client.post(
-            f"{_URL}/advance-scored-rescreen",
-            headers=_HEADERS,
-            json={
-                **first_release,
-                "expected_agent_id": str(third_id),
-            },
-        )
-        assert refill.status_code == 200, refill.text
-        assert [row["agent_id"] for row in refill.json()["active"]] == [
-            str(second_id),
-            str(third_id),
-        ]
-
-        # A non-verdict keeps the retained score on the board but stops any
-        # further window growth until an operator explicitly retries that row.
-        async with activation_maker() as session:
-            release = await session.scalar(
-                select(ScoredPolicyRescreenRelease).where(
-                    ScoredPolicyRescreenRelease.agent_id == second_id
-                )
-            )
-            assert release is not None
-            release.state = "paused"
-            await session.commit()
-
-        paused = await client.post(
-            f"{_URL}/advance-scored-rescreen",
-            headers=_HEADERS,
-            json={**first_release, "expected_agent_id": str(third_id)},
-        )
-        assert paused.status_code == 409
-        retry = await client.post(
-            f"{_URL}/advance-scored-rescreen",
-            headers=_HEADERS,
-            json={
-                **first_release,
-                "expected_agent_id": str(second_id),
-                "retry_paused": True,
-            },
-        )
-        assert retry.status_code == 200, retry.text
-        assert retry.json()["current"]["agent_id"] == str(second_id)
-        assert retry.json()["current"]["state"] == "pending"
-
-
 def _fleet_heartbeat(
     instance_id: str,
     *,
@@ -1085,9 +614,9 @@ class TestFleetReadiness:
         response = await client.get(_URL, headers=_HEADERS)
         assert response.status_code == 200, response.text
         fleet = response.json()["fleet"]
-        # Every worker announces builtin 13 and the published ceiling is 13, so
-        # the board presents v13 as safe to schedule.
-        assert fleet["safe_to_schedule_up_to"] == 13
+        # Every worker announces builtin == SCREENING_POLICY_VERSION and the
+        # ceiling matches, so the board presents that version as safe to schedule.
+        assert fleet["safe_to_schedule_up_to"] == SCREENING_POLICY_VERSION
         assert (
             fleet["safe_to_schedule_up_to"]
             == SCREENING_ACTIVATION_CEILING_POLICY_VERSION

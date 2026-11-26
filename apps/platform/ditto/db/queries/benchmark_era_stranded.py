@@ -39,7 +39,7 @@ from ditto.db.models import (
 )
 from ditto.db.queries.benchmark_admission import (
     admission_rollout_for_active_version,
-    benchmark_admission_predicate,
+    previous_era_scored_predicate,
     validator_queue_admission_predicate,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version
@@ -132,12 +132,6 @@ async def stranded_previous_era_agents(
         .group_by(Score.agent_id)
         .subquery()
     )
-    active_score = (
-        select(Score.agent_id)
-        .where(Score.agent_id == Agent.agent_id, Score.bench_version == active)
-        .correlate(Agent)
-        .exists()
-    )
     active_dataset = (
         select(BenchmarkDataset.agent_id)
         .where(
@@ -167,12 +161,14 @@ async def stranded_previous_era_agents(
         .correlate(Agent, payment)
         .scalar_subquery()
     )
+    # The earliest pass of any kind: every admission has been build-only since
+    # source review was retired (2026-11-07), and a later rebuild never moves
+    # the minimum.
     first_pass = (
         select(func.min(ScreeningAttempt.finished_at))
         .where(
             ScreeningAttempt.agent_id == Agent.agent_id,
             ScreeningAttempt.status == "passed",
-            ScreeningAttempt.build_only.is_(False),
         )
         .correlate(Agent)
         .scalar_subquery()
@@ -197,11 +193,9 @@ async def stranded_previous_era_agents(
         )
         .join(prev_scores, prev_scores.c.agent_id == Agent.agent_id)
         .outerjoin(payment, payment.agent_id == Agent.agent_id)
-        .where(
-            Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
-            ~active_score,
-            ~benchmark_admission_predicate(rollout=rollout, bench_version=active),
-        )
+        # The shared predicate keeps this listing and the public
+        # ``era_changed`` status on one population.
+        .where(previous_era_scored_predicate(rollout=rollout, bench_version=active))
         .order_by(
             prev_scores.c.median_composite.desc().nulls_last(),
             Agent.created_at.desc(),

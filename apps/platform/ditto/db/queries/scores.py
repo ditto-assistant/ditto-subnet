@@ -28,16 +28,20 @@ from sqlalchemy import (
     column,
     func,
     literal,
+    literal_column,
     null,
     or_,
     select,
     true,
     tuple_,
+    type_coerce,
     union,
 )
 from sqlalchemy import cast as sql_cast
-from sqlalchemy.dialects.postgresql import JSONB, JSONPATH
+from sqlalchemy.dialects.postgresql import JSONB, JSONPATH, aggregate_order_by
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
+from sqlalchemy.orm import defer
+from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.orm.util import AliasedClass
 
 from ditto.api_models.agent_status import AgentStatus
@@ -50,6 +54,7 @@ from ditto.api_models.confirmation_bundles import (
 from ditto.db.errors import IntegrityError as DbIntegrityError
 from ditto.db.models import (
     Agent,
+    AgentKingship,
     ConfirmationBundle,
     ConfirmationBundleSettingsRevision,
     ConfirmationBundleSubject,
@@ -69,9 +74,10 @@ from ditto.score_order import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.sql.selectable import LateralFromClause
 
 
 # A run must administer the *full* benchmark to be ranked on the leaderboard and
@@ -470,6 +476,20 @@ class LedgerRow:
     fold reads). A v16 row without it never ranks or pays."""
     dueling: dict | None = None
     """Bench v16+: the representative score's signed ``details.dueling``."""
+    superseded_rerun: bool = False
+    """A newer finalized run of this exact artifact exists in the same owner family.
+
+    ``--allow-identical-rescore`` buys another seeded evaluation of the same
+    tarball as a separate ``agent_id``. If every such run competed on score, the
+    owner would be represented by the luckiest draw, and paying to re-roll would
+    be a lottery (SN-485). Instead the newest finalized run of one
+    ``(owner root, sha256)`` represents that content, and the older runs are
+    demoted behind every current row of the family
+    (:func:`~ditto.score_order.owner_family_key`). Distinct versions still
+    compete on score as before. Only a ranked run supersedes a ranked run: a
+    0.000, partial-profile or shadow rerun is a failed run, not a new draw.
+    Internal only. It never appears on a wire model.
+    """
 
 
 @dataclass(frozen=True)
@@ -1252,11 +1272,7 @@ async def get_submission_scores(
     # Every version's rows, not just the active bench version: the public record
     # covers older + current runs (each row is version-labeled downstream), and
     # the submissions index batch-fetch is unfiltered the same way.
-    scores = list(
-        (await session.execute(select(Score).where(Score.agent_id == agent_id)))
-        .scalars()
-        .all()
-    )
+    scores = await list_public_agent_scores(session, agent_id=agent_id)
     last_scored_at = _as_utc(max(s.generated_at for s in scores)) if scores else None
     return SubmissionRow(
         agent_id=agent.agent_id,
@@ -1270,6 +1286,124 @@ async def get_submission_scores(
         last_scored_at=last_scored_at,
         scores=sorted(scores, key=lambda s: s.validator_hotkey),
     )
+
+
+PUBLIC_CASE_RESULT_KEYS: tuple[str, ...] = (
+    "category",
+    "kind",
+    "score",
+    "correct",
+    "latency_ms",
+    "notes",
+)
+"""The ``details.per_case`` keys the public case view reads.
+
+Keep this aligned with ``endpoints.public._safe_case_results``: it is the
+whitelist that function publishes, and the public score projection below keeps
+only these keys of each case."""
+
+
+def public_score_details_projection() -> tuple[LateralFromClause, ColumnElement[Any]]:
+    """``scores.details`` with each ``per_case`` entry cut to the public keys.
+
+    Returns a LATERAL source to join onto ``scores`` and the projected column.
+
+    ``per_case`` is almost all of a score's telemetry: on bench v15-v17 it is
+    about 1.8 MB of JSON per row, most of it each case's tool ``catalog``, while
+    the public pages publish six small fields per case. Decoding the whole blob
+    in the API process for every public score read is what saturated it, so
+    PostgreSQL builds the reduced document instead. Every other top-level key is
+    returned unchanged, so the public projections that read them see the same
+    values. Non-object cases and non-array or absent ``per_case`` values pass
+    through as they are; case order is preserved.
+
+    Each reference to a TOASTed column decompresses it again, so the document
+    is read once in the LATERAL (``#> '{}'`` returns any JSON value unchanged;
+    ``OFFSET 0`` stops the planner from inlining it back into each reference).
+    Measured on prod for six v17 rows: 336 ms with four references, 51-66 ms
+    this way, the same as serializing the full blob for the client.
+    """
+    document = (
+        select(
+            Score.details.op("#>", return_type=JSONB)(
+                literal_column("'{}'::text[]")
+            ).label("doc")
+        )
+        .correlate(Score)
+        .offset(0)
+        .lateral("public_details_source")
+    )
+    doc = document.c.doc
+    cases = (
+        func.jsonb_array_elements(doc.op("->", return_type=JSONB)(literal("per_case")))
+        .table_valued("value", with_ordinality="ordinality")
+        .alias("public_case")
+    )
+    reduced_case = case(
+        (
+            func.jsonb_typeof(cases.c.value) == literal("object"),
+            func.jsonb_build_object(
+                *(
+                    part
+                    for key in PUBLIC_CASE_RESULT_KEYS
+                    for part in (literal(key), cases.c.value.op("->")(literal(key)))
+                )
+            ),
+        ),
+        else_=cases.c.value,
+    )
+    reduced_cases = (
+        select(
+            func.coalesce(
+                func.jsonb_agg(aggregate_order_by(reduced_case, cases.c.ordinality)),
+                func.jsonb_build_array(),
+            )
+        )
+        .select_from(cases)
+        .scalar_subquery()
+    )
+    has_case_array = and_(
+        func.jsonb_typeof(doc) == literal("object"),
+        func.jsonb_typeof(doc.op("->", return_type=JSONB)(literal("per_case")))
+        == literal("array"),
+    )
+    projected = type_coerce(
+        case(
+            (
+                has_case_array,
+                doc.op("-", return_type=JSONB)(literal("per_case")).op(
+                    "||", return_type=JSONB
+                )(func.jsonb_build_object(literal("per_case"), reduced_cases)),
+            ),
+            else_=doc,
+        ),
+        JSONB,
+    )
+    return document, projected
+
+
+async def list_public_agent_scores(
+    session: AsyncSession, *, agent_id: UUID
+) -> list[Score]:
+    """One agent's score rows for a public page, oldest first.
+
+    ``details`` holds :func:`public_score_details_projection`, set as the loaded
+    value (not a pending change, so nothing is written back). Use these rows for
+    public responses only: the per-case answer-key fields are not present.
+    """
+    document, public_details = public_score_details_projection()
+    result = await session.execute(
+        select(Score, public_details.label("public_details"))
+        .join(document, true())
+        .where(Score.agent_id == agent_id)
+        .order_by(Score.created_at, Score.validator_hotkey)
+        .options(defer(Score.details, raiseload=True))
+    )
+    scores: list[Score] = []
+    for score, details in result:
+        set_committed_value(score, "details", details)
+        scores.append(score)
+    return scores
 
 
 async def list_public_submissions(
@@ -1300,8 +1434,20 @@ async def list_public_submissions(
     if not rows:
         return []
     agent_ids = [agent.agent_id for agent, _ in rows]
+    # The index publishes counts, versions and median composites only, so the
+    # score telemetry (up to ~2 MB of JSON per row) is never loaded. A future
+    # read of it fails loudly instead of lazily reloading it.
     score_rows = (
-        (await session.execute(select(Score).where(Score.agent_id.in_(agent_ids))))
+        (
+            await session.execute(
+                select(Score)
+                .where(Score.agent_id.in_(agent_ids))
+                .options(
+                    defer(Score.details, raiseload=True),
+                    defer(Score.gate_evidence, raiseload=True),
+                )
+            )
+        )
         .scalars()
         .all()
     )
@@ -1438,7 +1584,11 @@ async def ranked_quorum_agent_ids(
             order_by=(Score.composite.asc(), Score.validator_hotkey.asc()),
         )
         .label("srn"),
-    ).where(Score.bench_version == bench_version)
+    ).where(
+        Score.bench_version == bench_version,
+        # Bench v16+: only the season window's rows make a quorum.
+        await _score_season_scope(session, (bench_version,)),
+    )
     if agent_ids is not None:
         if not agent_ids:
             return set()
@@ -1489,6 +1639,22 @@ async def ranked_quorum_agent_ids(
         )
     )
     return ranked & confirmed
+
+
+async def _score_season_scope(
+    session: AsyncSession, bench_versions: Iterable[int | None]
+) -> ColumnElement[bool]:
+    """Bench v16+: only ``scores`` rows of each version's dueling season
+    window (current plus the provisional previous season); ``true()`` below
+    the floor, so every pre-16 read is unchanged."""
+    from ditto.db.queries.dueling_season_window import season_scope_predicate
+
+    return await season_scope_predicate(
+        session,
+        version_column=Score.bench_version,
+        season_column=Score.dueling_season_id,
+        bench_versions=bench_versions,
+    )
 
 
 async def count_ranked_quorum_agents(
@@ -1628,6 +1794,8 @@ async def list_anti_copy_history(
     *,
     bench_version: int,
     before: datetime,
+    statuses: tuple[AgentStatus, ...] = (AgentStatus.SCORED,),
+    kings_only: bool = False,
 ) -> list[LedgerRow]:
     """Every finalized generation uploaded before ``before``, not owner-reduced.
 
@@ -1663,6 +1831,16 @@ async def list_anti_copy_history(
     Unlike the ledger this takes an explicit ``bench_version`` and never resolves
     rollout authority: the caller is finalizing one ticket at one version and
     must compare within that era.
+
+    ``statuses`` / ``kings_only`` exist for one second caller: the anti-copy
+    gate's public-release alibi. Source release covers ``scored``, ``live`` and
+    ``banned`` kings (``SOURCE_RELEASE_STATUSES``), but the default read omits a
+    published king that is now ``live``, was banned after publication, or holds
+    scores only from an earlier bench version. Its content is still public.
+    ``kings_only=True`` restricts the read to agents that ever held the crown
+    (only kings are released) and drops the ``bench_version`` filter, so a king
+    released in an earlier era is still found; ``statuses`` picks which of the
+    release statuses to read.
     """
     agent_best = (
         select(
@@ -1685,7 +1863,20 @@ async def list_anti_copy_history(
             )
             .label("srn"),
         )
-        .where(Score.bench_version == bench_version)
+        # The public-release alibi is era-independent: a king released while it
+        # held the crown on an earlier bench version is still public, and the
+        # fingerprints it is compared on do not depend on the bench. So the
+        # kings-only read takes every era's scores; one median row per agent
+        # survives either way, and its composite is not read on that path.
+        # The king restriction sits inside the window too, so dropping the era
+        # filter never widens the scan past the (small) set of crowned agents.
+        .where(
+            *(
+                [Score.agent_id.in_(select(AgentKingship.agent_id))]
+                if kings_only
+                else [Score.bench_version == bench_version]
+            )
+        )
         .subquery()
     )
     rows = (
@@ -1716,8 +1907,13 @@ async def list_anti_copy_history(
             .join(agent_best, agent_best.c.agent_id == Agent.agent_id)
             .outerjoin(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
             .where(
-                Agent.status == AgentStatus.SCORED,
+                Agent.status.in_(statuses),
                 Agent.created_at <= before,
+                *(
+                    [Agent.agent_id.in_(select(AgentKingship.agent_id))]
+                    if kings_only
+                    else []
+                ),
                 # Same integer-arithmetic median as the ledger: exact, and
                 # portable across Postgres and the SQLite unit-test path.
                 or_(
@@ -1772,6 +1968,10 @@ async def list_eligible_ledger(
     diagnostic_excluded_agent_ids: frozenset[UUID] = frozenset(),
 ) -> list[LedgerRow]:
     """Return the best eligible score per payment-time coldkey.
+
+    "Best" is across *distinct* artifacts. Identical-content reruns of one
+    artifact are represented by the newest finalized run, never the highest
+    (:attr:`LedgerRow.superseded_rerun`).
 
     ``diagnostic_*`` membership overrides are for the read-only ATH court
     projection only. They change no stored status. Authority callers leave
@@ -1839,7 +2039,11 @@ async def list_eligible_ledger(
     2. join to ``agents`` filtered to ``scored``.
     3. after the canonical rows are materialized, rank them by the requested
        owner score and keep each attested payment owner root's first agent.
-       This also dedupes one owner across linked hotkeys and names.
+       This also dedupes one owner across linked hotkeys and names. Repeated
+       runs of one artifact (same owner root and ``sha256``) do not compete on
+       score: the newest finalized run represents that content and the older
+       runs are flagged :attr:`LedgerRow.superseded_rerun` and ranked behind
+       every current row (SN-485), so re-rolling is never a max over draws.
     4. before the losing generations are discarded, read the lineage's earliest
        band-equivalent arrival off them into the surviving row's
        :attr:`LedgerRow.crown_first_seen`. The owner family is the only place
@@ -1943,7 +2147,12 @@ async def list_eligible_ledger(
             ),
         )
         .label("srn"),
-    ).where(Score.bench_version.in_(candidate_versions))
+    ).where(
+        Score.bench_version.in_(candidate_versions),
+        # Bench v16+: a score expires from the authoritative ledger one season
+        # after the season it was scored in (dueling_season_window).
+        await _score_season_scope(session, candidate_versions),
+    )
     if v9_enforce:
         agent_best_stmt = (
             agent_best_stmt.outerjoin(
@@ -1970,6 +2179,7 @@ async def list_eligible_ledger(
             EvaluationPayment.miner_coldkey.label("miner_coldkey"),
             _emission_owner_key().label("emission_owner"),
             Agent.created_at.label("first_seen"),
+            Agent.sha256.label("artifact_sha256"),
             case(
                 (Agent.agent_id.in_(diagnostic_scored_agent_ids), AgentStatus.SCORED),
                 else_=Agent.status,
@@ -2342,11 +2552,37 @@ async def list_eligible_ledger(
         )
         .cte("rooted_candidates")
     )
+    # SN-485: repeated runs of one artifact are sequential draws of the same
+    # content, not competing generations. The newest finalized run of each
+    # (owner root, sha256) represents that content; older runs are demoted
+    # behind every current row of the family. Without this, the owner-best
+    # selection below would take the MAX over identical-content re-rolls.
+    #
+    # Partitioned by ``eligible`` too. An unranked run (a 0.000 composite, a
+    # partial profile, a shadow upload) is a failed run rather than a draw on
+    # the score scale, so it never displaces a ranked run of the same bytes.
+    # That also keeps every Python consumer that filters to ``eligible`` before
+    # reducing the family on the same representative as this SQL selection.
+    rerun_marked = select(
+        rooted,
+        (
+            func.row_number().over(
+                partition_by=(
+                    rooted.c.owner_root,
+                    rooted.c.artifact_sha256,
+                    rooted.c.eligible,
+                ),
+                order_by=(rooted.c.first_seen.desc(), rooted.c.agent_id.desc()),
+            )
+            > 1
+        ).label("superseded_rerun"),
+    ).cte("rerun_marked_candidates")
     owner_order = owner_family_order_terms(
-        eligible=rooted.c.eligible,
-        composite=rooted.c.official_score,
-        first_seen=rooted.c.first_seen,
-        agent_id=rooted.c.agent_id,
+        eligible=rerun_marked.c.eligible,
+        composite=rerun_marked.c.official_score,
+        first_seen=rerun_marked.c.first_seen,
+        agent_id=rerun_marked.c.agent_id,
+        superseded=rerun_marked.c.superseded_rerun,
     )
     # Rank the owner's family once so a deduped read can serve one row per
     # owner. Weight and emission callers must not use this collapse on a pool
@@ -2355,9 +2591,9 @@ async def list_eligible_ledger(
     # it in the other order lets a deregistered best row win the family and
     # the later registration filter zeroes the linked owner.
     owner_ranked = select(
-        rooted,
+        rerun_marked,
         func.row_number()
-        .over(partition_by=rooted.c.owner_root, order_by=owner_order)
+        .over(partition_by=rerun_marked.c.owner_root, order_by=owner_order)
         .label("owner_rank"),
     ).cte("owner_ranked")
     # Resolve seniority *per row*, against the score that row defends — not
@@ -2692,6 +2928,7 @@ async def list_eligible_ledger(
             Score.dueling_season_id,
             Score.dueling,
             winners.c.crown_first_seen,
+            winners.c.superseded_rerun,
             *receipt_columns,
         )
         .select_from(winners)
@@ -2881,6 +3118,7 @@ async def list_eligible_ledger(
                 v9_confirmation=v9_confirmation,
                 dueling_season_id=row.dueling_season_id,
                 dueling=row.dueling,
+                superseded_rerun=bool(row.superseded_rerun),
             )
         )
     return ledger
@@ -2912,6 +3150,7 @@ async def quorum_composites(
         select(Score.agent_id, Score.composite, Score.bench_version).where(
             Score.agent_id.in_(agent_ids),
             Score.bench_version.in_(set(versions.values())),
+            await _score_season_scope(session, set(versions.values())),
         )
     )
     out: dict[UUID, list[float]] = {}
@@ -3144,6 +3383,7 @@ async def list_provisional_ledger(
     session: AsyncSession,
     *,
     bench_version: int | None = None,
+    active_version: int | None = None,
 ) -> list[tuple[LedgerRow, int]]:
     """Return each unfinalized owner's best partially scored submission.
 
@@ -3157,7 +3397,20 @@ async def list_provisional_ledger(
     One row per *owner*, matching how :func:`list_eligible_ledger` partitions
     the finalized board: a coldkey funding several hotkeys holds one emission
     position, so its provisional overlay must not preview several either.
+
+    ``active_version`` is the caller's already-resolved live era, so one
+    response judges close-out against the same era it reports; when omitted
+    it is read here.
+
+    A row the miner projection has closed is not provisional: it will never
+    reach quorum. Retired, terminal-failure (``scoring_failed``), withdrawn
+    (``not_queued``) and era-refused (``era_changed``) rows keep their stored
+    ``evaluating`` status, so they are excluded here, before the per-owner
+    dedupe, using the same :func:`closed_submission_statuses` the miner pages
+    use (SN-483). A partial composite on such a row would otherwise read as
+    the agent's score.
     """
+    from ditto.api_server.submission_status import closed_submission_statuses
     from ditto.db.queries.benchmark_rollout import active_bench_version
 
     canonical_version = bench_version or await active_bench_version(session)
@@ -3206,6 +3459,23 @@ async def list_provisional_ledger(
         if agent.agent_id not in by_agent:
             by_agent[agent.agent_id] = (agent, row.miner_coldkey, [])
         by_agent[agent.agent_id][2].append(row_score_view(row))
+
+    if by_agent:
+        # Close-out is what the miner sees, which is always judged against the
+        # live active era, also on a historical board's preview.
+        closed = await closed_submission_statuses(
+            session,
+            agents=[agent for agent, _coldkey, _scores in by_agent.values()],
+            active_version=(
+                active_version
+                if active_version is not None
+                else canonical_version
+                if bench_version is None
+                else await active_bench_version(session)
+            ),
+        )
+        for agent_id in closed:
+            by_agent.pop(agent_id, None)
 
     candidates: list[tuple[LedgerRow, int]] = []
     for agent, miner_coldkey, scores in by_agent.values():

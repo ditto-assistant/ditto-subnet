@@ -36,6 +36,7 @@ from ditto.api_models.l2_report_canary import (
     L2CanaryView,
 )
 from ditto.api_models.screener_node_settings import ScreenerNodeChannelSettings
+from ditto.api_models.screener_provider_settings import PRIMARY_SCREENER_PROVIDERS
 from ditto.api_models.screener_review_settings import (
     L2_REPORT_CANARY_SCOPE_PREFIX,
     EffectiveScreenerReviewSettings,
@@ -85,7 +86,6 @@ from ditto.db.queries.screener_node_settings import (
     resolve_screener_node_channel_settings,
 )
 from ditto.db.queries.screening import (
-    claim_canary_scopes,
     has_claimable_screening_work,
 )
 from ditto_screening_protocol import ScreenerReviewSettingsOverride
@@ -472,7 +472,6 @@ async def _canary_yields_to_production(
     limits: ScreenerNodeChannelSettings,
     instance_id: str,
     active: int,
-    review_settings_scopes: frozenset[str] | None,
     now: datetime,
 ) -> bool:
     """Hold a leasable canary while this node's production admission is open.
@@ -495,7 +494,6 @@ async def _canary_yields_to_production(
     if await has_claimable_screening_work(
         session,
         now=now,
-        review_settings_scopes=review_settings_scopes,
         netuid=expected_netuid(),
     ):
         reason = "production-claimable"
@@ -1189,9 +1187,13 @@ async def _schedule_l2_report_canary(
                 )
             return _view(existing)
         node = await session.get(ScreenerNode, payload.target_node_id)
-        if node is None or node.status != "active" or node.provider != "hetzner":
+        if (
+            node is None
+            or node.status != "active"
+            or node.provider not in PRIMARY_SCREENER_PROVIDERS
+        ):
             raise HTTPException(
-                status_code=409, detail="target is not an active Hetzner screener node"
+                status_code=409, detail="target is not an active primary screener node"
             )
         if payload.run_mode == "full_runtime" and not await _full_runtime_worker_ready(
             session, node=node, now=datetime.now(UTC)
@@ -1358,8 +1360,12 @@ async def register_canonical_fixture(
                 return _view(existing)
             raise HTTPException(409, "canonical starter fixture already registered")
         node = await session.get(ScreenerNode, payload.target_node_id)
-        if node is None or node.status != "active" or node.provider != "hetzner":
-            raise HTTPException(409, "target is not an active Hetzner screener node")
+        if (
+            node is None
+            or node.status != "active"
+            or node.provider not in PRIMARY_SCREENER_PROVIDERS
+        ):
+            raise HTTPException(409, "target is not an active primary screener node")
         data = archive_bytes()
         try:
             await storage.put_object(
@@ -1467,7 +1473,11 @@ async def schedule_canonical_fixture(
         if not await _fixture_object_matches(storage):
             raise HTTPException(409, "fixture object changed")
         node = await session.get(ScreenerNode, row.target_node_id)
-        if node is None or node.status != "active" or node.provider != "hetzner":
+        if (
+            node is None
+            or node.status != "active"
+            or node.provider not in PRIMARY_SCREENER_PROVIDERS
+        ):
             raise HTTPException(409, "target node unavailable")
         if not await _fixture_worker_ready(session, node=node, now=datetime.now(UTC)):
             raise HTTPException(409, "fixture-capable worker not adopted")
@@ -1509,7 +1519,11 @@ async def claim_l2_report_canary(
             .where(ScreenerNode.node_id == node_id)
             .with_for_update()
         )
-        if node is None or node.status != "active" or node.provider != "hetzner":
+        if (
+            node is None
+            or node.status != "active"
+            or node.provider not in PRIMARY_SCREENER_PROVIDERS
+        ):
             raise HTTPException(status_code=409, detail="node unavailable")
         effective = await _resolve_effective_review_settings(
             session, instance_id=payload.instance_id, enrolled_node_id=node_id
@@ -1607,21 +1621,6 @@ async def claim_l2_report_canary(
             limits=limits,
             instance_id=payload.instance_id,
             active=len(active),
-            # The pinned retries a production claim from this worker could
-            # bind, as ``resolve_claim_binding`` derives them.
-            review_settings_scopes=claim_canary_scopes(
-                (
-                    (
-                        effective.revision,
-                        payload.instance_id,
-                        effective.scope,
-                        effective.checksum,
-                    )
-                    if effective.revision >= 1
-                    else None
-                ),
-                enrolled_node_id=node_id,
-            ),
             now=now,
         ):
             return None

@@ -13,6 +13,18 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
 from ditto.api_server.cla import CLA_REQUIRED_ERROR_CODE, ClaConsentRequired
+from ditto.api_server.edge_lane import (
+    ERROR_CODE_EDGE_BAD_REQUEST,
+    ERROR_CODE_EDGE_LANE_FULL,
+    ERROR_CODE_EDGE_LANE_OFF,
+    ERROR_CODE_EDGE_NODE_INACTIVE,
+    ERROR_CODE_EDGE_NOT_ASSIGNED,
+    ERROR_CODE_EDGE_REVOKED,
+    ERROR_CODE_EDGE_STORAGE_UNAVAILABLE,
+    ERROR_CODE_EDGE_UNAUTHORIZED,
+    ERROR_CODE_EDGE_UNKNOWN_CHALLENGE,
+    EdgeLaneError,
+)
 from ditto.api_server.endpoints.inference import InferenceDeclinedError
 from ditto.api_server.endpoints.retrieval import (
     AgentNotFoundError,
@@ -161,6 +173,20 @@ ERROR_CODE_AGENT_NOT_SCREENABLE = 5001
 # 5002 -> 409. The verified verdict violated a database constraint and its
 # transaction rolled back: definitively not applied, the attempt still running.
 ERROR_CODE_SCREEN_RESULT_CONSTRAINT_VIOLATION = 5002
+
+# Ditto Edge node error codes (6xxx range), defined beside the shadow lane in
+# ditto/api_server/edge_lane.py and listed here with every other range.
+EDGE_ERROR_CODES = (
+    ERROR_CODE_EDGE_UNAUTHORIZED,
+    ERROR_CODE_EDGE_LANE_OFF,
+    ERROR_CODE_EDGE_LANE_FULL,
+    ERROR_CODE_EDGE_NODE_INACTIVE,
+    ERROR_CODE_EDGE_NOT_ASSIGNED,
+    ERROR_CODE_EDGE_REVOKED,
+    ERROR_CODE_EDGE_UNKNOWN_CHALLENGE,
+    ERROR_CODE_EDGE_BAD_REQUEST,
+    ERROR_CODE_EDGE_STORAGE_UNAVAILABLE,
+)
 
 
 # Every terminal decline, in one table rather than a ladder of ifs. A ladder
@@ -504,6 +530,10 @@ def register_exception_handlers(app: FastAPI) -> None:
             ERROR_CODE_BENCH_VERSION_RETIRED,
             "benchmark version is retired and can no longer be scored",
         )
+
+    @app.exception_handler(EdgeLaneError)
+    async def _edge_lane_handler(_request: Request, exc: EdgeLaneError) -> JSONResponse:
+        return envelope_response(exc.status, exc.code, exc.message)
 
     @app.exception_handler(ScreenerAuthError)
     async def _screener_auth_handler(

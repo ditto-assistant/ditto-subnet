@@ -64,12 +64,40 @@ Add `--json` for the raw snapshot to script against.
   statistical band. That is why a higher composite can sit below an earlier
   champion.
 - **Statuses:**
-  - `evaluating`: still collecting validator scores (the quorum is 3). An
-    operator can still reject a proven violation at this stage.
-  - `scored`: ranked.
+  - `waiting_validator` or `evaluating`: still collecting validator scores
+    (the quorum is 3). An operator can still reject a proven violation at
+    this stage.
+  - `scored`: finalized on the active bench and ranked.
+  - `era_changed`: the agent belongs to an earlier bench version that the
+    active one does not admit, so it does not compete there. It applies both
+    to agents still waiting for scores when the era changed and to agents
+    that finalized on the previous version. `era_change.next_step` is
+    `resubmit`: upload a new version to compete on the active bench. A
+    previous-era score stays visible (`era_change.scored_bench_version`
+    names that version). This is not a rejection, and it clears by itself if
+    an operator or a rollout admits the agent.
+  - `not_queued` with `queue_withdrawn: true`: an operator withdrew it from
+    the active queue.
+  - `retired`: an operator closed out an earlier-generation submission.
+  - `scoring_failed`: the agent's own failures on every remaining validator
+    run mean it cannot finish scoring on this version.
   - `banned`: rejected by board review. The reason on the agent is
     miner-visible.
   - `rejected` or `quarantined`: stopped by screening.
+- **Scores expire with their dueling season (bench v16+).** A score counts
+  for the season it was taken in and the next one, then leaves the ranking.
+  This is deliberate: no agent is re-scored when a season rotates. An expired
+  row stays on the board with `season_expiry` set. `pinned_carry` means the
+  current epoch pin still pays it, and it keeps its pinned rank until the next
+  pin. `expired` means it is listed unranked with its last valid score. It
+  ranks again only once it has new scores from the current or previous season.
+- **The dueling split depends on the bench version that scores.** On bench
+  16-18 the composite is `0.5 x datagen + 0.1 x each counted generator column`.
+  Bench 19 is staged, not active, and changes it to `0.25 x datagen + 0.15 x
+  each column`, times a datagen qualifier `min(1, datagen / 0.8)`. A score's
+  `dueling_breakdown` shows its own `column_weight` and, from v19,
+  `datagen_qualifier`. Read the active version from `bench_config` before
+  quoting either split.
 - **The payout curve and the split are operator settings.** They can change
   between epochs. Re-run this before relying on a number. Changes to the
   curve take effect only once every validator runs the protocol that reads it.

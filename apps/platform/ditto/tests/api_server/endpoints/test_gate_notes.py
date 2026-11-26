@@ -50,6 +50,7 @@ from ditto.api_server.gate_evidence import (
     gate_note_id,
     gate_note_ids_for,
     overall_posture,
+    persisted_case_dump,
     public_gate_evidence,
 )
 from ditto.db.models import (
@@ -177,6 +178,7 @@ _EXPECTED_STORED = {
         "cases_below_full_factor": 1,
         "mean_factor_bps": 9733,
     },
+    "priced_cost": None,
     "catalog_suppression_rate": 0.5,
     "gate_counts": {
         "answer_in_prompt": 1,
@@ -1052,3 +1054,53 @@ class TestIngest:
                 score.details["per_case"][1]["claim_provenance"]
                 == (raw["per_case"][1]["claim_provenance"])
             )
+
+
+_RUN_BUDGET_BLOCK = {
+    "contract_id": "run-budget-v1",
+    "budget_nano_usd": 1_000_000_000,
+    "budget_usd": 1.0,
+    "cases": 350,
+    "exhausted": True,
+    "admitted_cases": 270,
+    "unrun_cases": 80,
+    "unrun_tool_cases": 0,
+    "unrun_memory_cases": 0,
+    "unrun_slice_cases": 80,
+    "spent_nano_usd_at_cutoff": 1_000_400_000,
+    "reason": "run_budget_exhausted",
+}
+
+
+class TestRunBudgetProjection:
+    """Bench v18 ``details.run_budget``: stored from v18, never before."""
+
+    def _with_budget(self, bench_version: int) -> ScoreReport:
+        raw = _raw_report(bench_version=bench_version)
+        raw["details"]["run_budget"] = dict(_RUN_BUDGET_BLOCK)
+        raw["per_case"][0]["budget_exhausted"] = True
+        return ScoreReport.model_validate(raw)
+
+    def test_v18_stores_the_summary_and_it_round_trips(self) -> None:
+        stored = build_gate_evidence(self._with_budget(18), bench_version=18)
+        assert stored is not None
+        assert stored["run_budget"]["admitted_cases"] == 270
+        assert (
+            StoredGateEvidence.model_validate(stored).model_dump(mode="json") == stored
+        )
+
+    def test_a_pre_v18_block_never_reaches_the_projection(self) -> None:
+        stored = build_gate_evidence(self._with_budget(17), bench_version=17)
+        assert stored is not None
+        assert "run_budget" not in stored
+
+    def test_absent_budget_round_trips_without_the_key(self) -> None:
+        stored = build_gate_evidence(_report(), bench_version=_V13)
+        assert stored is not None and "run_budget" not in stored
+        dumped = StoredGateEvidence.model_validate(stored).model_dump(mode="json")
+        assert "run_budget" not in dumped
+
+    def test_the_case_flag_is_a_v18_term(self) -> None:
+        case = self._with_budget(17).per_case[0]
+        assert "budget_exhausted" not in persisted_case_dump(case, bench_version=17)
+        assert persisted_case_dump(case, bench_version=18)["budget_exhausted"] is True

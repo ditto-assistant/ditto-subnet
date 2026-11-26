@@ -178,6 +178,69 @@ async def test_models_declare_every_constraint_the_migrations_create(
             )
 
 
+# Tables whose indexes must match between models.py and the migrations.
+# A ratchet: tables predating this guard are not yet audited; add a prefix
+# once its tables agree.
+_INDEX_PARITY_PREFIXES = ("model_context_",)
+
+_INDEX_DEFS = text(
+    "SELECT c.relname, i.relname, pg_get_indexdef(i.oid) "
+    "FROM pg_index x "
+    "JOIN pg_class i ON i.oid = x.indexrelid "
+    "JOIN pg_class c ON c.oid = x.indrelid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE n.nspname = :schema "
+    # Primary-key and unique-constraint indexes are the constraint guard's.
+    "AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = x.indexrelid)"
+)
+
+
+async def _index_defs(session: AsyncSession, schema: str) -> dict[str, str]:
+    """``{index name: definition}`` for the audited tables in ``schema``."""
+    rows = (await session.execute(_INDEX_DEFS, {"schema": schema})).all()
+    return {
+        name: definition.replace(f"{schema}.", "")
+        for table, name, definition in rows
+        if table.startswith(_INDEX_PARITY_PREFIXES)
+    }
+
+
+async def test_models_declare_every_index_the_migrations_create(
+    session: AsyncSession,
+) -> None:
+    """Indexes, by name and full definition (columns, order, uniqueness and
+    partial predicate), must agree for the audited tables.
+
+    ``alembic/env.py`` autogenerates against ``Base.metadata``, so an index a
+    migration creates and the model omits is one autogenerate proposes to
+    drop -- including partial unique indexes that ``ON CONFLICT`` targets.
+    """
+    await session.rollback()
+    async with session.begin():
+        await session.execute(text(f'DROP SCHEMA IF EXISTS "{_CANARY_SCHEMA}" CASCADE'))
+        await session.execute(text(f'CREATE SCHEMA "{_CANARY_SCHEMA}"'))
+    try:
+        connection = await session.connection(
+            execution_options={"schema_translate_map": {None: _CANARY_SCHEMA}}
+        )
+        await connection.run_sync(Base.metadata.create_all)
+        await session.commit()
+
+        migrated = await _index_defs(session, "public")
+        declared = await _index_defs(session, _CANARY_SCHEMA)
+        assert migrated, "no audited indexes found; is the prefix list stale?"
+        assert declared == migrated, (
+            "models.py and the migrations disagree about indexes; make the "
+            "model match the migration"
+        )
+    finally:
+        await session.rollback()
+        async with session.begin():
+            await session.execute(
+                text(f'DROP SCHEMA IF EXISTS "{_CANARY_SCHEMA}" CASCADE')
+            )
+
+
 async def test_reset_restores_migration_seeded_rows(session: AsyncSession) -> None:
     """The migration chain plants real defaults; the reset must keep them.
 

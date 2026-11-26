@@ -133,8 +133,39 @@ def test_datagen_change_rebuilds_scorer_and_validator_stack(
         "dittobench_api",
         # The generator kit builds against the datagen challenge contract.
         "dittobench_generator_starter_kit",
+        # The CPM scorer generates its cases with cmd/generate.
+        "cpm_scorer",
+        "cpm_starter_kit",
         "validator_stack",
     }
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        (
+            "services/cpm-scorer/cpm_scorer/metrics.py",
+            {"cpm_scorer", "cpm_starter_kit"},
+        ),
+        (".github/workflows/cpm-scorer-ci.yml", {"cpm_scorer", "cpm_starter_kit"}),
+        ("miners/cpm-starter-kit/train_lora.py", {"cpm_starter_kit"}),
+        # The GPU image, its pull updater and the host role release the scorer
+        # (publish-cpm-scorer) like the generator scorer's do dittobench_api.
+        ("Dockerfile.cpm-scorer-release", {"cpm_scorer", "cpm_starter_kit"}),
+        ("scripts/cpm-scorer-auto-update.sh", {"cpm_scorer", "cpm_starter_kit"}),
+        (
+            "infra/ansible/roles/cpm_scorer/tasks/main.yml",
+            {"cpm_scorer", "cpm_starter_kit"},
+        ),
+    ],
+)
+def test_cpm_track_changes_are_shadow_only(
+    components, ignored_paths, path: str, expected: set[str]
+) -> None:
+    # The model_context track ships in shadow: no validator, Platform or
+    # screener image imports the scorer or the kit.
+    assert selected(components, ignored_paths, path) == expected
+    assert root_verification(components, ignored_paths, path) == "none"
 
 
 def test_generator_starter_kit_change_is_shadow_only(components, ignored_paths) -> None:
@@ -143,6 +174,29 @@ def test_generator_starter_kit_change_is_shadow_only(components, ignored_paths) 
         ignored_paths,
         "miners/dittobench-generator-starter-kit/families/families.go",
     ) == {"dittobench_generator_starter_kit"}
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "packages/ditto-edge-protocol/ditto_edge_protocol/ledger.py",
+        "packages/ditto-edge-protocol/testdata/conformance_v1.json",
+        ".github/workflows/edge-protocol-ci.yml",
+    ],
+)
+def test_edge_protocol_change_reverifies_its_platform_consumer(
+    components, ignored_paths, path: str
+) -> None:
+    # Platform serves the Ditto Edge shadow lane (SN-481) on this contract, so
+    # a contract change must re-verify and release Platform (and Backroom,
+    # which reads its API). No validator consumes it: the stack never rebuilds.
+    assert selected(components, ignored_paths, path) == {
+        "edge_protocol",
+        "platform_api",
+        "platform",
+        "backroom",
+    }
+    assert root_verification(components, ignored_paths, path) == "none"
 
 
 def test_coding_datagen_change_is_shadow_only(components, ignored_paths) -> None:

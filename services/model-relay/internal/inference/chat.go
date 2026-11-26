@@ -377,8 +377,24 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Ditto Router dogfood: only when the competition lane is explicitly on
 	// and this agent's miner linked a consenting Ditto account. Everyone else
 	// keeps the centralized OpenRouter path below, byte for byte.
-	if d.Cfg != nil && d.Cfg.DittoRouter.RoutesLane(config.DittoRouterLaneCompetition) {
+	daniSelected := !d.Cfg.DittoRouter.RoutesLane(config.DittoRouterLaneCompetition) &&
+		selectDaniLabsForPayload(admissionCfg, model, result.ticketPurpose, upstreamPayload, maxTokens, d.now())
+	// offOpenRouter is true when this call went to an upstream other than
+	// OpenRouter. Its outcome says nothing about the grant's OpenRouter route
+	// or the fleet-wide openrouter circuit, so it must neither degrade/heal the
+	// route nor open/close the circuit.
+	offOpenRouter := daniSelected
+	if daniSelected {
+		// Do not attribute a direct gateway's health to the OpenRouter route.
+		outcome.recordObservation = false
+		recovered, exhausted = completeChatViaDaniLabs(ctx, d.Upstream, cfg, upstreamPayload, model, d.sleep())
+	} else if d.Cfg != nil && d.Cfg.DittoRouter.RoutesLane(config.DittoRouterLaneCompetition) {
 		if onBehalfOf, linked := d.dittoRouterOnBehalfOf(ctx, reservedGrant.AgentID); linked {
+			// The Router is Ditto's own upstream: one user's 402 or a Router
+			// outage must not cool the shared route, and a Router success must
+			// not heal an open OpenRouter outage.
+			offOpenRouter = true
+			outcome.recordObservation = false
 			recovered, exhausted = completeChatViaDittoRouter(ctx, d.Upstream, cfg, d.Cfg.DittoRouter,
 				upstreamPayload, model, onBehalfOf, d.sleep())
 		} else {
@@ -389,13 +405,13 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		recovered, exhausted = completeChatWithRecovery(ctx, d.Upstream, cfg, upstreamPayload, model,
 			reservedGrant.RouteProvider.String, quantization, promptPrice, completionPrice, d.sleep())
 	}
-	if exhausted != nil {
+	if !offOpenRouter && exhausted != nil {
 		if status, overloaded := receiptFreeOverload(exhausted.phases, model); overloaded {
 			_ = d.openProviderCircuit(ctx, now, status, exhausted.terminalErrorCode)
 		} else if status, broke := gatewayCreditExhausted(exhausted.phases); broke {
 			_ = d.openProviderCircuit(ctx, now, status, exhausted.terminalErrorCode)
 		}
-	} else {
+	} else if !offOpenRouter {
 		_ = d.closeProviderCircuit(ctx, now)
 	}
 	var raw []byte
@@ -452,6 +468,15 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 func chatProviderFailure(exhausted *chatProviderExhausted) *httpError {
 	if exhausted.timedOut {
 		return httpErrorf(504, "inference provider timed out")
+	}
+	if exhausted.terminalErrorCode == providerContextLengthExceededCode {
+		// The harness sent more input than the model's context window holds.
+		// A 502 here made the scorer file it as provider infrastructure and
+		// re-lease the same oversized request indefinitely. Every deployed
+		// broker classifies a 413 from this route as the harness's own request
+		// (inference_request_rejected:request_too_large) and forwards the
+		// message, so the miner learns which limit it crossed.
+		return httpErrorf(413, "request exceeds the model's maximum context length")
 	}
 	failure := httpErrorf(502, "inference provider unavailable")
 	if exhausted.terminalErrorCode == providerGenerationInvalidCode {

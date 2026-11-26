@@ -19,8 +19,10 @@ One run:
 3. for each sample whose serving grant meets the gate, voids it with the
    grant's outage window attached (first and last outage-class failure);
 4. flags canonical ``scores`` rows accepted in the same time range whose
-   grant meets the gate; canonical scores are never replaced here
-   (operators use ``replace_validator_score``);
+   grant meets the gate, and voids each one by queueing a same-validator
+   replacement re-test (``void_canonical_scores``, SN-489). The score stays
+   canonical until the replacement lands and swaps it; each flag records its
+   void's disposition and request id;
 5. appends one :class:`~ditto.db.models.OutageSweepRun`.
 
 Each sample is examined inside its own savepoint, so one row's error is
@@ -32,8 +34,6 @@ time alone.
 from __future__ import annotations
 
 import logging
-from collections import Counter
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
@@ -42,10 +42,17 @@ from sqlalchemy import func, literal, select, text, tuple_
 
 from ditto.db.models import (
     ConfirmationScore,
-    InferenceGrant,
-    InferenceRequest,
     OutageSweepRun,
     Score,
+)
+from ditto.db.queries.canonical_outage_voids import (
+    CanonicalVoidRequest,
+    GrantOutage,
+    OutageWindow,
+    canonical_serving_grant,
+    grant_outage,
+    grant_outage_window,
+    void_canonical_scores,
 )
 from ditto.db.queries.confirmation_score_voids import (
     OUTAGE_FAILURE_CODES,
@@ -75,75 +82,12 @@ SWEEP_SETTLE_LAG = timedelta(minutes=2)
 still committing with an earlier ``created_at`` is never stepped over."""
 SWEEP_ACTOR = "platform:outage_sweep"
 SWEEP_REASON = "automatic: provider outage evidence on the serving grant"
+SWEEP_CANONICAL_REASON = (
+    "automatic: provider outage evidence on the canonical score's serving grant; "
+    "same-validator replacement re-test"
+)
 _SWEEP_LOCK = (118, 3305)
 """``pg_try_advisory_xact_lock`` key: one sweep at a time per database."""
-
-
-@dataclass(frozen=True)
-class GrantOutage:
-    grant_id: UUID
-    chat_requests: int
-    failed_requests: int
-    outage_failed: int
-    failure_codes: dict[str, int]
-
-
-@dataclass(frozen=True)
-class OutageWindow:
-    started_at: datetime
-    ended_at: datetime
-
-
-async def grant_outage_window(
-    session: AsyncSession, grant_id: UUID
-) -> OutageWindow | None:
-    """First and last outage-class failure on one grant (PK-prefix read)."""
-    row = (
-        await session.execute(
-            select(
-                func.min(InferenceRequest.started_at),
-                func.max(InferenceRequest.started_at),
-            ).where(
-                InferenceRequest.grant_id == grant_id,
-                InferenceRequest.request_kind == "chat",
-                InferenceRequest.status == "failed",
-                InferenceRequest.terminal_error_code.in_(sorted(OUTAGE_FAILURE_CODES)),
-            )
-        )
-    ).one()
-    if row[0] is None:
-        return None
-    return OutageWindow(started_at=row[0], ended_at=row[1])
-
-
-async def _grant_outage(session: AsyncSession, grant_id: UUID) -> GrantOutage:
-    chat = failed = 0
-    codes: Counter[str] = Counter()
-    for status, code, count in await session.execute(
-        select(
-            InferenceRequest.status,
-            InferenceRequest.terminal_error_code,
-            func.count(),
-        )
-        .where(
-            InferenceRequest.grant_id == grant_id,
-            InferenceRequest.request_kind == "chat",
-        )
-        .group_by(InferenceRequest.status, InferenceRequest.terminal_error_code)
-    ):
-        chat += count
-        if status == "failed":
-            failed += count
-            codes[code or "unknown"] += count
-    return GrantOutage(
-        grant_id=grant_id,
-        chat_requests=chat,
-        failed_requests=failed,
-        outage_failed=sum(
-            count for code, count in codes.items() if code in OUTAGE_FAILURE_CODES
-        ),
-        failure_codes=dict(sorted(codes.items())),
-    )
 
 
 def _iso(value: datetime) -> str:
@@ -193,29 +137,65 @@ async def _canonical_flags(
     )
     flagged: list[tuple[Score, GrantOutage, OutageWindow | None]] = []
     for score in scores:
-        # The serving grant: the newest one for the same agent, version and
-        # validator created at or before the score was accepted (the same
-        # pairing rule as retest_sample_inference).
-        grant_id = await session.scalar(
-            select(InferenceGrant.grant_id)
-            .where(
-                InferenceGrant.agent_id == score.agent_id,
-                InferenceGrant.bench_version == bench_version,
-                InferenceGrant.validator_hotkey == score.validator_hotkey,
-                InferenceGrant.created_at <= score.updated_at,
-            )
-            .order_by(InferenceGrant.created_at.desc())
-            .limit(1)
-        )
+        grant_id = await canonical_serving_grant(session, score)
         if grant_id is None:
             continue
-        outage = await _grant_outage(session, grant_id)
+        outage = await grant_outage(session, grant_id)
         if not outage_evidence_qualifies(
             chat_requests=outage.chat_requests, outage_failed=outage.outage_failed
         ):
             continue
         flagged.append((score, outage, await grant_outage_window(session, grant_id)))
     return flagged
+
+
+async def _void_canonical(
+    session: AsyncSession, score: Score, *, now: datetime
+) -> dict[str, object]:
+    """Queue one flagged canonical score's replacement; never raises.
+
+    Runs in its own savepoint, so a refused or failed void leaves the flag
+    (and every other flag) recorded with its disposition.
+    """
+    try:
+        async with session.begin_nested():
+            (outcome,) = await void_canonical_scores(
+                session,
+                requests=[
+                    CanonicalVoidRequest(
+                        agent_id=score.agent_id,
+                        validator_hotkey=score.validator_hotkey,
+                        expected_run_id=score.run_id,
+                        expected_composite=score.composite,
+                        expected_seed=score.seed,
+                    )
+                ],
+                bench_version=score.bench_version,
+                reason=SWEEP_CANONICAL_REASON,
+                actor=SWEEP_ACTOR,
+                source="outage_sweep",
+                now=now,
+                apply=True,
+            )
+    except Exception as exc:
+        logger.exception(
+            "outage sweep could not void canonical score %s/%s run %s",
+            score.agent_id,
+            score.validator_hotkey,
+            score.run_id,
+        )
+        return {
+            "void_disposition": "error",
+            "void_request_id": None,
+            "void_detail": type(exc).__name__,
+        }
+    return {
+        "void_disposition": outcome.disposition,
+        "void_request_id": (
+            str(outcome.request_id) if outcome.request_id is not None else None
+        ),
+        "void_detail": outcome.detail,
+    }
 
 
 async def sweep_outage_voids(
@@ -439,8 +419,10 @@ async def sweep_outage_voids(
                         outage_failed=outage.outage_failed,
                         sample="canonical",
                     )
+                void = await _void_canonical(session, score, now=now)
                 canonical.append(
                     {
+                        **void,
                         "agent_id": str(score.agent_id),
                         "validator_hotkey": score.validator_hotkey,
                         "run_id": score.run_id,
@@ -521,6 +503,7 @@ async def list_outage_sweep_runs(
 __all__ = [
     "SWEEP_ACTOR",
     "SWEEP_BATCH_LIMIT",
+    "SWEEP_CANONICAL_REASON",
     "SWEEP_FIRST_LOOKBACK",
     "SWEEP_INTERVAL_SECONDS",
     "SWEEP_REASON",

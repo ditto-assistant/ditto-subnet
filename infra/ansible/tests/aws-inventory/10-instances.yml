@@ -1,0 +1,24 @@
+---
+# Instance-shaped host vars as amazon.aws.aws_ec2 hands them to compose. One
+# scorer, tagged like modules/compute/aws tags it in aws-generator-scorer.
+all:
+  hosts:
+    ditto-generator-scorer-prod:
+      instance_id: i-0123456789abcdef0
+      placement: { region: us-east-1, availability_zone: us-east-1a }
+      tags:
+        Name: ditto-generator-scorer-prod
+        env: prod
+        role: generator-scorer
+        managed: terraform
+        ansible-ssm-bucket: ditto-generator-scorer-ssm-339713011188
+    # The CPM GPU scorer, tagged like aws-cpm-scorer tags it.
+    ditto-cpm-scorer-prod:
+      instance_id: i-0fedcba9876543210
+      placement: { region: us-east-1, availability_zone: us-east-1a }
+      tags:
+        Name: ditto-cpm-scorer-prod
+        env: prod
+        role: cpm-scorer
+        managed: terraform
+        ansible-ssm-bucket: ditto-cpm-scorer-ssm-339713011188

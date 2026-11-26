@@ -18,10 +18,15 @@ from ditto.api_models.submission_settings import (
     MIN_SUBMISSION_FEE_RAO,
     OVERRIDABLE_COMPETITIONS,
 )
-from ditto.db.models import SubmissionSettingsRevision, UploadAdmissionReservation
+from ditto.db.models import (
+    ReadmissionReservation,
+    SubmissionSettingsRevision,
+    UploadAdmissionReservation,
+)
 from ditto.db.queries.agents import (
     SubmissionCooldownError,
     submission_cooldown_decision,
+    submission_since_reservation_error,
 )
 from ditto.db.queries.owner_submission_cooldown import lock_owner_cooldown_hotkey
 from ditto.db.queries.submission_deposit_address import (
@@ -129,6 +134,9 @@ class EffectiveSubmissionSettings:
     """The default fee: the memory (agent) lane's price, inherited by every
     competition without its own amount."""
     competition_fees: Mapping[str, CompetitionFeeOverride] = field(default_factory=dict)
+    readmission_announced_at: datetime | None = None
+    """When the readmission fee was announced; ``None`` keeps it inactive.
+    See :mod:`ditto.db.queries.readmission_gate`."""
 
     def competition_fee(
         self, competition: str, *, competition_requires_fee: bool
@@ -205,6 +213,7 @@ def resolve_submission_settings(
         fee_amount_rao=latest.fee_amount_rao,
         payment_address=payment_address,
         competition_fees=parse_competition_fees(latest.competition_fees),
+        readmission_announced_at=latest.readmission_announced_at,
     )
 
 
@@ -244,6 +253,46 @@ def _reservation_block_until(row: UploadAdmissionReservation) -> datetime:
         _reservation_expiry(row),
         _utc(row.created_at) + UPLOAD_ADMISSION_BLOCK_TTL,
     )
+
+
+async def live_readmission_block_until(
+    session: AsyncSession,
+    *,
+    miner_coldkey: str,
+    now: datetime,
+    exclude: tuple[object, int] | None = None,
+) -> datetime | None:
+    """Until when a live readmission reservation holds this coldkey's slot.
+
+    A reservation blocks a competing reservation for
+    ``UPLOAD_ADMISSION_BLOCK_TTL`` after it is issued (the upload rule), so a
+    crashed attempt never blocks the coldkey all day. ``exclude`` is the
+    ``(agent_id, bench_version)`` being re-reserved.
+    """
+    rows = await session.scalars(
+        select(ReadmissionReservation).where(
+            ReadmissionReservation.miner_coldkey == miner_coldkey,
+            ReadmissionReservation.expires_at > now,
+        )
+    )
+    blocks = [
+        min(_utc(row.expires_at), _utc(row.created_at) + UPLOAD_ADMISSION_BLOCK_TTL)
+        for row in rows
+        if exclude is None or (row.agent_id, row.bench_version) != exclude
+    ]
+    live = [block for block in blocks if block > now]
+    return max(live) if live else None
+
+
+async def live_upload_block_until(
+    session: AsyncSession, *, miner_coldkey: str, now: datetime
+) -> datetime | None:
+    """Until when this coldkey's upload reservation holds its slot."""
+    existing = await session.get(UploadAdmissionReservation, miner_coldkey)
+    if existing is None or _reservation_expiry(existing) <= now:
+        return None
+    block_until = _reservation_block_until(existing)
+    return block_until if block_until > now else None
 
 
 async def reserve_upload_admission(
@@ -308,6 +357,13 @@ async def reserve_upload_admission(
         existing = None
 
     if not replace_existing:
+        # A readmission reservation of this coldkey still inside its block
+        # window holds the slot, exactly like an upload reservation (SN-485).
+        readmission_block = await live_readmission_block_until(
+            session, miner_coldkey=miner_coldkey, now=current
+        )
+        if readmission_block is not None:
+            raise SubmissionCooldownError(readmission_block)
         decision = await submission_cooldown_decision(
             session,
             miner_coldkey=miner_coldkey,
@@ -413,8 +469,25 @@ async def consume_or_enforce_upload_admission(
             raise SubmissionCooldownError(
                 retry_at if retry_at > current else current + timedelta(seconds=60)
             )
+        reserved_at = existing.created_at
+        reserved_cooldown = existing.cooldown_seconds
         await session.delete(existing)
         await session.flush()
+        # A readmission that landed after this reservation started a cooldown
+        # the reservation could not have covered (SN-485). The longer of the
+        # reserved and the current cooldown: a change in either direction
+        # after the reservation never lets the intervening one end early.
+        stale = await submission_since_reservation_error(
+            session,
+            miner_coldkey=miner_coldkey,
+            reserved_at=reserved_at,
+            cooldown=timedelta(
+                seconds=max(reserved_cooldown, settings.cooldown_seconds)
+            ),
+            now=current,
+        )
+        if stale is not None:
+            raise stale
         return
 
     if existing is not None:

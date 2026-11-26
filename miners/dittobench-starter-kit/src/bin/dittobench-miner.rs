@@ -198,6 +198,7 @@ async fn serve(port: u16) -> anyhow::Result<()> {
         .await
         .with_context(|| format!("bind {addr}"))?;
     eprintln!("dittobench-miner serving on http://{addr} (POST /run, POST /seed, GET /health)");
+    eprintln!("{}", dittobench_starter_kit::hybrid::served_path_note());
     axum::serve(listener, app).await.context("axum serve")?;
     Ok(())
 }

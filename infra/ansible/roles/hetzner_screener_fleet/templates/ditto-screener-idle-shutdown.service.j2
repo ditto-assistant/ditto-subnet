@@ -1,0 +1,24 @@
+[Unit]
+Description=Power off {{ screener_fleet_node_id }} once every screener worker has idle-exited
+After=ditto-screener-enroll.service
+
+[Service]
+Type=oneshot
+# Root, so it can take the updater lock and request the poweroff.
+Environment=SCREENER_IDLE_WORKER_PROCESSES={{ screener_fleet_worker_processes }}
+Environment=SCREENER_IDLE_STATE_DIR={{ screener_fleet_state_dir }}
+Environment=SCREENER_IDLE_UPDATE_LOCK={{ screener_fleet_update_state_dir }}/lock
+ExecStart={{ screener_fleet_idle_shutdown_path }}
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateNetwork=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{ screener_fleet_update_state_dir }}
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077

@@ -89,6 +89,7 @@ from ditto.api_server.payment_verifier import (
     PaymentVerifier,
     VerifiedPayment,
 )
+from ditto.api_server.upload_feedback import hotkey_not_registered_message
 from ditto.chain.errors import ChainError
 from ditto.db.queries.attestation import get_bound_coldkey_for_hotkey
 from ditto.db.queries.bans import is_hotkey_banned
@@ -111,6 +112,7 @@ from ditto.db.queries.name_claims import upload_name_is_reserved
 from ditto.db.queries.payments import (
     get_evaluation_payment_for_proof,
     get_generator_payment_for_proof,
+    get_readmission_payment_for_proof,
     insert_generator_payment,
 )
 from ditto.db.queries.scores import emission_owner
@@ -219,6 +221,12 @@ async def _replayed_or_retry(
         extrinsic_index=payload.payment_extrinsic_index,
     ):
         raise PaymentReplayedError("payment proof already funded an agent upload")
+    if await get_readmission_payment_for_proof(
+        session,
+        block_hash=payload.payment_block_hash,
+        extrinsic_index=payload.payment_extrinsic_index,
+    ):
+        raise PaymentReplayedError("payment proof already paid a readmission")
     return None
 
 
@@ -402,15 +410,15 @@ async def upload_submission(
 
     netuid = request.app.state.config.chain.netuid
     try:
-        neurons = await chain.get_recent_neurons(netuid)
+        # A metagraph-cache miss is re-read from chain storage before refusing.
+        registration = await chain.get_hotkey_registration(payload.hotkey, netuid)
     except ChainError as exc:
         raise HTTPException(
             status_code=503, detail="chain unavailable; retry shortly"
         ) from exc
-    neuron = next((n for n in neurons if n.hotkey == payload.hotkey), None)
-    if neuron is None:
+    if not registration.registered:
         raise HTTPException(
-            status_code=400, detail=f"hotkey not registered on netuid {netuid}"
+            status_code=400, detail=hotkey_not_registered_message(registration)
         )
 
     try:
@@ -426,7 +434,7 @@ async def upload_submission(
             request,
             name=payload.name,
             hotkey=payload.hotkey,
-            coldkey=neuron.coldkey or None,
+            coldkey=registration.coldkey or None,
         )
         if refused is not None:
             raise HTTPException(status_code=409, detail=refused)
@@ -487,7 +495,8 @@ async def upload_submission(
             session,
             miner_hotkey=payload.hotkey,
             owner_key=emission_owner(
-                miner_hotkey=payload.hotkey, miner_coldkey=neuron.coldkey or None
+                miner_hotkey=payload.hotkey,
+                miner_coldkey=registration.coldkey or None,
             ),
             source_sha256=payload.source_sha256,
             tree_sha256=upload.info.tree_sha256,

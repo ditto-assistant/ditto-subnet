@@ -36,6 +36,7 @@ from ditto.api_models.validator import (
     BenchmarkRuntimeSettings,
     ConfirmationDatasetPin,
     FailJobResponse,
+    HarnessMemoryTelemetry,
     JobResponse,
     LedgerEntry,
     LedgerResponse,
@@ -64,6 +65,7 @@ from ditto.validator.errors import (
     PlatformError,
     PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
+    PlatformRetryLaterError,
     SandboxOomError,
     ValidatorInfrastructureError,
 )
@@ -890,6 +892,9 @@ def _config() -> MagicMock:
     cfg.generator_track_state = "shadow"
     cfg.generator_weight_eligible = False
     cfg.generator_rank_shares = (0.40, 0.25, 0.15, 0.12, 0.08)
+    cfg.model_context_track_state = "shadow"
+    cfg.model_context_weight_eligible = False
+    cfg.model_context_rank_shares = (0.50, 0.20, 0.13, 0.10, 0.07)
     cfg.min_stake_tao = 0.0
     cfg.sweep_seconds = 120
     cfg.epoch_seconds = 3600
@@ -1660,6 +1665,51 @@ class TestRunOnce:
         assert final.benchmark_capacity.configured_slots == 2
         assert final.benchmark_capacity.healthy_slots == ["slot-0", "slot-1"]
 
+    async def test_scorer_narrowing_warning_names_the_effective_slots_once(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Memory below the scorer: report what runs, and only on change.
+
+        ``_available_slots`` runs on every heartbeat, so a persistent mismatch
+        used to log one warning per heartbeat, naming the scorer's count even
+        when host memory admitted fewer.
+        """
+        config = _config()
+        config.benchmark_capacity = 8
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 4
+        worker = ValidatorWorker(
+            config=config,
+            platform=_platform_with_ledger(jobs=[], ledger=[]),
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        admitted = [2]
+        monkeypatch.setattr(worker, "_memory_admitted_slots", lambda: admitted[0])
+
+        with caplog.at_level(logging.WARNING, logger=worker_mod.logger.name):
+            first = worker._available_slots()
+            second = worker._available_slots()
+            # Memory recovers while the scorer mismatch persists: the effective
+            # count changed, so the operator must see the new number.
+            admitted[0] = 4
+            recovered = worker._available_slots()
+
+        assert first == second == {"slot-0", "slot-1"}
+        assert len(recovered) == 4
+        warnings = [
+            record.getMessage()
+            for record in caplog.records
+            if "exceeds scorer capacity" in record.getMessage()
+        ]
+        assert warnings == [
+            "configured validator capacity 8 exceeds scorer capacity 4; "
+            "running 2 slot(s) until the stack agrees",
+            "configured validator capacity 8 exceeds scorer capacity 4; "
+            "running 4 slot(s) until the stack agrees",
+        ]
+
     async def test_parallel_slots_overlap_and_isolate_sibling_failure(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1937,6 +1987,168 @@ class TestRunOnce:
         # Every retest dispatch was preceded by an empty canonical poll; the
         # ordinary queue therefore keeps strict first refusal on spare slots.
         assert platform.request_job.await_count >= 2
+
+    async def test_allocator_busy_retries_the_slot_without_electing_other_lanes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A busy dispatch fence never read the queue, so it is not an empty one.
+
+        The slot retries on its own backoff; the retest lane is dispatched only
+        once a poll actually comes back empty.
+        """
+        from ditto.validator import platform as platform_mod
+
+        events: list[str] = []
+        reasons = ["allocator_busy", "allocator_busy", None]
+
+        async def request_job(*, slot_id: str) -> JobResponse | None:  # noqa: ARG001
+            reason = reasons.pop(0) if reasons else None
+            platform_mod._JOB_DECLINE_REASON.set(reason)
+            events.append(f"poll:{reason}")
+            return None
+
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=request_job)
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        monkeypatch.setattr(worker_mod, "_ALLOCATOR_BUSY_BACKOFF_BASE_SECONDS", 0.001)
+        backoffs: list[float] = []
+        real_backoff = worker_mod._allocator_busy_backoff_seconds
+
+        def record_backoff(streak: int) -> float:
+            delay = real_backoff(streak)
+            backoffs.append(delay)
+            return delay
+
+        monkeypatch.setattr(
+            worker_mod, "_allocator_busy_backoff_seconds", record_backoff
+        )
+
+        async def run_retests(**_kwargs: object) -> bool:
+            events.append("retest")
+            return False
+
+        monkeypatch.setattr(worker, "_run_top5_confirmation_lane", run_retests)
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=5)
+
+        assert events[:4] == [
+            "poll:allocator_busy",
+            "poll:allocator_busy",
+            "poll:None",
+            "retest",
+        ]
+        # Exponential: the second busy in a row may wait up to twice the first.
+        assert len(backoffs) == 2
+        assert 0.0005 <= backoffs[0] <= 0.001
+        assert 0.001 <= backoffs[1] <= 0.002
+
+    async def test_allocator_busy_backoff_is_jittered_and_capped(self) -> None:
+        # A streak past 2**1024 used to overflow the float conversion.
+        delays = [
+            worker_mod._allocator_busy_backoff_seconds(n)
+            for n in (*range(1, 12), 1025, 10**6)
+        ]
+        cap = worker_mod._ALLOCATOR_BUSY_BACKOFF_MAX_SECONDS
+        assert all(0 < delay <= cap for delay in delays)
+        assert all(delay >= cap / 2 for delay in delays[6:])
+
+    async def test_sleep_reports_a_wakeup_a_sibling_already_cleared(self) -> None:
+        """The stagger decision must not re-read a shared event after cleanup."""
+        event = asyncio.Event()
+
+        async def set_then_clear() -> None:
+            await asyncio.sleep(0.01)
+            event.set()
+            # A sibling clears it before the sleeper's cleanup finishes.
+            await asyncio.sleep(0)
+            event.clear()
+
+        clearer = asyncio.create_task(set_then_clear())
+        woken = await ValidatorWorker._sleep_or_interrupt(5.0, None, event)
+        await clearer
+        assert woken is True
+        assert not event.is_set()
+        assert await ValidatorWorker._sleep_or_interrupt(0.01, event) is False
+        assert await ValidatorWorker._sleep_or_interrupt(0.01) is False
+
+    async def test_empty_round_lane_does_not_wake_idle_siblings_into_a_storm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The live 288k-allocator_busy shape: one lease, idle siblings, rounds on.
+
+        Each empty round poll used to set the shared wake event, so every
+        waiting sibling re-polled at once, one of them became the next round
+        dispatcher, and the loop ran as fast as the round endpoint answered.
+        """
+        repoll = 0.2
+        polls: list[str] = []
+        round_polls = 0
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def request_job(*, slot_id: str) -> JobResponse | None:
+            polls.append(slot_id)
+            if slot_id == "slot-0" and not started.is_set():
+                return _job("5MinerA" + "x" * 41, slot_id=slot_id)
+            return None
+
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=request_job)
+        config = _config()
+        config.benchmark_capacity = 4
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 4
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        worker._scorer_runs_generator_rounds = True
+        monkeypatch.setattr(worker, "_report_heartbeat", AsyncMock())
+        monkeypatch.setattr(worker_mod, "_IDLE_SLOT_REPOLL_SECONDS", repoll)
+
+        async def score(_job: JobResponse) -> ScoreReport:
+            started.set()
+            await release.wait()
+            return _report("run-slot-0", 0.7)
+
+        async def run_retests(**_kwargs: object) -> bool:
+            return False
+
+        async def run_round(**_kwargs: object) -> bool:
+            nonlocal round_polls
+            round_polls += 1
+            await asyncio.sleep(0)
+            return False
+
+        monkeypatch.setattr(worker, "_score_job", score)
+        monkeypatch.setattr(worker, "_run_top5_confirmation_lane", run_retests)
+        monkeypatch.setattr(worker, "_run_generator_round_lane", run_round)
+
+        sweep = asyncio.create_task(worker.run_once(set_weights=False))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        polls.clear()
+        round_polls = 0
+        window = 1.0
+        await asyncio.sleep(window)
+        idle_polls = len(polls)
+        observed_round_polls = round_polls
+        release.set()
+        await asyncio.wait_for(sweep, timeout=5)
+
+        # Three idle slots at a 0.2s (+/-25%) repoll: about 15 polls a second.
+        # The storm was hundreds.
+        assert idle_polls <= 3 * (window / (repoll * 0.75)) + 3, idle_polls
+        # The round lane is asked at most once per repoll interval host-wide.
+        assert observed_round_polls <= window / repoll + 1, observed_round_polls
 
     async def test_round_work_is_requested_while_a_retest_holds_a_slot(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3222,6 +3434,95 @@ class TestRunOnce:
         assert "slot-0" in worker._healthy_slots
         assert "slot-0" not in worker._resource_blocked_until
         platform.submit_score.assert_awaited_once()
+
+    async def test_host_memory_pressure_is_infrastructure_and_blocks_the_slot(
+        self,
+    ) -> None:
+        """SN-488: genuine infra stays infra while a harness OOM is the agent's.
+
+        The counterpart of the test above. A kill the scorer cannot pin on the
+        harness's own cap is handed back as ``infrastructure`` (Platform parks
+        it for an operator retry and never charges the miner), and the slot
+        rests so the host can recover.
+        """
+        jobs = [_job("5MinerA" + "x" * 41)]
+        platform = _platform_with_ledger(jobs=jobs, ledger=[])
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock()
+        dittobench.score_tarball = AsyncMock(
+            side_effect=ValidatorInfrastructureError("host_memory_pressure")
+        )
+        dittobench.last_details = {}
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker.run_once(set_weights=False)
+
+        reason = platform.report_ticket_failed.await_args.args[1]
+        assert reason == "infrastructure"
+        assert "slot-0" not in worker._healthy_slots
+        assert "slot-0" in worker._resource_blocked_until
+
+    async def test_harness_memory_reaches_platform_with_score_and_failure(
+        self,
+    ) -> None:
+        """SN-500: measured memory rides with both outcomes, unsigned."""
+        telemetry = HarnessMemoryTelemetry(
+            peak_bytes=1900 << 20,
+            p50_bytes=600 << 20,
+            p95_bytes=1700 << 20,
+            samples=812,
+            sampled_seconds=1624.0,
+            limit_bytes=2048 << 20,
+        )
+        jobs = [_job("5MinerA" + "x" * 41), _job("5MinerB" + "x" * 41)]
+        platform = _platform_with_ledger(jobs=jobs, ledger=[])
+        oom = SandboxOomError("memory allowance")
+        oom.harness_memory = telemetry
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock()
+        dittobench.score_tarball = AsyncMock(side_effect=[oom, _report("run-b", 0.7)])
+        dittobench.take_harness_memory = MagicMock(return_value=telemetry)
+        dittobench.last_details = {}
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker.run_once(set_weights=False)
+
+        failed_kwargs = platform.report_ticket_failed.await_args.kwargs
+        assert failed_kwargs["harness_memory"] == telemetry
+        dittobench.take_harness_memory.assert_called_once_with("run-b")
+        assert platform.submit_score.await_args.kwargs["harness_memory"] == telemetry
+
+    async def test_unmeasured_runs_send_no_harness_memory(self) -> None:
+        jobs = [_job("5MinerA" + "x" * 41)]
+        platform = _platform_with_ledger(jobs=jobs, ledger=[])
+        dittobench = MagicMock()
+        dittobench.preflight = AsyncMock()
+        dittobench.score_tarball = AsyncMock(return_value=_report("run-a", 0.7))
+        # A bare mock answers anything; only real telemetry may ride.
+        dittobench.last_details = {}
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+
+        await worker.run_once(set_weights=False)
+
+        assert "harness_memory" not in platform.submit_score.await_args.kwargs
 
     async def test_ticket_hand_back_failure_never_crashes_the_sweep(self) -> None:
         jobs = [_job("5MinerA" + "x" * 41)]
@@ -6025,6 +6326,90 @@ class TestConfirmAndSubmit:
         assert out is None
         platform.submit_score.assert_not_awaited()
 
+    async def test_multi_seed_submit_carries_the_worst_seeds_memory(self) -> None:
+        """SN-500: the submission reports the heaviest seed, failed or not."""
+        agent_id = uuid4()
+        mib = 1 << 20
+
+        def _memory(p95: int, peak: int) -> HarnessMemoryTelemetry:
+            return HarnessMemoryTelemetry(
+                peak_bytes=peak * mib,
+                p50_bytes=100 * mib,
+                p95_bytes=p95 * mib,
+                samples=10,
+                sampled_seconds=20.0,
+                limit_bytes=2048 * mib,
+            )
+
+        by_run = {"run-10": _memory(300, 320), "run-20": _memory(500, 520)}
+        failed = worker_mod.DittobenchError("seed 30 died")
+        failed.harness_memory = _memory(900, 1000)
+
+        async def _score(**kw: Any) -> ScoreReport:
+            if kw["seed"] == 30:
+                raise failed
+            composite = {10: 0.8, 20: 0.7}[kw["seed"]]
+            return self._seeded_report(kw["seed"], composite).model_copy(
+                update={"bench_version": 8, "details": {"bench_version": 8}}
+            )
+
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(side_effect=_score)
+        # Consumes like the real client: once, then None.
+        dittobench.take_harness_memory = MagicMock(
+            side_effect=lambda run_id: by_run.pop(run_id, None)
+        )
+        dittobench.last_details = None
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.get_artifact = AsyncMock(
+            return_value=ArtifactResponse(
+                agent_id=agent_id,
+                sha256="ab" * 32,
+                download_url="https://signed.example/x.tar.gz",
+                expires_at=datetime.now(UTC),
+                bench_version=8,
+                screening_policy_version=9,
+                screened_image_url="https://signed.example/image.tar",
+                screened_image_sha256="12" * 32,
+                screened_image_size_bytes=123,
+                screened_image_id="sha256:" + "34" * 32,
+                screened_image_ref=(
+                    "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+                ),
+            )
+        )
+        w = await self._worker(dittobench, platform)
+        await w._confirm_and_submit(
+            agent_id,
+            "ab" * 32,
+            "5Miner" + "x" * 42,
+            bench_version=8,
+            seeds=[10, 20, 30],
+        )
+
+        assert platform.submit_score.await_count == 1
+        submitted = platform.submit_score.await_args.kwargs["harness_memory"]
+        assert submitted.p95_bytes == 900 * mib
+        # Every scored seed's cached entry was consumed, not left to evict.
+        assert by_run == {}
+
+    def test_worst_seed_memory_orders_by_p95_then_peak(self) -> None:
+        mib = 1 << 20
+
+        def _memory(p95: int, peak: int) -> HarnessMemoryTelemetry:
+            return HarnessMemoryTelemetry(
+                peak_bytes=peak * mib,
+                p50_bytes=50 * mib,
+                p95_bytes=p95 * mib,
+                samples=1,
+                sampled_seconds=1.0,
+            )
+
+        assert worker_mod.worst_seed_memory([]) is None
+        tie = [_memory(400, 410), _memory(400, 450), _memory(300, 900)]
+        worst = worker_mod.worst_seed_memory(tie)
+        assert worst is not None and worst.peak_bytes == 450 * mib
+
 
 class TestPooledConfirmationStderr:
     def test_none_below_two_seeds(self) -> None:
@@ -6510,6 +6895,196 @@ class TestResourceConstrainedAdmission:
         )
         assert len(worker._available_slots()) == 1
 
+    def _memory_host(self, memory_total_mib: int) -> ValidatorWorker:
+        collector = self._collector()
+        collector.host_specs = MagicMock(
+            return_value=HostSpecs(
+                cpu_count=4,
+                memory_total_mib=memory_total_mib,
+                disk_total_gib=200,
+                architecture="x86_64",
+            )
+        )
+        worker, _ = self._worker(collector=collector)
+        worker._sandbox_memory_limit_mib = 8192
+        return worker
+
+    def test_memory_admission_logs_the_fix_path_once_per_change(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """SN-488: the validator's own log says how much memory would fix it."""
+        worker = self._memory_host(7934)
+        with caplog.at_level(logging.INFO, logger=worker_mod.logger.name):
+            assert worker._available_slots() == set()
+            assert worker._available_slots() == set()
+            # The operator lowers the cap: one slot fits now.
+            worker._sandbox_memory_limit_mib = 6144
+            assert len(worker._available_slots()) == 1
+            worker._sandbox_memory_limit_mib = 1536
+            assert len(worker._available_slots()) == 4
+        lines = [
+            record.getMessage()
+            for record in caplog.records
+            if "host memory" in record.getMessage()
+        ]
+        assert lines == [
+            "host memory admits no benchmark slot at the 8192 MiB harness cap "
+            "(7934 MiB host, 1024 MiB reserve): this validator cannot score. It "
+            "keeps heartbeating and setting weights. Needs at least 9216 MiB for "
+            "1 slot and 33792 MiB for all 4 configured slot(s).",
+            "host memory admits 1 of 4 configured slot(s) at the 6144 MiB harness "
+            "cap (7934 MiB host, 1024 MiB reserve); the rest are never offered. "
+            "Needs at least 25600 MiB for all 4.",
+            "host memory now admits all 4 configured slot(s) at the 1536 MiB "
+            "harness cap (7934 MiB host)",
+        ]
+        levels = [
+            record.levelno
+            for record in caplog.records
+            if "host memory" in record.getMessage()
+        ]
+        assert levels == [logging.ERROR, logging.WARNING, logging.INFO]
+
+    async def test_a_running_lease_keeps_its_cap_after_the_live_cap_drops(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Lowering the cap must not over-admit around a lease issued above it.
+
+        32,099 MiB host, one lease running at 8192 MiB, live cap lowered to
+        4096: 8192 + 5 x 4096 fits in 31,075 MiB, a seventh slot would not.
+        Sizing every slot at the new cap would claim 7.
+        """
+        worker = self._memory_host(32099)
+        monkeypatch.setattr(worker, "_publish_benchmark_progress", AsyncMock())
+        token = worker_mod._CURRENT_SLOT.set("slot-0")
+        try:
+            lease = SimpleNamespace(
+                benchmark_runtime=SimpleNamespace(sandbox_memory_limit_mib=8192)
+            )
+            await worker._begin_active_ticket(
+                uuid4(),
+                datetime.now(UTC) + timedelta(hours=1),
+                18,
+                memory_limit_mib=worker_mod._lease_memory_limit_mib(lease),
+            )
+            assert worker._slots["slot-0"].memory_limit_mib == 8192
+            with caplog.at_level(logging.WARNING, logger=worker_mod.logger.name):
+                worker._adopt_live_sandbox_cap(4096)
+                assert worker._memory_admitted_slots() == 6
+            # Configured 4 at 4096 fit a clean host, so the log is only about
+            # what the older lease holds: there is no hardware to add.
+            assert not [
+                record
+                for record in caplog.records
+                if "host memory admits" in record.getMessage()
+            ]
+            worker._clear_active_ticket()
+            assert worker._slots["slot-0"].memory_limit_mib is None
+            # The lease ended: every slot is sized at the live cap again.
+            assert worker._memory_admitted_slots() == 7
+        finally:
+            worker_mod._CURRENT_SLOT.reset(token)
+
+    def test_memory_log_names_memory_held_by_higher_cap_leases(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The fix path stays what to provision; held memory is named apart."""
+        worker = self._memory_host(15987)
+        worker._slots["slot-0"].active_agent_id = uuid4()
+        worker._slots["slot-0"].memory_limit_mib = 8192
+        worker._sandbox_memory_limit_mib = 6144
+        with caplog.at_level(logging.WARNING, logger=worker_mod.logger.name):
+            # 15,987 - 2,048 held = 13,939: (13,939 - 1,024) // 6,144 = 2 of 4.
+            assert worker._memory_admitted_slots() == 2
+        lines = [
+            record.getMessage()
+            for record in caplog.records
+            if "host memory admits" in record.getMessage()
+        ]
+        assert lines == [
+            "host memory admits 2 of 4 configured slot(s) at the 6144 MiB "
+            "harness cap (15987 MiB host, 1024 MiB reserve); the rest are never "
+            "offered. Needs at least 25600 MiB for all 4. A further 2048 MiB is "
+            "held until leases issued under a higher cap finish."
+        ]
+        # A second higher-cap lease holds more without changing the admitted
+        # count; the log still follows the held figure.
+        caplog.clear()
+        worker._slots["slot-1"].active_agent_id = uuid4()
+        worker._slots["slot-1"].memory_limit_mib = 6656
+        with caplog.at_level(logging.WARNING, logger=worker_mod.logger.name):
+            # 15,987 - 2,560 held = 13,427: (13,427 - 1,024) // 6,144 = 2.
+            assert worker._memory_admitted_slots() == 2
+            assert worker._memory_admitted_slots() == 2
+        held = [
+            record.getMessage()
+            for record in caplog.records
+            if "host memory admits" in record.getMessage()
+        ]
+        assert len(held) == 1
+        assert held[0].endswith(
+            "A further 2560 MiB is held until leases issued under a higher cap finish."
+        )
+
+    def test_lease_memory_cap_is_read_only_from_a_well_formed_runtime(self) -> None:
+        def lease(cap: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                benchmark_runtime=SimpleNamespace(sandbox_memory_limit_mib=cap)
+            )
+
+        assert worker_mod._lease_memory_limit_mib(lease(6144)) == 6144
+        for malformed in (None, True, 0, "8192", MagicMock()):
+            assert worker_mod._lease_memory_limit_mib(lease(malformed)) is None
+        assert worker_mod._lease_memory_limit_mib(SimpleNamespace()) is None
+
+    def test_published_cap_admits_three_slots_on_the_smallest_host(self) -> None:
+        """SN-488: at the published 2048 MiB cap a 7,934 MiB host runs 3."""
+        collector = self._collector()
+        collector.host_specs = MagicMock(
+            return_value=HostSpecs(
+                cpu_count=4,
+                memory_total_mib=7934,
+                disk_total_gib=200,
+                architecture="x86_64",
+            )
+        )
+        worker, _ = self._worker(collector=collector)
+        assert worker._sandbox_memory_limit_mib == 2048
+        assert worker._memory_admitted_slots() == 3
+
+    def test_heartbeat_reply_resizes_admission_to_the_live_cap(self) -> None:
+        """A host admitting no slot gets no lease; the heartbeat must tell it."""
+        worker = self._memory_host(7934)
+        assert worker._available_slots() == set()
+        worker._adopt_live_sandbox_cap(6144)
+        assert worker._sandbox_memory_limit_mib == 6144
+        assert len(worker._available_slots()) == 1
+        # Not answered, or nonsense from a fake, keeps the cap last seen.
+        for unanswered in (None, MagicMock(), True, 0):
+            worker._adopt_live_sandbox_cap(unanswered)  # type: ignore[arg-type]
+            assert worker._sandbox_memory_limit_mib == 6144
+
+    async def test_a_heartbeat_reply_cap_reaches_the_next_capacity_snapshot(
+        self,
+    ) -> None:
+        worker = self._memory_host(7934)
+        submit = AsyncMock(
+            return_value=ValidatorHeartbeatResponse(
+                accepted=True,
+                seen_at=datetime.now(UTC),
+                leases=None,
+                sandbox_memory_limit_mib=6144,
+            )
+        )
+        worker._platform.submit_heartbeat = submit  # type: ignore[method-assign]
+
+        await worker.run_once(set_weights=False)
+
+        final = submit.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        # Advertised at 8192 MiB as nothing; at the live 6144 MiB, one slot.
+        assert final.benchmark_capacity.healthy_slots == ["slot-0"]
+
     async def test_a_nearly_full_disk_claims_nothing_but_still_heartbeats(
         self,
     ) -> None:
@@ -6876,3 +7451,160 @@ class TestJobHeartbeatFreshness:
         assert polls.count("slot-0") == settled
         release.set()
         await asyncio.wait_for(sweep, timeout=2)
+
+
+def _retry_later(seconds: float = 15.0) -> PlatformRetryLaterError:
+    return PlatformRetryLaterError(
+        "job request deferred (503): dueling slice preparation pending",
+        retry_after_seconds=seconds,
+    )
+
+
+class TestJobRetryLater:
+    """A 503 + Retry-After job refusal waits and re-polls the same slot.
+
+    Platform answers a bench v16+ seed's first lease this way while it prepares
+    the dueling slice. Isolating the slot instead idled it until the longest
+    sibling lease finished, stalling every fresh v16 seed for a whole sweep.
+    """
+
+    @staticmethod
+    def _recording_sleep(
+        worker: ValidatorWorker, monkeypatch: pytest.MonkeyPatch
+    ) -> list[float]:
+        waits: list[float] = []
+
+        async def sleep(seconds: float, *_events: asyncio.Event | None) -> bool:
+            waits.append(seconds)
+            await asyncio.sleep(0)
+            return False
+
+        monkeypatch.setattr(worker, "_sleep_or_interrupt", sleep)
+        return waits
+
+    async def test_deferred_claim_leases_on_the_same_slot_in_the_sweep(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        first = _job("5MinerA" + "x" * 41, slot_id="slot-0")
+        second = _job("5MinerB" + "x" * 41, slot_id="slot-0")
+        cap = worker_mod._JOB_RETRY_LATER_MAX_CONSECUTIVE
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        # A full run of deferrals before each lease: the bound counts
+        # consecutive refusals, so a lease in between resets it.
+        platform.request_job = AsyncMock(
+            side_effect=[
+                *(_retry_later(15.0) for _ in range(cap)),
+                first,
+                *(_retry_later(4.0) for _ in range(cap)),
+                second,
+                None,
+            ]
+        )
+        worker = _heartbeat_worker(platform)
+        waits = self._recording_sleep(worker, monkeypatch)
+        scored: list[JobResponse] = []
+
+        async def score(job: JobResponse) -> ScoreReport:
+            scored.append(job)
+            return _report(f"run-{len(scored)}", 0.7)
+
+        monkeypatch.setattr(worker, "_score_job", score)
+
+        outcome = await asyncio.wait_for(worker.run_once(set_weights=False), timeout=5)
+
+        assert scored == [first, second]
+        assert outcome.queue_depth == 2
+        assert waits[: 2 * cap] == [15.0] * cap + [4.0] * cap
+        assert "slot-0" in worker._healthy_slots
+
+    async def test_consecutive_deferrals_are_bounded_then_isolate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cap = worker_mod._JOB_RETRY_LATER_MAX_CONSECUTIVE
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=lambda **_: _raise_retry_later())
+        worker = _heartbeat_worker(platform)
+        waits = self._recording_sleep(worker, monkeypatch)
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=5)
+
+        assert platform.request_job.await_count == cap + 1
+        assert waits == [15.0] * cap
+
+    async def test_stop_cuts_the_retry_wait_short(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=[_retry_later(120.0)])
+        worker = _heartbeat_worker(platform)
+        stop = asyncio.Event()
+        waiting = asyncio.Event()
+        real_sleep = worker._sleep_or_interrupt
+
+        async def sleep(seconds: float, *events: asyncio.Event | None) -> bool:
+            if seconds == 120.0:
+                waiting.set()
+            return await real_sleep(seconds, *events)
+
+        worker._sleep_or_interrupt = sleep  # type: ignore[method-assign]
+        sweep = asyncio.create_task(
+            worker.run_once(set_weights=False, stop_requested=stop)
+        )
+        await asyncio.wait_for(waiting.wait(), timeout=2)
+        stop.set()
+        await asyncio.wait_for(sweep, timeout=2)
+
+        assert platform.request_job.await_count == 1
+
+    async def test_plain_refusal_still_isolates_without_waiting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(
+            side_effect=PlatformError("job request rejected (503): unavailable")
+        )
+        worker = _heartbeat_worker(platform)
+        waits = self._recording_sleep(worker, monkeypatch)
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=5)
+
+        assert platform.request_job.await_count == 1
+        assert waits == []
+
+    async def test_confirmation_claim_deferral_repolls_the_same_slot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_top5_confirmation_job = AsyncMock(
+            side_effect=[_retry_later(15.0), _retry_later(15.0), None]
+        )
+        worker = _heartbeat_worker(platform)
+        waits = self._recording_sleep(worker, monkeypatch)
+
+        assert await worker._run_top5_confirmation_lane() is False
+
+        assert [
+            call.kwargs["slot_id"]
+            for call in platform.request_top5_confirmation_job.await_args_list
+        ] == ["slot-0"] * 3
+        assert waits == [15.0, 15.0]
+
+    async def test_confirmation_claim_deferrals_are_bounded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cap = worker_mod._JOB_RETRY_LATER_MAX_CONSECUTIVE
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_top5_confirmation_job = AsyncMock(
+            side_effect=lambda **_: _raise_retry_later()
+        )
+        worker = _heartbeat_worker(platform)
+        waits = self._recording_sleep(worker, monkeypatch)
+
+        assert await worker._run_top5_confirmation_lane() is False
+
+        assert platform.request_top5_confirmation_job.await_count == cap + 1
+        assert waits == [15.0] * cap
+        # Nothing was leased, so nothing is handed back against the agent.
+        platform.report_ticket_failed.assert_not_awaited()
+
+
+def _raise_retry_later() -> None:
+    raise _retry_later(15.0)

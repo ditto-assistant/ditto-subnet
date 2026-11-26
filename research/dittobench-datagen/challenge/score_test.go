@@ -3,6 +3,7 @@ package challenge
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
@@ -132,6 +133,29 @@ func buildVectors(t *testing.T) []ScoreVector {
 		member("a2", "o2", false, randomScores(rng, cases[:10], 0.5)),
 		member("a3", "o3", false, randomScores(rng, cases[:10], 0.5)),
 	}}, custom)
+
+	// Frontier: every agent fails every case. Attested cases are valid, so
+	// they earn credit instead of the unsolved penalty. Appended last so the
+	// earlier vectors stay byte-identical.
+	ids := func(cs []CaseRef) []CaseRef { return append([]CaseRef(nil), cs...) }
+	frontier := params
+	frontier.FrontierWeight = 1
+	frontier.TargetCases = len(cases)
+	zeroPanel := []PanelMember{
+		member("a1", "o1", true, uniform(cases, 0)),
+		member("a2", "o2", false, uniform(cases, 0)),
+		member("a3", "o3", false, uniform(cases, 0)),
+	}
+	add("frontier_all_attested", cases, ScoreInput{GeneratorOwnerKey: "gen", Panel: zeroPanel, FrontierCases: ids(cases)}, frontier)
+	add("frontier_half_attested", cases, ScoreInput{GeneratorOwnerKey: "gen", Panel: zeroPanel, FrontierCases: ids(cases[:8])}, frontier)
+	add("frontier_weight_zero_is_off", cases, ScoreInput{GeneratorOwnerKey: "gen", Panel: zeroPanel, FrontierCases: ids(cases)}, params)
+	partial := frontier
+	partial.FrontierWeight = 0.5
+	add("frontier_mixed_panel_half_weight", cases, ScoreInput{GeneratorOwnerKey: "gen", Panel: []PanelMember{
+		member("x1", "o1", true, randomScores(rng, cases, 0.4)),
+		member("x2", "o2", false, randomScores(rng, cases, 0.4)),
+		member("x3", "o3", false, randomScores(rng, cases, 0.2)),
+	}, FrontierCases: ids(cases)}, partial)
 	return vs
 }
 
@@ -200,6 +224,30 @@ func TestScoreSemantics(t *testing.T) {
 	m := vs["mixed_random_panel"].Expected
 	if m.Score <= 0 || m.Score > 1 || m.Discriminating == 0 {
 		t.Errorf("mixed: %+v", m)
+	}
+
+	// Every agent fails, the oracle attests every case: full credit
+	// (1 − 0)·1.5 per case over 1.5·n, and no unsolved penalty.
+	if f := vs["frontier_all_attested"].Expected; f.Frontier != 16 || f.Unsolved != 0 || math.Abs(f.Score-1) > 1e-12 || f.Cases[0].Status != CaseFrontier {
+		t.Errorf("frontier all attested: %+v", f)
+	}
+	// Half attested: 8 frontier cases earn 8·1.5/(1.5·16) = 0.5 credit, times
+	// the (1 − 8/16)² penalty for the 8 still unsolved.
+	if f := vs["frontier_half_attested"].Expected; f.Frontier != 8 || f.Unsolved != 8 || math.Abs(f.Score-0.125) > 1e-12 {
+		t.Errorf("frontier half attested: %+v", f)
+	}
+	if f := vs["frontier_weight_zero_is_off"].Expected; f.Frontier != 0 || f.Unsolved != 16 || f.Score != 0 {
+		t.Errorf("frontier off: %+v", f)
+	}
+	// Attestation never touches a case the panel decided.
+	mp := vs["frontier_mixed_panel_half_weight"].Expected
+	for _, c := range mp.Cases {
+		if c.Status == CaseFrontier && c.SolverOwners >= 2 {
+			t.Errorf("solvable case %s scored frontier", c.CaseID)
+		}
+	}
+	if mp.Frontier == 0 || mp.Unsolved != 0 {
+		t.Errorf("frontier mixed: %+v", mp)
 	}
 }
 
@@ -369,5 +417,171 @@ func TestScoreRunSemantics(t *testing.T) {
 	}
 	if _, err := ScoreRun(RunInput{}, DefaultScoreParams()); err == nil {
 		t.Error("empty run accepted")
+	}
+}
+
+// FrontierVector pins frontier scoring as a post-pass over an unattested
+// score. Platform scores rounds without attestations and applies them later
+// (once the oracle reports and the audit settles) from the stored verdicts;
+// its port (apps/platform/ditto/api_server/generator_frontier.py) replays
+// testdata/frontier_vectors.json and must reproduce Expected exactly from
+// Base, FrontierCases and Params.
+type FrontierVector struct {
+	Name          string      `json:"name"`
+	Params        ScoreParams `json:"params"`
+	FrontierCases []CaseRef   `json:"frontier_cases"`
+	Base          PackScore   `json:"base"`
+	Expected      PackScore   `json:"expected"`
+}
+
+func buildFrontierVectors(t *testing.T) []FrontierVector {
+	t.Helper()
+	cases := ReferencePack(21, testHotkey).Refs()
+	rng := rand.New(rand.NewSource(4242))
+	var vs []FrontierVector
+	add := func(name string, in ScoreInput, p ScoreParams, attested []CaseRef) {
+		base, err := ScoreCases(cases, in, p)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		in.FrontierCases = attested
+		got, err := ScoreCases(cases, in, p)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		vs = append(vs, FrontierVector{Name: name, Params: p, FrontierCases: attested, Base: base, Expected: got})
+	}
+	every := append([]CaseRef(nil), cases...)
+	p := DefaultScoreParams()
+	p.FrontierWeight = 1
+	zero := []PanelMember{
+		member("a1", "o1", true, uniform(cases, 0)),
+		member("a2", "o2", false, uniform(cases, 0)),
+		member("a3", "o3", false, uniform(cases, 0.25)),
+	}
+	add("all_fail_all_attested", ScoreInput{GeneratorOwnerKey: "gen", Panel: zero}, p, every)
+	add("all_fail_some_attested", ScoreInput{GeneratorOwnerKey: "gen", Panel: zero}, p, every[:5])
+	add("nothing_attested", ScoreInput{GeneratorOwnerKey: "gen", Panel: zero}, p, nil)
+	for _, w := range []float64{0.3, 0.75, 1} {
+		pw := p
+		pw.FrontierWeight = w
+		pw.TargetCases = 16
+		add(fmt.Sprintf("random_panel_weight_%g", w), ScoreInput{GeneratorOwnerKey: "gen", Panel: []PanelMember{
+			member("x1", "o1", true, randomScores(rng, cases, 0.35)),
+			member("x2", "o2", false, randomScores(rng, cases, 0.45)),
+			member("x3", "o3", false, randomScores(rng, cases, 0.2)),
+			member("x4", "gen", false, uniform(cases, 1)),
+		}, ClaimedFingerprints: []string{cases[2].Fingerprint}}, pw, every)
+	}
+	noBonus := p
+	noBonus.ChampionBonus = 0
+	add("no_champion_bonus", ScoreInput{GeneratorOwnerKey: "gen", Panel: []PanelMember{
+		member("y1", "o1", true, randomScores(rng, cases, 0.3)),
+		member("y2", "o2", false, randomScores(rng, cases, 0.3)),
+		member("y3", "o3", false, randomScores(rng, cases, 0.3)),
+	}}, noBonus, every[3:])
+	return vs
+}
+
+func TestFrontierVectorsGolden(t *testing.T) {
+	vs := buildFrontierVectors(t)
+	path := "testdata/frontier_vectors.json"
+	if *update {
+		b, err := json.MarshalIndent(vs, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v (run go test ./challenge -run TestFrontierVectorsGolden -update)", err)
+	}
+	var golden []FrontierVector
+	if err := json.Unmarshal(raw, &golden); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := json.Marshal(vs)
+	want, _ := json.Marshal(golden)
+	if string(got) != string(want) {
+		t.Fatal("frontier vectors drifted; rerun with -update if intended")
+	}
+	for _, v := range vs {
+		if v.Base.Frontier != 0 {
+			t.Fatalf("%s: a base score has no frontier cases", v.Name)
+		}
+	}
+}
+
+// An attestation names a case's content, not just its id: a different case
+// that reuses the id never inherits it.
+func TestFrontierAttestationsAreScopedToCaseContent(t *testing.T) {
+	cases := ReferencePack(21, testHotkey).Refs()[:8]
+	other := make([]CaseRef, len(cases))
+	for i, c := range cases {
+		other[i] = CaseRef{CaseID: c.CaseID, Fingerprint: "other-seed-" + c.Fingerprint}
+	}
+	params := DefaultScoreParams()
+	params.FrontierWeight = 1
+	params.TargetCases = len(cases)
+	ps, err := ScoreCases(other, ScoreInput{
+		GeneratorOwnerKey: "gen",
+		Panel:             zeroPanel(other),
+		FrontierCases:     cases, // same ids, other content
+	}, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps.Frontier != 0 || ps.Unsolved != len(other) || ps.Score != 0 {
+		t.Fatalf("a same-id case with other content must stay unsolved: %+v", ps)
+	}
+}
+
+// Attestations belong to the seed that earned them. A fingerprint covers a
+// case's question and answer, not its haystack, so the same question can
+// appear in two seeds' packs over different memory. An attestation earned on
+// one seed's haystack must never turn the other seed's copy into frontier.
+func TestFrontierAttestationsNeverCrossSeedContexts(t *testing.T) {
+	cases := ReferencePack(21, testHotkey).Refs()[:8]
+	params := DefaultScoreParams()
+	params.FrontierWeight = 1
+	params.TargetCases = len(cases)
+	run := func(attestOn int) RunScore {
+		seeds := []SeedPanel{
+			{Seed: "s0", Cases: cases, Panel: zeroPanel(cases)},
+			{Seed: "s1", Cases: cases, Panel: zeroPanel(cases)},
+		}
+		seeds[attestOn].FrontierCases = cases
+		out, err := ScoreRun(RunInput{GeneratorOwnerKey: "gen", Seeds: seeds}, params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	// Attested on s1 only: s0's copy (scored first, so it holds the
+	// fingerprints) stays unsolved, and s1's copy is a duplicate.
+	later := run(1)
+	if s0 := later.Seeds[0]; s0.Frontier != 0 || s0.Unsolved != len(cases) || s0.Score != 0 {
+		t.Fatalf("s1's attestation crossed into s0: %+v", s0)
+	}
+	if s1 := later.Seeds[1]; s1.Duplicate != len(cases) || s1.Frontier != 0 {
+		t.Fatalf("s1 repeats s0's fingerprints, so it scores duplicates: %+v", s1)
+	}
+	if later.Score != 0 {
+		t.Fatalf("no seed earned frontier credit from its own attestation: %+v", later)
+	}
+	// Attested on s0 itself: s0 earns it.
+	if s0 := run(0).Seeds[0]; s0.Frontier != len(cases) || s0.Unsolved != 0 {
+		t.Fatalf("a seed's own attestation applies to it: %+v", s0)
+	}
+}
+
+func zeroPanel(cs []CaseRef) []PanelMember {
+	return []PanelMember{
+		member("a1", "o1", true, uniform(cs, 0)),
+		member("a2", "o2", false, uniform(cs, 0)),
+		member("a3", "o3", false, uniform(cs, 0)),
 	}
 }

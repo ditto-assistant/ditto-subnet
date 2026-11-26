@@ -101,15 +101,12 @@ func V13FamilyOfVersion(seed int64, caseIndex, benchVersion int) V13Family {
 	if benchVersion < protocol.BenchVersionV14 {
 		return V13FamilyOf(caseIndex)
 	}
-	return V14FamilyFor(seed, caseIndex/4)
+	return v13FamilyForVersion(seed, caseIndex/4, benchVersion)
 }
 
 // family returns the family of a group under the draw's contract.
 func (d *v13Draws) family(group int) V13Family {
-	if d.benchVersion < protocol.BenchVersionV14 {
-		return V13Families[group%len(V13Families)]
-	}
-	return V14FamilyFor(d.seed, group)
+	return v13FamilyForVersion(d.seed, group, d.benchVersion)
 }
 
 // v14GroupExtra carries the draws only the v14 role families use. v13 groups
@@ -377,7 +374,7 @@ func renderV14HolderVsActor(d *v13Draws, schema v13Schema, group, variant int, g
 			step, actor = x.Steps[1], actor2
 		}
 		m.DecoyClause = fmt.Sprintf(" There, %s %s.", g.People[3], step)
-		m.Question = v13Question(seed, group, variant, []string{
+		m.ask(d, V19PhraseProgramStepActor, group, variant, []string{
 			"who %[2]s on %[1]s?",
 			"on %[1]s, which person %[2]s?",
 			"name the person who %[2]s for %[1]s.",
@@ -394,7 +391,7 @@ func renderV14HolderVsActor(d *v13Draws, schema v13Schema, group, variant int, g
 		m.Operations = []string{"resolve subject by remit", "find the record naming the step", "separate the step's doer from the recipient", "return the person"}
 	} else {
 		m.DecoyClause = fmt.Sprintf(" Its copy of %s sits with %s.", x.Item[0], g.People[3])
-		m.Question = v13Question(seed, group, variant, []string{
+		m.ask(d, V19PhraseProgramItemHolder, group, variant, []string{
 			"who has %[2]s for %[1]s now?",
 			"after every recorded handover, who is holding %[2]s on %[1]s?",
 			"for %[1]s, which person currently has %[2]s?",
@@ -487,7 +484,7 @@ func renderV14IdentityJoin(d *v13Draws, schema v13Schema, group, variant int, g 
 	resolve := V10QueryNode{Op: "resolve_entity", Field: schema.Alias}
 	latest := V10QueryNode{Op: "latest", Field: schema.Owner, Children: []V10QueryNode{resolve}}
 	if x.AskContact {
-		m.Question = v13Question(seed, group, variant, []string{
+		m.ask(d, V19PhraseProgramOwnerContact, group, variant, []string{
 			"which contact reaches whoever currently holds the %[2]s role on %[1]s?",
 			"after every recorded reassignment, what contact should I use to reach the %[2]s for %[1]s?",
 			"for %[1]s, give the contact of the person who stands as %[2]s today.",
@@ -496,7 +493,7 @@ func renderV14IdentityJoin(d *v13Draws, schema v13Schema, group, variant int, g 
 		m.Claims = []protocol.Claim{v13Claim(protocol.ClaimKindValue, answer, []string{answer}, 1)}
 		m.Program = V10QueryNode{Op: "join_handle", Field: "directory", Children: []V10QueryNode{latest}}
 	} else {
-		m.Question = v13Question(seed, group, variant, []string{
+		m.ask(d, V19PhraseProgramOwnerName, group, variant, []string{
 			"who currently holds the %[2]s role on %[1]s? Give the person's name, not their contact.",
 			"after every recorded reassignment, which person is the %[2]s for %[1]s? Name them rather than giving a contact.",
 			"for %[1]s, who stands as %[2]s today? I need the person's name, not a contact.",

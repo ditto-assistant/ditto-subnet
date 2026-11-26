@@ -4,6 +4,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
+  publicDethroneDecisionSchema,
   SCREENING_SUBMISSION_AGENT_STATUSES,
   competitionFeesInputSchema,
   submissionSettingsRevisionSchema,
@@ -84,6 +85,7 @@ import {
   validatorSlotConfirmation,
   validatorIssuanceConfirmation,
   validatorCapacityEntrySchema,
+  validatorRequestOutcomeSummarySchema,
   benchmarkRolloutQualificationDetailSchema,
   validatorSlotSettingsControlSchema,
   validatorSlotSettingsSchema,
@@ -133,6 +135,8 @@ import {
   emissionAllocationConfirmation,
   setEmissionAllocationInputSchema,
   trackSharesConfirmation,
+  resolveCopyReviewResponseSchema,
+  seasonRetestSchema,
 } from './admin.schemas'
 
 type GeneratedConfirmationBundleView = PlatformComponents['schemas']['ConfirmationBundleView']
@@ -169,6 +173,9 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
         sandbox_memory_limit_mib: 6144,
+        memory_factor_posture: 'shadow',
+        memory_factor_free_mib: 512,
+        memory_factor_floor_bps: 9000,
       },
     }
     expect(MAX_CHAT_REQUEST_BUDGET).toBe(32768)
@@ -176,6 +183,7 @@ describe('admin API schemas', () => {
       ...settings,
       decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
       scored_provider_routing: 'throughput',
+      danilabs_percent: 0,
     })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
@@ -200,6 +208,9 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
         sandbox_memory_limit_mib: 6144,
+        memory_factor_posture: 'shadow',
+        memory_factor_free_mib: 512,
+        memory_factor_floor_bps: 9000,
       },
     }
     expect(MAX_CHAT_TOKEN_BUDGET).toBe(200_000_000)
@@ -207,6 +218,7 @@ describe('admin API schemas', () => {
       ...settings,
       decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
       scored_provider_routing: 'throughput',
+      danilabs_percent: 0,
     })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
@@ -231,6 +243,9 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
         sandbox_memory_limit_mib: 6144,
+        memory_factor_posture: 'shadow',
+        memory_factor_free_mib: 512,
+        memory_factor_floor_bps: 9000,
       },
     }
     expect(MAX_CHAT_CONCURRENCY).toBe(512)
@@ -240,6 +255,7 @@ describe('admin API schemas', () => {
       ...settings,
       decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
       scored_provider_routing: 'throughput',
+      danilabs_percent: 0,
     })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
@@ -265,6 +281,9 @@ describe('admin API schemas', () => {
       relay_delay_fingerprint_min_ms: 25,
       relay_delay_fingerprint_max_ms: 250,
       sandbox_memory_limit_mib: 6144,
+      memory_factor_posture: 'shadow',
+      memory_factor_free_mib: 512,
+      memory_factor_floor_bps: 9000,
     })
     expect(() =>
       setInferenceConcurrencySettingsInputSchema.parse({
@@ -293,6 +312,9 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
         sandbox_memory_limit_mib: 6144,
+        memory_factor_posture: 'shadow',
+        memory_factor_free_mib: 512,
+        memory_factor_floor_bps: 9000,
       },
     }
     const write = (extra: Record<string, unknown>) =>
@@ -303,6 +325,9 @@ describe('admin API schemas', () => {
         confirmation: INFERENCE_CONCURRENCY_CONFIRMATION,
       })
     expect(write({}).settings.scored_provider_routing).toBeUndefined()
+    expect(write({}).settings.danilabs_percent).toBeUndefined()
+    expect(write({ danilabs_percent: 10 }).settings.danilabs_percent).toBe(10)
+    expect(() => write({ danilabs_percent: 101 })).toThrow()
     expect(write({ scored_provider_routing: 'bf16_price_order_canary' }).settings
       .scored_provider_routing).toBe('bf16_price_order_canary')
     expect(() => write({ scored_provider_routing: 'fp4_cheapest' })).toThrow()
@@ -2979,15 +3004,6 @@ describe('queue policy settings schemas', () => {
     lane_cycle_size: 4,
     fresh_submission_slots: [0, 1, 3],
     owner_concurrent_submission_limit: 2,
-    deferred_source_review: {
-      mode: 'off',
-      integrity_double_check_mode: 'off',
-      min_cohort_size: 8,
-      composite_mad_multiplier: 6,
-      axis_mad_multiplier: 6,
-      min_composite_delta: 0.1,
-      min_axis_delta: 0.15,
-    },
     similarity_budget: {
       enabled: true,
       concurrent_submission_limit: 1,
@@ -3118,7 +3134,6 @@ describe('queue policy settings schemas', () => {
   // platform-side addition fail loudly in CI instead of silently in prod.
   it('declares exactly the platform-owned policy field set', () => {
     expect(Object.keys(queuePolicySettingsSchema.parse({})).sort()).toEqual([
-      'deferred_source_review',
       'fresh_submission_slots',
       'lane_cycle_size',
       'lineage_reference_mode',
@@ -3148,23 +3163,10 @@ describe('queue policy settings schemas', () => {
     const { similarity_budget: _similarity, ...missingSimilarity } = settings
     expect(() => queuePolicySettingsWriteSchema.parse(missingSimilarity)).toThrow()
 
-    const { deferred_source_review: _deferred, ...missingDeferred } = settings
-    expect(() => queuePolicySettingsWriteSchema.parse(missingDeferred)).toThrow()
-
     expect(() =>
       queuePolicySettingsWriteSchema.parse({
         ...settings,
         similarity_budget: { ...settings.similarity_budget, jaccard_threshold: undefined },
-      }),
-    ).toThrow()
-
-    expect(() =>
-      queuePolicySettingsWriteSchema.parse({
-        ...settings,
-        deferred_source_review: {
-          ...settings.deferred_source_review,
-          composite_mad_multiplier: undefined,
-        },
       }),
     ).toThrow()
 
@@ -3204,48 +3206,27 @@ describe('queue policy settings schemas', () => {
     ).toThrow()
   })
 
-  it('keeps deferred anomaly review inside the platform bounds', () => {
-    expect(() =>
-      queuePolicySettingsWriteSchema.parse({
-        ...settings,
-        deferred_source_review: { ...settings.deferred_source_review, min_cohort_size: 4 },
-      }),
-    ).toThrow()
-    expect(() =>
-      queuePolicySettingsWriteSchema.parse({
-        ...settings,
-        deferred_source_review: {
-          ...settings.deferred_source_review,
-          axis_mad_multiplier: 20.1,
-        },
-      }),
-    ).toThrow()
-    expect(() =>
-      queuePolicySettingsWriteSchema.parse({
-        ...settings,
-        deferred_source_review: { ...settings.deferred_source_review, mode: 'disabled' },
-      }),
-    ).toThrow()
+  it('drops the retired deferred source-review block on read and write', () => {
+    // Revisions stored before source review was retired (2026-11-07) still
+    // carry the block. It must neither fail the board read nor be sent back.
+    const legacy = {
+      ...settings,
+      deferred_source_review: {
+        mode: 'bypass',
+        integrity_double_check_mode: 'enforce',
+        min_cohort_size: 8,
+        composite_mad_multiplier: 6,
+        axis_mad_multiplier: 6,
+        min_composite_delta: 0.1,
+        min_axis_delta: 0.15,
+      },
+    }
+    expect(queuePolicySettingsSchema.parse(legacy)).not.toHaveProperty('deferred_source_review')
+    expect(queuePolicySettingsWriteSchema.parse(legacy)).not.toHaveProperty(
+      'deferred_source_review',
+    )
+    expect(queuePolicySettingsWriteSchema.parse(legacy)).toEqual(settings)
   })
-
-  it.each(['off', 'observe', 'enforce', 'bypass'] as const)(
-    'carries the %s source-review mode through read and write',
-    (mode) => {
-      // `bypass` is the no-source-review mode. The read schema matters as much
-      // as the write one: an enum that did not know the value would fail the
-      // whole queue-policy read the moment an operator selected it, taking the
-      // board down with it.
-      const deferred = { ...settings.deferred_source_review, mode }
-      expect(
-        queuePolicySettingsWriteSchema.parse({ ...settings, deferred_source_review: deferred })
-          .deferred_source_review.mode,
-      ).toBe(mode)
-      expect(
-        queuePolicySettingsSchema.parse({ ...settings, deferred_source_review: deferred })
-          .deferred_source_review.mode,
-      ).toBe(mode)
-    },
-  )
 
   it('surfaces whether an open rollout is actually locking the lane fields', () => {
     // `rollout_locked_fields` is a constant; `rollout_is_open` is the only
@@ -3494,6 +3475,98 @@ describe('validator slot settings schemas', () => {
     })
     expect(parsed.effective.source).toBe('revision')
     expect(parsed.current[0].actor).toBe('peyton@omniaura.ai')
+  })
+
+  it('reads the per-slot breakdown and defaults it on an older platform', () => {
+    const base = {
+      validator_hotkey: '5' + 'B'.repeat(47),
+      seen_at: '2026-11-14T23:00:00Z',
+      bench_serviceability: 'serving',
+      admission: 'accepting',
+      issuance_paused: false,
+      configured_slots: 8,
+      serviceable_slots: 1,
+      claimed_slots: 0,
+      assignments: [],
+    }
+    const older = validatorCapacityEntrySchema.parse(base)
+    expect(older.slots).toEqual([])
+    expect(older.memory_admitted_slots).toBeNull()
+    const parsed = validatorCapacityEntrySchema.parse({
+      ...base,
+      memory_admitted_slots: 1,
+      unusable_slots: 1,
+      slots: [
+        { slot_id: 'slot-0', state: 'free', reason: null },
+        { slot_id: 'slot-1', state: 'unusable', reason: 'host_memory_admission' },
+      ],
+    })
+    expect(parsed.slots[1].reason).toBe('host_memory_admission')
+    expect(() =>
+      validatorCapacityEntrySchema.parse({
+        ...base,
+        slots: [{ slot_id: 'slot-0', state: 'unusable', reason: 'made_up' }],
+      }),
+    ).toThrow()
+  })
+
+  it('reads the allocator fence snapshot and per-slot outcome counts', () => {
+    const parsed = validatorRequestOutcomeSummarySchema.parse({
+      observed_at: '2026-11-14T23:00:00Z',
+      tracking_since: '2026-11-14T20:00:00Z',
+      recent_window_seconds: 900,
+      unauthenticated: {},
+      validators: [
+        {
+          validator_hotkey: '5Val',
+          lane: 'job',
+          last_poll_at: '2026-11-14T23:00:00Z',
+          last_outcome: 'allocator_busy',
+          outcomes: [
+            {
+              outcome: 'allocator_busy',
+              total: 10,
+              recent_15m: 3,
+              recent_15m_by_slot: { 'slot-1': 2, 'slot-2': 1 },
+              first_at: null,
+              last_at: null,
+              last_detail: null,
+              last_slot_id: 'slot-2',
+            },
+          ],
+        },
+      ],
+      allocator: {
+        observed_at: '2026-11-14T23:00:00Z',
+        tracking_since: '2026-11-14T20:00:00Z',
+        recent_window_seconds: 900,
+        holder: null,
+        recent_holds: 4,
+        recent_held_seconds: 0.4,
+        recent_utilization: 0.0004,
+        hold_p50_seconds: 0.1,
+        hold_p95_seconds: 0.1,
+        hold_max_seconds: 0.1,
+        hold_outcomes: { no_candidate: 4 },
+        recent_busy_declines: 3,
+        recent_busy_same_validator: 3,
+        recent_busy_untracked_holder: 0,
+        holds_by_validator: [
+          { validator_hotkey: '5Val', holds: 4, held_seconds: 0.4, max_hold_seconds: 0.1 },
+        ],
+        busy_by_validator: [
+          {
+            validator_hotkey: '5Val',
+            holder_hotkey: '5Val',
+            busy_declines: 3,
+            same_validator: true,
+            by_slot: { 'slot-1': 2, 'slot-2': 1 },
+          },
+        ],
+      },
+    })
+    expect(parsed.allocator?.recent_busy_same_validator).toBe(3)
+    expect(parsed.validators[0].outcomes[0].recent_15m_by_slot['slot-1']).toBe(2)
   })
 
   it('reads capacity from a platform that predates reserved round slots as zero', () => {
@@ -3969,6 +4042,7 @@ describe('continual retest cohort sizing against an older platform', () => {
     ledger_pin_mode: false,
     crown_incumbent_mode: false,
     crown_gate_mode: false,
+    crown_duel_mode: false,
     min_dethrone_confirmations: false,
     champion_standing_rank: false,
     retest_cohort_size: false,
@@ -3978,6 +4052,9 @@ describe('continual retest cohort sizing against an older platform', () => {
     retest_cohort_max_size: false,
     wave_cadence_tempos: false,
     wave_seeds_per_window: false,
+    retest_mode: false,
+    season_duel_seeds: false,
+    season_duel_rotation_seeds: false,
   }
   const fullSupport = Object.fromEntries(
     Object.keys(legacySupport).map((field) => [field, true]),
@@ -3991,6 +4068,7 @@ describe('continual retest cohort sizing against an older platform', () => {
     ledger_pin_mode: 'live' as const,
     crown_incumbent_mode: 'disabled' as const,
     crown_gate_mode: 'disabled' as const,
+    crown_duel_mode: 'disabled' as const,
     min_dethrone_confirmations: 3,
     champion_standing_rank: 3,
     idle_retests_enabled: true,
@@ -4002,7 +4080,19 @@ describe('continual retest cohort sizing against an older platform', () => {
     retest_cohort_max_size: 25,
     wave_cadence_tempos: 0,
     wave_seeds_per_window: 3,
+    retest_mode: 'continual' as const,
+    season_duel_seeds: 3,
+    season_duel_rotation_seeds: false,
   }
+
+  it('reads a dethrone minimum up to the 15-seed ceiling but writes at most 10', () => {
+    // A Platform still serving a revision written under the former 15-seed cap
+    // stays displayable; a new write cannot exceed the 10-seed work cap.
+    expect(continualRetestSettingsSchema.safeParse({ ...legacyPolicy, min_dethrone_confirmations: 15 }).success).toBe(true)
+    expect(continualRetestSettingsSchema.safeParse({ ...legacyPolicy, min_dethrone_confirmations: 16 }).success).toBe(false)
+    expect(continualRetestSettingsWriteSchema.safeParse({ ...legacyPolicy, min_dethrone_confirmations: 10 }).success).toBe(true)
+    expect(continualRetestSettingsWriteSchema.safeParse({ ...legacyPolicy, min_dethrone_confirmations: 11 }).success).toBe(false)
+  })
 
   it('tells a defaulted cohort size apart from a reported one', () => {
     // Reading defaults the field so the page still renders, which makes the
@@ -4098,6 +4188,7 @@ describe('continual retest cohort sizing against an older platform', () => {
       ledger_pin_mode: false,
       crown_incumbent_mode: false,
       crown_gate_mode: false,
+      crown_duel_mode: false,
       min_dethrone_confirmations: false,
       champion_standing_rank: false,
       retest_cohort_size: false,
@@ -4107,6 +4198,9 @@ describe('continual retest cohort sizing against an older platform', () => {
       retest_cohort_max_size: false,
       wave_cadence_tempos: false,
       wave_seeds_per_window: false,
+      retest_mode: false,
+      season_duel_seeds: false,
+      season_duel_rotation_seeds: false,
     })
     expect(continualRetestFieldSupport(null).wave_membership).toBe(false)
   })
@@ -4120,6 +4214,7 @@ describe('continual retest write contract', () => {
     ledger_pin_mode: 'epoch' as const,
     crown_incumbent_mode: 'fleet_ready' as const,
     crown_gate_mode: 'fleet_ready' as const,
+    crown_duel_mode: 'disabled' as const,
     min_dethrone_confirmations: 3,
     champion_standing_rank: 3,
     idle_retests_enabled: false,
@@ -4131,7 +4226,29 @@ describe('continual retest write contract', () => {
     retest_cohort_max_size: 25,
     wave_cadence_tempos: 0,
     wave_seeds_per_window: 3,
+    retest_mode: 'continual' as const,
+    season_duel_seeds: 3,
+    season_duel_rotation_seeds: false,
   }
+
+  it('refuses a season duel that could never carry a dethrone case', () => {
+    const starved = continualRetestSettingsWriteSchema.safeParse({
+      ...complete,
+      retest_mode: 'season_duel',
+      season_duel_seeds: 2,
+      min_dethrone_confirmations: 3,
+    })
+    expect(starved.success).toBe(false)
+    expect(starved.error?.issues[0]?.path).toEqual(['season_duel_seeds'])
+    expect(
+      continualRetestSettingsWriteSchema.safeParse({
+        ...complete,
+        retest_mode: 'season_duel',
+        season_duel_seeds: 3,
+        season_duel_rotation_seeds: false,
+      }).success,
+    ).toBe(true)
+  })
 
   it('refuses a body missing any field a revision would overwrite', () => {
     expect(continualRetestSettingsWriteSchema.parse(complete)).toEqual(complete)
@@ -4145,6 +4262,7 @@ describe('continual retest write contract', () => {
       'ledger_pin_mode',
       'crown_incumbent_mode',
       'crown_gate_mode',
+      'crown_duel_mode',
       'min_dethrone_confirmations',
       'champion_standing_rank',
       'wave_membership',
@@ -4154,6 +4272,9 @@ describe('continual retest write contract', () => {
       'retest_cohort_max_size',
       'wave_cadence_tempos',
       'wave_seeds_per_window',
+      'retest_mode',
+      'season_duel_seeds',
+      'season_duel_rotation_seeds',
     ] as const) {
       const { [field]: _omitted, ...partial } = complete
       expect(continualRetestSettingsWriteSchema.safeParse(partial).success).toBe(false)
@@ -4198,6 +4319,9 @@ describe('continual retest write contract', () => {
         retest_cohort_max_size: 25,
         wave_cadence_tempos: 0,
         wave_seeds_per_window: 3,
+        retest_mode: 'continual' as const,
+        season_duel_seeds: 3,
+        season_duel_rotation_seeds: false,
       }).success,
     ).toBe(true)
   })
@@ -4217,6 +4341,7 @@ describe('continual retest write contract', () => {
       ledger_pin_mode: 'epoch',
       crown_incumbent_mode: 'disabled',
       crown_gate_mode: 'disabled',
+      crown_duel_mode: 'disabled',
       min_dethrone_confirmations: 3,
       champion_standing_rank: 3,
       idle_retests_enabled: false,
@@ -4228,6 +4353,9 @@ describe('continual retest write contract', () => {
       retest_cohort_max_size: 25,
       wave_cadence_tempos: 0,
       wave_seeds_per_window: 3,
+      retest_mode: 'continual' as const,
+      season_duel_seeds: 3,
+      season_duel_rotation_seeds: false,
     })
   })
 
@@ -5643,6 +5771,30 @@ describe('validator fleet host specs parity', () => {
     type Parsed = NonNullable<ZodInput<typeof validatorFleetObservabilityMemberSchema>['host_specs']>
     expectTypeOf<Generated>().toMatchTypeOf<Parsed>()
   })
+
+  it('keeps the host memory admission fields and tolerates an older Platform', () => {
+    const base = {
+      validator_hotkey: '5' + 'C'.repeat(47),
+      configured_slots: 8,
+      healthy_slots: [],
+      health: 'critical',
+      health_reasons: ['host memory admits no benchmark slot'],
+    }
+    const note =
+      'host memory admits no benchmark slot at the 8,192 MiB harness cap (7,934 MiB host); needs at least 9,216 MiB for 1 slot and 66,560 MiB for all 8'
+    const parsed = validatorFleetObservabilityMemberSchema.parse({
+      ...base,
+      memory_admitted_slots: 0,
+      memory_required_mib: 66560,
+      memory_note: note,
+    })
+    expect(parsed.memory_admitted_slots).toBe(0)
+    expect(parsed.memory_required_mib).toBe(66560)
+    expect(parsed.memory_note).toBe(note)
+    const older = validatorFleetObservabilityMemberSchema.parse(base)
+    expect(older.memory_admitted_slots).toBeNull()
+    expect(older.memory_note).toBeNull()
+  })
 })
 
 
@@ -5796,5 +5948,48 @@ describe('benchmark rollout qualification detail', () => {
       blocking_reason: 'no benchmark rollout is open',
     })
     expect(parsed.source_bench_version).toBeNull()
+  })
+})
+
+describe('publicDethroneDecisionSchema', () => {
+  it('parses a protocol-35 title-duel decision', () => {
+    const parsed = publicDethroneDecisionSchema.parse({
+      challenger_lead: 0.03,
+      required_lead: 0.0085,
+      margin_lead: 0.0057,
+      statistical_lead: 0.0085,
+      method: 'duel',
+      dethrones: true,
+      paired_standard_error: 0.0032,
+      shared_seed_count: 15,
+      seed_differences: [0.03],
+    })
+    expect(parsed.method).toBe('duel')
+  })
+})
+
+describe('SN-486 season re-test visibility', () => {
+  it('parses the re-test label an expired agent carries', () => {
+    const label = seasonRetestSchema.parse({
+      state: 'not_queued',
+      reason: 'over_budget',
+      dueling_season_id: '428a8bc5-b002-4af4-91e4-964cb83128f4',
+      note: 'Not re-tested yet: the season catch-up budget ran out.',
+    })
+    expect(label.reason).toBe('over_budget')
+    expect(() => seasonRetestSchema.parse({ ...label, reason: 'mystery' })).toThrow()
+  })
+
+  it('parses the re-test a clear queued, and its absence on older Platforms', () => {
+    const shape = resolveCopyReviewResponseSchema.shape.season_retest
+    expect(shape.parse(undefined)).toBeNull()
+    expect(shape.parse({
+      queued: 3,
+      bench_version: 18,
+      dueling_season_id: '428a8bc5-b002-4af4-91e4-964cb83128f4',
+      catch_up_source: 'ath_clear',
+    })).toMatchObject({ queued: 3, skipped: null, error: null, catch_up_source: 'ath_clear' })
+    expect(shape.parse({ skipped: 'no dueling season is open' }))
+      .toMatchObject({ queued: 0, skipped: 'no dueling season is open' })
   })
 })

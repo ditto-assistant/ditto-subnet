@@ -31,6 +31,7 @@ from ditto.api_models.inference_failure_taxonomy import (
     InferenceRouteBasis,
 )
 from ditto.api_models.inference_observability import (
+    DaniLabsBindingSnapshot,
     InferenceLaneCurrent,
     InferenceLaneWindow,
     InferenceRuntimeMetrics,
@@ -119,6 +120,10 @@ _CAPACITY_RE = re.compile(
     r'lane="([^"]+)",scope="([^"]+)"\} ([0-9.eE+-]+)$'
 )
 _PROCESS_START_RE = re.compile(r"^process_start_time_seconds ([0-9.eE+-]+)$")
+_DANILABS_BINDING_RE = re.compile(
+    r"^ditto_danilabs_binding_"
+    r"(key_present|scope|deadline_seconds|router_competition) ([0-9.eE+-]+)$"
+)
 _RELAY_PORTS: dict[RuntimeProfileTarget, int] = {
     "platform-relay-1": 8010,
     "platform-relay-2": 8011,
@@ -127,6 +132,49 @@ _RELAY_PORTS: dict[RuntimeProfileTarget, int] = {
 
 def _profile_store(request: Request) -> RuntimeProfileStore:
     return request.app.state.runtime_profiles
+
+
+def _danilabs_binding(metrics: str) -> DaniLabsBindingSnapshot | None:
+    """Return unknown for older relays or incomplete/invalid metric samples."""
+    values: dict[str, int] = {}
+    for line in metrics.splitlines():
+        if match := _DANILABS_BINDING_RE.match(line):
+            name, raw = match.groups()
+            try:
+                number = float(raw)
+                value = int(number)
+            except (ValueError, OverflowError):
+                return None
+            if name in values or number != value:
+                return None
+            values[name] = value
+    if set(values) != {
+        "key_present",
+        "scope",
+        "deadline_seconds",
+        "router_competition",
+    }:
+        return None
+    if (
+        values["key_present"] not in (0, 1)
+        or values["router_competition"] not in (0, 1)
+        or values["scope"] not in (0, 1, 2)
+    ):
+        return None
+    timestamp = values["deadline_seconds"]
+    if timestamp < 0 or timestamp > 253402300799:
+        return None
+    scopes: tuple[Literal["unset_or_invalid", "canary", "fleet"], ...] = (
+        "unset_or_invalid",
+        "canary",
+        "fleet",
+    )
+    return DaniLabsBindingSnapshot(
+        key_present=bool(values["key_present"]),
+        router_competition=bool(values["router_competition"]),
+        scope=scopes[values["scope"]],
+        deadline=datetime.fromtimestamp(timestamp, UTC) if timestamp else None,
+    )
 
 
 async def _relay_snapshot(
@@ -162,6 +210,7 @@ async def _relay_snapshot(
             revision_drift=health.get("commit_drift"),
             process_started_at=process_started_at,
             capacity_declines=capacity_declines,
+            danilabs_binding=_danilabs_binding(metrics_response.text),
         )
     except (httpx.HTTPError, ValueError, KeyError) as error:
         return RelayRuntimeSnapshot(

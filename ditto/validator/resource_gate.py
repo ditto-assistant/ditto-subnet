@@ -32,7 +32,11 @@ from typing import Literal
 
 from ditto.api_models.system_health import SystemMetrics
 from ditto.validator.errors import ValidatorConfigError
-from ditto_screening_protocol.runtime_envelope import admitted_slots, runtime_envelope
+from ditto_screening_protocol.runtime_envelope import (
+    admitted_slots,
+    required_host_memory_mib,
+    runtime_envelope,
+)
 
 ConstrainedResource = Literal["cpu", "memory", "disk"]
 
@@ -97,6 +101,19 @@ class ResourceCeilings:
         # keeps one slot, whatever the reserve, so it stays in the quorum.
         return admitted_slots(
             host_memory_mib,
+            sandbox_memory_limit_mib,
+            reserve_mib=self.host_memory_reserve_mib,
+            single_slot_headroom_mib=runtime_envelope().single_slot_headroom_mib,
+        )
+
+    def memory_required_mib(self, slots: int, sandbox_memory_limit_mib: int) -> int:
+        """Least host memory :meth:`memory_admitted_slots` admits ``slots`` on.
+
+        Uses this host's own reserve, so the fix path in the log matches what
+        this validator actually enforces.
+        """
+        return required_host_memory_mib(
+            slots,
             sandbox_memory_limit_mib,
             reserve_mib=self.host_memory_reserve_mib,
             single_slot_headroom_mib=runtime_envelope().single_slot_headroom_mib,

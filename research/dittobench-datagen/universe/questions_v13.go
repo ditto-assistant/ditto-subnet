@@ -146,6 +146,9 @@ func (w World) storyQuestionCandidatesV13() []QuestionPlan {
 			task := storyFill(persona.Expand(r, storyV13TaskGrammars[kind], "task"), anchorSlots)
 			return anchor + " " + task
 		}
+		if w.BenchVersion >= protocol.BenchVersionV19 {
+			question = func(kind string) string { return v19StoryQuestion(w.Seed, arc.ID, kind, anchorSlots) }
+		}
 		plans := make([]QuestionPlan, 0, 6)
 
 		owner := w.People[v2.Owner]

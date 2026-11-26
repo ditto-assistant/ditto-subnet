@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -59,8 +60,12 @@ const (
 	pplxEmbedResponseModel = "pplx-embed-v1-0.6b"
 
 	providerGenerationInvalidCode = "provider_generation_invalid"
-	minerRecoverableFailureHeader = "X-Ditto-Inference-Failure-Class"
-	minerRecoverableGeneration    = "miner_recoverable_generation"
+	// providerContextLengthExceededCode is the terminal code for a request whose
+	// input exceeds the model's context window. The chat route answers it with
+	// 413, which the scorer broker charges to the harness.
+	providerContextLengthExceededCode = "provider_context_length_exceeded"
+	minerRecoverableFailureHeader     = "X-Ditto-Inference-Failure-Class"
+	minerRecoverableGeneration        = "miner_recoverable_generation"
 )
 
 func isProviderRetryStatus(status int) bool {
@@ -74,6 +79,32 @@ func isProviderRetryStatus(status int) bool {
 // sleepFunc is injectable for tests; the default respects context
 // cancellation.
 type sleepFunc func(ctx context.Context, d time.Duration)
+
+// providerLadderContext bounds one scored chat or embedding request's whole
+// provider ladder -- first attempt, Retry-After or gateway wait, and the one
+// receipt-free retry or route fall-through -- by a single TimeoutSeconds
+// budget. The scorer's broker gives the relay one fixed client timeout for the
+// entire request (#2973); granting each attempt a fresh budget let a
+// recovered request finish after the broker had already recorded a timeout,
+// so tokens were charged for a reply nobody received.
+func providerLadderContext(ctx context.Context, timeoutSeconds int) (context.Context, context.CancelFunc, time.Duration) {
+	budget := time.Duration(timeoutSeconds) * time.Second
+	ladderCtx, cancel := context.WithTimeout(ctx, budget)
+	return ladderCtx, cancel, budget
+}
+
+// providerLadderHasRoomFor reports whether another dispatch, started after
+// waiting delay, would still have at least half the ladder budget. A retry is
+// only worth sending with a realistic budget: one that runs out mid-call ends
+// in a timeout, which is ambiguous for billing, whereas declining it returns
+// the clean receipt-free rejection already in hand.
+func providerLadderHasRoomFor(ladderCtx context.Context, delay, budget time.Duration) bool {
+	deadline, ok := ladderCtx.Deadline()
+	if !ok {
+		return true
+	}
+	return time.Until(deadline)-delay >= budget/2
+}
 
 func defaultSleep(ctx context.Context, d time.Duration) {
 	timer := time.NewTimer(d)
@@ -1138,6 +1169,92 @@ func minerRecoverableProviderError(request, response map[string]any) bool {
 	return false
 }
 
+// providerContextLengthExceeded recognizes a provider refusing the request
+// because its input alone is longer than the model's context window. That is a
+// property of the harness-authored bytes, and every provider serving the model
+// refuses it identically, so a retry replays the same rejection. It arrives as
+// an HTTP 400, or as an HTTP 200 body-level envelope carrying code 400.
+// Anything else a provider rejects, including a window overflowed only once
+// the requested completion is added, stays on the generic provider-failure path.
+func providerContextLengthExceeded(status int, response map[string]any) bool {
+	if status == http.StatusOK {
+		if code, _, ok := providerErrorEnvelope(response); !ok || code != http.StatusBadRequest {
+			return false
+		}
+	} else if status != http.StatusBadRequest {
+		return false
+	}
+	errorPayload, ok := response["error"].(map[string]any)
+	if !ok {
+		return false
+	}
+	codeNumber, ok := isIntLiteral(errorPayload["code"])
+	if !ok {
+		return false
+	}
+	if code, err := codeNumber.Int64(); err != nil || code != http.StatusBadRequest {
+		return false
+	}
+	texts := []any{errorPayload["message"]}
+	if metadata, ok := errorPayload["metadata"].(map[string]any); ok {
+		texts = append(texts, metadata["raw"])
+	}
+	for _, text := range texts {
+		message, ok := text.(string)
+		if !ok {
+			continue
+		}
+		message = strings.ToLower(message)
+		if !strings.Contains(message, "maximum context length") {
+			continue
+		}
+		// A completion/output split means max_tokens counted toward the
+		// overflow. It is the input's fault only when the reported input count
+		// alone is over the reported limit.
+		if !strings.Contains(message, "in the completion") && !strings.Contains(message, "in the output") {
+			return true
+		}
+		if limit, input, ok := splitContextCounts(message); ok && input > limit {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	contextLimitPattern = regexp.MustCompile(`maximum context length is (\d+) tokens\b`)
+	splitCountsPattern  = regexp.MustCompile(`\(([^()]*\b(?:in the completion|in the output)[^()]*)\)`)
+	inputCountPattern   = regexp.MustCompile(`(\d+) (?:in the messages|of [a-z ]*input)\b`)
+)
+
+// splitContextCounts reads the stated limit and the input tokens from a split
+// count: OpenAI's "(I in the messages, C in the completion)" or OpenRouter's
+// "(T of text input, U of tool input, O in the output)". Input is every count
+// that is not the completion/output.
+func splitContextCounts(message string) (limit, input int64, ok bool) {
+	limitMatch := contextLimitPattern.FindStringSubmatch(message)
+	splitMatch := splitCountsPattern.FindStringSubmatch(message)
+	if limitMatch == nil || splitMatch == nil {
+		return 0, 0, false
+	}
+	limit, err := strconv.ParseInt(limitMatch[1], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	counts := inputCountPattern.FindAllStringSubmatch(splitMatch[1], -1)
+	if len(counts) == 0 {
+		return 0, 0, false
+	}
+	for _, count := range counts {
+		value, err := strconv.ParseInt(count[1], 10, 64)
+		if err != nil || value > math.MaxInt64-input {
+			return 0, 0, false
+		}
+		input += value
+	}
+	return limit, input, true
+}
+
 func requestDeclaresTool(request map[string]any, name string) bool {
 	tools, _ := request["tools"].([]any)
 	for _, rawTool := range tools {
@@ -1419,6 +1536,11 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 	headers := openrouterHeaders(cfg.OpenRouterAPIKey, true)
 	attachOpenRouterSessionHeader(ctx, headers)
 
+	// Every attempt below shares this one budget; postOnce's per-attempt
+	// timeout can no longer extend the request past it.
+	ladderCtx, cancelLadder, ladderBudget := providerLadderContext(ctx, cfg.TimeoutSeconds)
+	defer cancelLadder()
+
 	totalAttempts := 0
 	routerAttempts := 0
 	lastCode := "provider_unavailable"
@@ -1437,7 +1559,7 @@ phaseLoop:
 		sentPayload, _ := json.Marshal(spec.payload)
 		for safeAttempt := 1; safeAttempt <= providerSafeRetryMaxAttempts; safeAttempt++ {
 			trace := phaseTrace{phase: spec.phase, route: route, payload: sentPayload}
-			result, callErr := postProviderWithRetry(ctx, client, cfg.UpstreamURL, spec.payload, headers,
+			result, callErr := postProviderWithRetry(ladderCtx, client, cfg.UpstreamURL, spec.payload, headers,
 				cfg.ResponseBodyBytes, cfg.TimeoutSeconds, true, "", sleep)
 			if callErr != nil {
 				totalAttempts += callErr.attempts
@@ -1475,6 +1597,13 @@ phaseLoop:
 				traced = append(traced, trace)
 				continue phaseLoop
 			}
+			if decodedMapOK && providerContextLengthExceeded(result.status, decodedMap) {
+				lastTimedOut = false
+				lastCode = providerContextLengthExceededCode
+				trace.errorCode = lastCode
+				traced = append(traced, trace)
+				continue phaseLoop
+			}
 			if result.status >= 400 {
 				lastTimedOut = result.status == 408 || result.status == 504
 				lastCode = "upstream_http_" + strconv.Itoa(result.status)
@@ -1488,9 +1617,10 @@ phaseLoop:
 				} else if providerGatewayIsReceiptFree(result, model) {
 					retryDelay = providerGatewayRetryDelay
 				}
-				if retryDelay > 0 && safeAttempt < providerSafeRetryMaxAttempts {
-					sleep(ctx, retryDelay)
-					if ctx.Err() != nil {
+				if retryDelay > 0 && safeAttempt < providerSafeRetryMaxAttempts &&
+					providerLadderHasRoomFor(ladderCtx, retryDelay, ladderBudget) {
+					sleep(ladderCtx, retryDelay)
+					if ladderCtx.Err() != nil {
 						continue phaseLoop
 					}
 					continue
@@ -1634,8 +1764,16 @@ func perplexityEmbeddingBackpressureIsReceiptFree(result *providerHTTPResult) bo
 // after a possibly cost-bearing provider failure. An explicit backpressure
 // response is receipt-free, so the direct route may safely use the configured
 // OpenRouter path instead of parking an otherwise healthy scored run.
+//
+// Both callers -- the scored /embeddings route and the confirmation embedding
+// lane -- are reached through the scorer broker's fixed 100 s client, so the
+// direct route and its OpenRouter fall-through share one TimeoutSeconds
+// budget, as the chat recovery ladder does (#2973).
 func postEmbeddingProvider(ctx context.Context, client *http.Client, cfg config.InferenceProxyConfig,
 	inputs []string, sleep sleepFunc) (*embeddingProviderResult, *providerCallError) {
+
+	ladderCtx, cancelLadder, ladderBudget := providerLadderContext(ctx, cfg.TimeoutSeconds)
+	defer cancelLadder()
 
 	var direct *providerHTTPResult
 	var directErr *providerCallError
@@ -1648,14 +1786,18 @@ func postEmbeddingProvider(ctx context.Context, client *http.Client, cfg config.
 			"encoding_format": "base64_int8",
 		}
 		directPayloadBytes, _ = json.Marshal(directPayload)
-		direct, directErr = postProviderWithRetry(ctx, client, cfg.EmbeddingFallbackURL,
+		direct, directErr = postProviderWithRetry(ladderCtx, client, cfg.EmbeddingFallbackURL,
 			directPayload,
 			map[string]string{
 				"Authorization": "Bearer " + cfg.PerplexityAPIKey,
 				"Content-Type":  "application/json",
 			},
 			cfg.EmbeddingResponseBodyBytes, cfg.TimeoutSeconds, false, "", sleep)
-		if direct != nil && !perplexityEmbeddingBackpressureIsReceiptFree(direct) {
+		// A receipt-free rejection may fall through to OpenRouter only while
+		// that second dispatch still has a realistic share of the budget;
+		// otherwise the direct rejection is the truthful outcome.
+		if direct != nil && (!perplexityEmbeddingBackpressureIsReceiptFree(direct) ||
+			!providerLadderHasRoomFor(ladderCtx, 0, ladderBudget)) {
 			return &embeddingProviderResult{
 				result: direct, attempts: direct.attempts, direct: true,
 				phases: []embeddingProviderPhase{{route: "direct", payload: directPayloadBytes, result: direct}},
@@ -1677,7 +1819,7 @@ func postEmbeddingProvider(ctx context.Context, client *http.Client, cfg config.
 		},
 	}
 	openRouterPayloadBytes, _ := json.Marshal(openRouterPayload)
-	openrouter, orErr := postProviderWithRetry(ctx, client, cfg.EmbeddingUpstreamURL,
+	openrouter, orErr := postProviderWithRetry(ladderCtx, client, cfg.EmbeddingUpstreamURL,
 		openRouterPayload,
 		openrouterHeaders(cfg.OpenRouterAPIKey, false),
 		cfg.EmbeddingResponseBodyBytes, cfg.TimeoutSeconds, false, "", sleep)

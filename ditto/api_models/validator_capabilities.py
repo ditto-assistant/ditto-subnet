@@ -30,6 +30,19 @@ SupportedBenchVersions = Annotated[
     BeforeValidator(lambda value: tuple(value) if isinstance(value, list) else value),
 ]
 
+# A frontier oracle model id as OpenRouter names it, e.g. ``z-ai/glm-5.3-flash``.
+FrontierOracleModels = Annotated[
+    tuple[
+        Annotated[
+            str,
+            Field(min_length=3, max_length=128, pattern=r"^[a-z0-9][a-z0-9._/:-]*$"),
+        ],
+        ...,
+    ],
+    BeforeValidator(lambda value: tuple(value) if isinstance(value, list) else value),
+    Field(min_length=1, max_length=4),
+]
+
 
 # What the validator's ``/v1/capabilities`` probe actually did, as opposed to
 # what the validator concluded from it. ``ScorerBenchmarkStatus`` is the
@@ -211,6 +224,17 @@ class V15ScoredRuntimeEnvEvidence(_ScoredRuntimeEnvEvidenceBase):
     bench_version: Literal[15]
 
 
+class V16ScoredRuntimeEnvEvidence(_ScoredRuntimeEnvEvidenceBase):
+    """Keys reported by a descriptor-verified scorer for its v16 sandbox.
+
+    v16 (the dueling bench) injects the v15 key set, but the packet is bound to
+    its version like every earlier one, so a v15 packet can never qualify a
+    v16 rollout.
+    """
+
+    bench_version: Literal[16]
+
+
 class ScorerBenchmarkCapability(BaseModel):
     """Identity-bound benchmark support observed from the scorer sidecar."""
 
@@ -230,6 +254,9 @@ class ScorerBenchmarkCapability(BaseModel):
     v15_scored_runtime_env: V15ScoredRuntimeEnvEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    v16_scored_runtime_env: V16ScoredRuntimeEnvEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     v7_calibration: V7InferenceCalibration | None = None
     private_datasets: bool = Field(default=False, exclude_if=lambda value: not value)
     deterministic_v13_datasets: bool = Field(
@@ -238,6 +265,22 @@ class ScorerBenchmarkCapability(BaseModel):
     # The scorer accepts ``generator-round-v1`` round datasets. Absent unless
     # true, so validators without it sign exactly the bytes they always did.
     generator_rounds: bool = Field(default=False, exclude_if=lambda value: not value)
+    # The scorer runs the ``generator-frontier-oracle-v1`` mode (the frontier
+    # oracle on a round's unsolved cases). Absent unless true, so validators
+    # without it sign exactly the bytes they always did; Platform leases an
+    # oracle job only to a validator that forwards it.
+    generator_frontier_oracle: bool = Field(
+        default=False, exclude_if=lambda value: not value
+    )
+    # The models the scorer lets a frontier oracle run answer on instead of the
+    # bench contract's harness model, read from its
+    # ``generator-frontier-oracle-model:<model>`` features. Absent unless
+    # advertised, so validators without it sign exactly the bytes they always
+    # did; Platform mints an oracle grant on a non-contract model only for a
+    # validator that forwards that model here.
+    generator_frontier_oracle_models: FrontierOracleModels | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     # The largest round column (cases per pack) the scorer runs, read from its
     # ``generator-round-max-cases-<n>`` feature and capped at what this
     # validator accepts. Absent unless advertised, so validators without it sign
@@ -277,6 +320,13 @@ class ScorerBenchmarkCapability(BaseModel):
     @model_validator(mode="after")
     def support_matches_verified_identity(self) -> ScorerBenchmarkCapability:
         versions = self.supported_bench_versions
+        if self.generator_frontier_oracle and not self.generator_rounds:
+            raise ValueError("the frontier oracle mode requires the round mode")
+        if (
+            self.generator_frontier_oracle_models is not None
+            and not self.generator_frontier_oracle
+        ):
+            raise ValueError("frontier oracle models require the frontier oracle mode")
         if self.generator_round_bench_versions is not None and (
             not self.generator_rounds
             or not set(self.generator_round_bench_versions) <= set(versions)
@@ -317,6 +367,12 @@ class ScorerBenchmarkCapability(BaseModel):
             or self.source_revision != self.v15_scored_runtime_env.source_revision
         ):
             raise ValueError("v15 runtime environment requires verified v15 identity")
+        if self.v16_scored_runtime_env is not None and (
+            self.status != "fresh_verified"
+            or 16 not in versions
+            or self.source_revision != self.v16_scored_runtime_env.source_revision
+        ):
+            raise ValueError("v16 runtime environment requires verified v16 identity")
         if self.deterministic_v13_datasets and (
             self.status != "fresh_verified" or 13 not in versions
         ):
@@ -395,6 +451,9 @@ class ValidatorCapabilities(BaseModel):
     # Publishes generator-round seed commitments Platform elects it for
     # (``Commitments.set_commitment`` from its own Pylon identity).
     round_commitments: bool = Field(default=False, exclude_if=lambda value: not value)
+    # Publishes bench v16+ dueling season commitments Platform elects it for
+    # (``dds1:{season}:{commitment}``, same publisher as the round lane).
+    season_commitments: bool = Field(default=False, exclude_if=lambda value: not value)
     executor_isolation: ExecutorIsolation
     scorer_benchmarks: ScorerBenchmarkCapability | None = Field(
         default=None, exclude_if=lambda value: value is None

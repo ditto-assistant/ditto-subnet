@@ -1,0 +1,9 @@
+# Ditto repository configuration (schema: ditto-cli src/dittoconfig/schema.json).
+# `heyditto claude` / `heyditto codex`, and T3 providers set up with
+# `heyditto t3 setup`, run from anywhere inside this checkout use the endpoint
+# named here unless --endpoint or --profile is passed.
+version = 1
+
+[repository]
+name = "ditto-subnet"
+default_endpoint = "subnet"

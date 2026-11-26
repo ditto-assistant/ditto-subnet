@@ -1057,6 +1057,76 @@ class TestProvisionalIncumbent:
         assert pin is not None and pin.epoch_index == 25_029
         assert pin.champion_agent_id == promoted
 
+    async def test_a_renamed_owner_family_keeps_the_crown(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """#2991: the family's root string moves between pins, its crown does not.
+
+        An owner root is the family's smallest node, recomputed on every read,
+        so an owner-link attestation can rename it after the pin stored it. The
+        pin's stored string is rewritten here to that stale name. The family
+        has also promoted a newer upload, so neither the exact agent nor the
+        stored name finds it: only the champion's hotkey does. Both the public
+        projection and the next pin must keep the crown in the family instead
+        of opening a first-seen walk the senior rival would win.
+        """
+        await self._arm(app, session, session_maker)
+        crowned = await _seed(
+            session,
+            hotkey=_LEADER_HOTKEY,
+            name="crowned generation",
+            composite=0.80,
+            sha256="ab" * 32,
+            agent_id=_HELD_ID,
+            created_at=_NOW - timedelta(days=4),
+        )
+        rival = await _seed(
+            session,
+            hotkey=_RUNNER_UP_HOTKEY,
+            name="senior rival",
+            composite=0.80,
+            sha256="cd" * 32,
+            agent_id=_RUNNER_UP_ID,
+            created_at=_NOW - timedelta(days=3),
+        )
+        read = self._epochs(app)
+        await self._read(client)
+        async with session_maker() as pin_session, pin_session.begin():
+            first_pin = await latest_pin(pin_session, netuid=118)
+            assert first_pin is not None and first_pin.champion_agent_id == crowned
+            assert first_pin.champion_owner_root is not None
+            first_pin.champion_owner_root = "coldkey:5Cnewlinked-before-rename"
+
+        promoted = await _seed(
+            session,
+            hotkey=_LEADER_HOTKEY,
+            name="promoted generation",
+            composite=0.805,
+            sha256="ef" * 32,
+            created_at=_NOW - timedelta(days=1),
+        )
+        board = (await client.get("/api/v1/public/leaderboard")).json()
+        assert {entry["agent_id"] for entry in board["entries"]} == {
+            str(promoted),
+            str(rival),
+        }
+        emissions = board["emissions"]
+        assert emissions["crown_incumbent_agent_id"] == str(promoted)
+        assert emissions["next_pin_projection"]["champion_agent_id"] == str(promoted)
+
+        read.return_value = _schedule(25_029, block=9_033_831)
+        served = await self._read(client)
+        assert served["crown_incumbent_agent_id"] == str(promoted)
+        async with session_maker() as pin_session:
+            pin = await latest_pin(pin_session, netuid=118)
+        assert pin is not None and pin.epoch_index == 25_029
+        assert pin.incumbent_agent_id == promoted
+        assert pin.champion_agent_id == promoted
+
     async def test_a_challenger_that_clears_the_band_takes_the_paid_crown(
         self,
         app: FastAPI,

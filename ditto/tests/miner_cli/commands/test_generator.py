@@ -33,6 +33,19 @@ _KIT = (
 _HAS_GO = shutil.which("go") is not None
 
 
+def _starter_tree() -> dict[Path, tuple[str, str]]:
+    snapshot: dict[Path, tuple[str, str]] = {}
+    for path in _KIT.rglob("*"):
+        if path.is_symlink():
+            entry = ("symlink", str(path.readlink()))
+        elif path.is_file():
+            entry = ("file", hashlib.sha256(path.read_bytes()).hexdigest())
+        else:
+            entry = ("directory", "")
+        snapshot[path.relative_to(_KIT)] = entry
+    return snapshot
+
+
 @pytest.fixture(autouse=True)
 def _isolated_cli_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Saved payment proofs go to a per-test config, never the real one."""
@@ -59,12 +72,13 @@ def test_signature_payload_is_the_pinned_wire_format() -> None:
 @pytest.mark.skipif(not _HAS_GO, reason="needs the Go toolchain")
 def test_package_and_rehearse_the_starter_kit(tmp_path: Path) -> None:
     archive = tmp_path / "kit.tar.gz"
+    before = _starter_tree()
     gen_cmd.package_dir(_KIT, archive, explicit=None)
     info = gen_cmd.inspect_archive(archive, explicit=None)
     assert info["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
     assert info["vendored"] is True and info["module"].endswith("starter-kit")
     # Packaging never writes into the miner's checkout.
-    assert not (_KIT / "vendor").exists()
+    assert _starter_tree() == before
 
     proc = gen_cmd.run_tool(
         [

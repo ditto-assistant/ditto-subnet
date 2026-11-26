@@ -1,0 +1,416 @@
+{
+  "bindings": [
+    {
+      "hotkey_ss58": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+      "issued_at": 1763000000,
+      "message_utf8": "ditto-edge-bind:v1:edn_2c25320b7770923e755d219c2437e2b2:5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY:1763000000",
+      "node_id": "edn_2c25320b7770923e755d219c2437e2b2"
+    }
+  ],
+  "generated_by": "python -m ditto_edge_protocol.vectors --write testdata/conformance_v1.json",
+  "keys": [
+    {
+      "node_id": "edn_265d57733f40adf28ad6fc0582cc35f1",
+      "public_key_hex": "595e49174dd5db246570d1d5060514d7ad74c9bbcc76321dd13b69a50fb1b395",
+      "seed_hex": "9b0255e163b746c1e8bb118d6b758046f071d12079d8cc5686145b92b541251c"
+    },
+    {
+      "node_id": "edn_2c25320b7770923e755d219c2437e2b2",
+      "public_key_hex": "37157221d430fcaf815125447ee8b41ecb10b3f2ddd2875f630f8474d78e2815",
+      "seed_hex": "f456fc7132f7d2dc614c70676673fddb5d716d866d6c7ca64126ba96a3ba62ae"
+    },
+    {
+      "node_id": "edn_d1a4446bd8d293d77bdee7405ece8314",
+      "public_key_hex": "0d9844bb4477bb86a30fbdf91cc5e49622d3edc160dd29ac3014a99018d6ac44",
+      "seed_hex": "f7f4f9f70407632b19396f9187bd554d9b2dc3b8dcf08c121daee60e75bf32b1"
+    }
+  ],
+  "ledger": [
+    {
+      "expected": {
+        "availability": 1.0,
+        "eligible": true,
+        "failed": 0,
+        "held_gib_hours": 1.25,
+        "missed": 0,
+        "passed": 6,
+        "reasons": [],
+        "refilled": 0,
+        "refused": 0,
+        "revocation_checks": 1,
+        "revocation_violations": 0,
+        "scheduled": 6,
+        "verified_units": 1.25
+      },
+      "expected_hypothetical_share": 1.0,
+      "holds": [
+        {
+          "end": null,
+          "size_bytes": 1073741824,
+          "start": 1762999400.0
+        },
+        {
+          "end": null,
+          "size_bytes": 536870912,
+          "start": 1763001800.0
+        }
+      ],
+      "name": "honest_full_window",
+      "observations": [
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "retrieval"
+        },
+        {
+          "outcome": "refused_ok",
+          "purpose": "revoked"
+        }
+      ],
+      "params": {
+        "availability_floor": 0.8,
+        "min_challenges": 3
+      },
+      "window_end": 1763003600.0,
+      "window_start": 1763000000.0
+    },
+    {
+      "expected": {
+        "availability": 0.5,
+        "eligible": false,
+        "failed": 0,
+        "held_gib_hours": 1.0,
+        "missed": 3,
+        "passed": 3,
+        "reasons": [
+          "availability_below_floor"
+        ],
+        "refilled": 0,
+        "refused": 0,
+        "revocation_checks": 0,
+        "revocation_violations": 0,
+        "scheduled": 6,
+        "verified_units": 0.0
+      },
+      "expected_hypothetical_share": 0.0,
+      "holds": [
+        {
+          "end": null,
+          "size_bytes": 1073741824,
+          "start": 1763000000.0
+        }
+      ],
+      "name": "half_online",
+      "observations": [
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "missed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "missed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "missed",
+          "purpose": "possession"
+        }
+      ],
+      "params": {
+        "availability_floor": 0.8,
+        "min_challenges": 3
+      },
+      "window_end": 1763003600.0,
+      "window_start": 1763000000.0
+    },
+    {
+      "expected": {
+        "availability": 0.2,
+        "eligible": false,
+        "failed": 0,
+        "held_gib_hours": 1.0,
+        "missed": 0,
+        "passed": 1,
+        "reasons": [
+          "availability_below_floor"
+        ],
+        "refilled": 4,
+        "refused": 0,
+        "revocation_checks": 0,
+        "revocation_violations": 0,
+        "scheduled": 5,
+        "verified_units": 0.0
+      },
+      "expected_hypothetical_share": 0.0,
+      "holds": [
+        {
+          "end": null,
+          "size_bytes": 1073741824,
+          "start": 1763000000.0
+        }
+      ],
+      "name": "lazy_refills",
+      "observations": [
+        {
+          "outcome": "refilled",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "refilled",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "refilled",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "refilled",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        }
+      ],
+      "params": {
+        "availability_floor": 0.8,
+        "min_challenges": 3
+      },
+      "window_end": 1763003600.0,
+      "window_start": 1763000000.0
+    },
+    {
+      "expected": {
+        "availability": 1.0,
+        "eligible": false,
+        "failed": 0,
+        "held_gib_hours": 1.0,
+        "missed": 0,
+        "passed": 5,
+        "reasons": [
+          "revocation_violation"
+        ],
+        "refilled": 0,
+        "refused": 0,
+        "revocation_checks": 1,
+        "revocation_violations": 1,
+        "scheduled": 5,
+        "verified_units": 0.0
+      },
+      "expected_hypothetical_share": 0.0,
+      "holds": [
+        {
+          "end": null,
+          "size_bytes": 1073741824,
+          "start": 1763000000.0
+        }
+      ],
+      "name": "kept_revoked_content",
+      "observations": [
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "violation",
+          "purpose": "revoked"
+        }
+      ],
+      "params": {
+        "availability_floor": 0.8,
+        "min_challenges": 3
+      },
+      "window_end": 1763003600.0,
+      "window_start": 1763000000.0
+    },
+    {
+      "expected": {
+        "availability": 0.833333333,
+        "eligible": false,
+        "failed": 1,
+        "held_gib_hours": 0.5,
+        "missed": 0,
+        "passed": 5,
+        "reasons": [
+          "integrity_failure"
+        ],
+        "refilled": 0,
+        "refused": 0,
+        "revocation_checks": 0,
+        "revocation_violations": 0,
+        "scheduled": 6,
+        "verified_units": 0.0
+      },
+      "expected_hypothetical_share": 0.0,
+      "holds": [
+        {
+          "end": 1763001800.0,
+          "size_bytes": 1073741824,
+          "start": 1763000000.0
+        }
+      ],
+      "name": "tampered_bytes",
+      "observations": [
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "passed",
+          "purpose": "possession"
+        },
+        {
+          "outcome": "failed",
+          "purpose": "retrieval"
+        }
+      ],
+      "params": {
+        "availability_floor": 0.8,
+        "min_challenges": 3
+      },
+      "window_end": 1763003600.0,
+      "window_start": 1763000000.0
+    }
+  ],
+  "possession": [
+    {
+      "data_generator": "sha256('small:'+str(counter)) blocks, truncated",
+      "data_sha256": "c48b74a77c5793848a5c11e0e8d70e9370b704041b42ed2d9f23217f2d27a955",
+      "label": "small",
+      "length": 37,
+      "nonce_hex": "89bc3ee10b57ebc3354362042c3ed7be1f51ce9206c99ab99005447094e62f3b",
+      "offset": 0,
+      "proof_hex": "18dde8cb13217428cd33f0dc45820da642ce95c6ec1f6fe9c2a44aa6a76c806b",
+      "size": 37
+    },
+    {
+      "data_generator": "sha256('middle:'+str(counter)) blocks, truncated",
+      "data_sha256": "80ffa83b8f864cbeab7067e87fc1bda119dc201ed462f3d74e4d2275a96f1915",
+      "label": "middle",
+      "length": 65536,
+      "nonce_hex": "29f72055af64a2ccc74b917b32977d7931c545587edf883d6cde403bf7af52fc",
+      "offset": 70000,
+      "proof_hex": "2f454773ee7fb0f17c67989bff7ac351411dbfe5481c149d1189f6fcd0da8e41",
+      "size": 200000
+    },
+    {
+      "data_generator": "sha256('tail:'+str(counter)) blocks, truncated",
+      "data_sha256": "362cd1c7f2f74f5d1db3cef2a8b9dee54e301feb4238f9f018a0db779c055484",
+      "label": "tail",
+      "length": 65536,
+      "nonce_hex": "d160206b6107ff204452d32085e6249ba0b19c12d81245cc64d52860fa8a5937",
+      "offset": 4465,
+      "proof_hex": "0daad4e40a576a07c52c2d08760e64f7fc0719c251901c1729063277d0a52154",
+      "size": 70001
+    }
+  ],
+  "protocol": "edge/v1",
+  "requests": [
+    {
+      "body_sha256": "5a5cc6a7e2e0f3fc1f28d793e04b410fab90cbe861dadff501c5b4a9e5e5f5b4",
+      "body_utf8": "{\"client\":{\"name\":\"conformance\",\"version\":\"1\"},\"protocol\":\"edge/v1\",\"public_key_hex\":\"595e49174dd5db246570d1d5060514d7ad74c9bbcc76321dd13b69a50fb1b395\",\"quota_bytes\":2147483648}",
+      "canonical_utf8": "ditto-edge-request:v1\nPOST\n/api/v1/edge/nodes\n1763000000\n00000000000000000000000000000000\n5a5cc6a7e2e0f3fc1f28d793e04b410fab90cbe861dadff501c5b4a9e5e5f5b4",
+      "method": "POST",
+      "node_id": "edn_265d57733f40adf28ad6fc0582cc35f1",
+      "nonce_hex": "00000000000000000000000000000000",
+      "path": "/api/v1/edge/nodes",
+      "seed_hex": "9b0255e163b746c1e8bb118d6b758046f071d12079d8cc5686145b92b541251c",
+      "signature_hex": "a3f100f2eda79a3304ede60e29e58c91e19432dd400f77a4557e0522d7fbc163ad59be6bde86333c2840b3cf6c2750330975813652f75a7b86feee3c6cc10204",
+      "timestamp": 1763000000
+    },
+    {
+      "body_sha256": "feb7f6bb86657318e4f24812ed53954a9c9f9fee57ac962c0a5858c127a272b0",
+      "body_utf8": "{\"free_bytes\":1073741824,\"protocol\":\"edge/v1\"}",
+      "canonical_utf8": "ditto-edge-request:v1\nPOST\n/api/v1/edge/poll\n1763000030\n0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f\nfeb7f6bb86657318e4f24812ed53954a9c9f9fee57ac962c0a5858c127a272b0",
+      "method": "POST",
+      "node_id": "edn_265d57733f40adf28ad6fc0582cc35f1",
+      "nonce_hex": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+      "path": "/api/v1/edge/poll",
+      "seed_hex": "9b0255e163b746c1e8bb118d6b758046f071d12079d8cc5686145b92b541251c",
+      "signature_hex": "bfefecf91f66970270737670cd8766ff562e92833de6111a971fd17a4ec4a096c6a15588a025c46d35366c37e3841b75361c84ceab5e36f00b4abfe4ab4e9206",
+      "timestamp": 1763000030
+    },
+    {
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_utf8": "",
+      "canonical_utf8": "ditto-edge-request:v1\nGET\n/api/v1/edge/objects/fcd6b3d2147daeca28ad665edc7dda1ccbb53fd1ba15e951e84be012153a251b\n1763000031\na5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "method": "GET",
+      "node_id": "edn_265d57733f40adf28ad6fc0582cc35f1",
+      "nonce_hex": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "path": "/api/v1/edge/objects/fcd6b3d2147daeca28ad665edc7dda1ccbb53fd1ba15e951e84be012153a251b",
+      "seed_hex": "9b0255e163b746c1e8bb118d6b758046f071d12079d8cc5686145b92b541251c",
+      "signature_hex": "75a201eb05e26d813dd6149a75e187bef54d5d42cc5f760d666582f6749828f9e8ccade2ea0710ca4fdcaac93f5e9db6d91ce757ba7b41f09744ef41678cf90b",
+      "timestamp": 1763000031
+    },
+    {
+      "body_sha256": "667422c40a365763d593328040581c906045398700c91f7e5919196005d70ab5",
+      "body_utf8": "{\"outcome\":\"refused\",\"refusal\":\"revoked\"}",
+      "canonical_utf8": "ditto-edge-request:v1\nPOST\n/api/v1/edge/challenges/1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f\n1763000040\nffffffffffffffffffffffffffffffff\n667422c40a365763d593328040581c906045398700c91f7e5919196005d70ab5",
+      "method": "POST",
+      "node_id": "edn_265d57733f40adf28ad6fc0582cc35f1",
+      "nonce_hex": "ffffffffffffffffffffffffffffffff",
+      "path": "/api/v1/edge/challenges/1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+      "seed_hex": "9b0255e163b746c1e8bb118d6b758046f071d12079d8cc5686145b92b541251c",
+      "signature_hex": "27e2f5997ff8bb9dc39a3cc407b5f8f15083c5c8784a4eafe0653ae5babadb8d7d2a4841d88c77ae4ef0d07b0e9436c66901b9f778e2001a33d2d417adaf1a08",
+      "timestamp": 1763000040
+    }
+  ]
+}

@@ -1,4 +1,10 @@
-# Conversational Continuity v1
+# Conversational Continuity
+
+Platform admits `conversational-continuity-v2` (Claude Opus 5.5 judge) from
+2026-11-08. `conversational-continuity-v1` (GPT-6 Astra) reports stay stored and
+verifiable under their own rubric digest, model and request count. Each
+artifact, benchmark epoch and instrument is still assessed at most once, so
+every top-five identity gets one v2 assessment regardless of its v1 outcome.
 
 ## Product question
 
@@ -8,7 +14,81 @@ correction, carry a decision into another discussion, or admit that it does not
 know something. This assessment is a black-box product evaluation, separate from
 source screening and cheating allegations.
 
-## Instrument
+## Instrument v2
+
+The host runs the same seeded 30-exchange schedule (unchanged story bank and
+story digest) against the harness, then Claude Opus 5.5 grades probes 11-30 in
+one request: the full transcript plus the private expectations, with the v2
+rubric (`RUBRIC_PROMPT_V2`, digest bound to instrument and model). v1's 31
+forced `converse` tool calls are gone. They carried no information (the judge
+could only echo the next turn id), each was a billed request that could fail
+mid-conversation, and Opus 5.5 rejects a forced `tool_choice`.
+
+| | v1 | v2 |
+| --- | --- | --- |
+| Judge | `gpt-6-astra`, OpenRouter Responses | `claude-opus-5-5` (`anthropic/claude-opus-5.5`), Anthropic SDK against OpenRouter's Messages endpoint, same fleet key |
+| Judge requests | exactly 31 | 1, at most 3 (unbilled 429/5xx retry, or one stateless repair when a quote is not an exact substring) |
+| Effort / output | Responses reasoning low/high | adaptive thinking, `effort: high`, 16,000 max tokens |
+| `/run`, `/seed` deadline | 120 s | 300 s, the bench's v7+ per-case envelope |
+| Failed or slow `/run` | aborts the assessment | empty reply for that turn (graded 0, as the bench scores a missing response); three consecutive failed turns end it as `harness_unresponsive` |
+| Reply over 8,000 chars | `invalid_harness_answer` | first 8,000 chars kept, `assistant_truncated`, the judge treats the excess as a coherence cost |
+| Relay provider 429/5xx | poisons the relay | up to 4 attempts with 4/8/16 s backoff inside one operation deadline (error responses are not billed); timeouts are never retried |
+| gpt-oss-20b routing | `allow_fallbacks: false`, OpenRouter's default provider | the bench's aggregate throughput route: `sort: throughput`, CoreWeave ignored, fallbacks on, ZDR, same `max_price` ceiling |
+| Relay dispatch | serial | up to 4 concurrent, budget reserved under the lock first |
+| Lease | 65 min | 125 min |
+| Judge spend | pinned-tariff upper bound | provider `usage.cost` when present (`billed`), otherwise reported usage at the Opus 5.5 list price ($4 input, $5 cache write, $0.20 cache read, $20 output per M tokens; `tariff`) |
+
+The first v2 production assessment (`fa504f65`, 2026-11-08) proved the Opus
+judge path (one request, $0.12 billed) but still ended
+`harness_inference_incomplete`: three 429s on the single-provider route
+poisoned the relay with 11 replies left. Twenty of the 21 v1
+`harness_inference_incomplete` rows were also 429s; one was a 402. That is why
+the relay now uses the bench's fallback route.
+
+### Budget (2026-11-08)
+
+Each assessment holds **$1.00**: $0.85 for the judge and $0.15 for the harness
+(was $25 + $5). The rolling 24-hour cap is **$30** (was $180). Measured v2
+spend was ~$0.18 a run: judge ~$0.17 in one request, harness under $0.01.
+
+- The judge reserves each request at its worst-case token bound (one token per
+  UTF-8 byte at the $5/M cache-write rate, plus 10,000 output tokens at $20/M).
+  One grading request over a transcript of up to ~120 KB fits the hold
+  (production transcripts are ~65 KB). A request that would not fit is never
+  sent and ends as `judge_cost_limit`.
+- The relay reserves each dispatch at the route's price ceiling, $0.10/M input
+  and $0.40/M output (every gpt-oss-20b provider was at or under $0.075/$0.30).
+  A dispatch that does not fit waits for in-flight holds to settle; with
+  nothing in flight it is refused as `inference_budget_exhausted`, and the
+  report ends `harness_budget_exhausted`, not `harness_inference_incomplete`.
+- The cap counts what the lane spent. A settled assessment counts its recorded
+  judge + harness spend (retained holds and price-ceiling bounds included). A
+  leased or expired claim keeps its full hold, because its spend is unknown.
+  This replaced counting every hold for 24 hours, which would have kept six
+  settled $30 holds (about $1 of real spend) blocking a $30 cap for a day.
+- Workers advertise their hold (`reservation_microusd`) on claim. Platform
+  offers a claim only when it matches the hold it reserves, so a worker still
+  sized for $30 is never handed a $1 claim. Reports filed against older $30
+  holds still verify against their $25 judge budget.
+
+### Coverage and repeatability (2026-11-08)
+
+To estimate how an enforced conversation score would move rankings, admission
+covers finalized, owner-deduplicated public ranks 1-15 (was the top five). Pass
+1 gives every eligible artifact one canonical assessment (`repeat_index` 0),
+best rank first. Only when all of them have one does pass 2 run up to two
+fresh-seed repeats (`repeat_index` 1-2) for ranks 1-5 whose canonical
+assessment completed. Repeats reuse the canonical base quality, never change a
+score, and measure judge noise: the spread of the conversation score for the
+same artifact. Manual retries stay canonical-only. At ~$0.18 a run, covering
+one bench version is about 25 runs, or ~$4.50, inside the $30 cap.
+
+Workers advertise the instruments they run in the claim body; a worker that
+sends none predates v2 and is offered nothing while Platform admits v2. A v2
+worker that receives a v1 claim from an older Platform files an empty
+`instrument_unsupported` report without starting a sandbox.
+
+## Instrument v1
 
 GPT-6 Astra conducts exactly 30 exchanges, in ten three-turn sessions, starting
 with an empty, randomly named memory graph. Ten onboarding exchanges establish
@@ -129,8 +209,8 @@ The default is off. There is no enforce mode.
 
 Idle enrolled workers call the `/api/v1/screener/conversation-assessments` claim
 and result endpoints using their rotating node principal. Claim admission is
-serialized globally: at most one live assessment, $25 reserved for Astra and $5
-for the harness, with a $180 rolling daily cap. Failed/expired identities are
+serialized globally: at most one live assessment, $0.85 reserved for the judge and
+$0.15 for the harness, within a $30 rolling daily cap (see Budget above). Failed/expired identities are
 never automatically reissued. Image download capabilities and story seeds stay
 private. Reports bind artifact, screened archive, instrument and claim owner.
 
@@ -223,9 +303,11 @@ after any billed attempt. A failed upload should resend the same report and leas
 token, not rerun the assessment. The result endpoint is idempotent for byte-equivalent
 canonical reports and rejects conflicting replacements.
 
-`get_conversation_assessments` in Backroom lists state, reserved cost, observed
-combined actual spend when both receipts are known, proposed composite and the
-fee-change payload. Supply `assessment_id` for the private transcript, grades,
+`get_conversation_assessments` in Backroom lists state, reserved cost, judge and
+harness spend with `spent_is_upper_bound`, per-row failure evidence without the
+transcript (`exchange_count`, `empty_answers`, `truncated_answers`,
+`failed_turns`, `harness_failure_code`/`http_status`, provider retries, judge
+requests and tokens), proposed composite and the fee-change payload. Supply `assessment_id` for the private transcript, grades,
 judge usage and harness usage. Upper bounds remain labelled in the private
 report; a $30 reservation is not a claim of $30 actual spend.
 

@@ -488,16 +488,26 @@ func outputTokenLimit(payload map[string]any, maximum int) (int, *httpError) {
 
 // Reasoning contract (inference_routing.py + _benchmark_reasoning_for_request).
 const (
-	v7Model                = "openai/gpt-oss-20b"
+	v7Model = "openai/gpt-oss-20b"
+	// frontierOracleModel is the generator frontier oracle's pinned model
+	// (Platform FRONTIER_ORACLE_MODEL, dittobench-api llm.FrontierOracleModel).
+	// It gets the same reasoning contract as the bench model (SN-496).
+	frontierOracleModel    = "z-ai/glm-5.3-flash"
 	defaultReasoningEffort = "medium"
 )
+
+// hasReasoningContract reports whether model's reasoning block is pinned:
+// effort fixed (v7/v8) or agent-selected (v9+), excluded from the response.
+func hasReasoningContract(model string) bool {
+	return model == v7Model || model == frontierOracleModel
+}
 
 func isReasoningEffort(s string) bool { return s == "low" || s == "medium" || s == "high" }
 
 // benchmarkReasoningForRequest resolves the provider reasoning block. A nil
 // map with nil error means "no reasoning contract for this model".
 func benchmarkReasoningForRequest(payload map[string]any, model string, benchVersion int32) (map[string]any, *httpError) {
-	if model != v7Model {
+	if !hasReasoningContract(model) {
 		return nil, nil
 	}
 	if benchVersion < 9 {

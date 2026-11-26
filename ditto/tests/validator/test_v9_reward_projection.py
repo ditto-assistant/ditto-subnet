@@ -40,6 +40,11 @@ from ditto.validator.weights import (
     filter_weight_confirmed,
 )
 from ditto_screening_protocol.bench_v9 import CONFIRMATION_BENCH_VERSIONS
+from ditto_screening_protocol.dueling import (
+    DuelingColumnAggregate,
+    DuelingReport,
+    is_dueling_bench_version,
+)
 
 _VECTOR = (
     Path(__file__).resolve().parents[3]
@@ -624,8 +629,37 @@ async def test_v9_efficiency_factor_survives_serialized_http_ledger_round_trip()
 # never re-verifies signatures, so the relabel isolates exactly the version gate.
 
 
+_DUELING_SEASON = "0b6f1c1e-6a52-4d8e-9a57-3f0c2d1e4b5a"
+
+
 def _at_version(entry: LedgerEntry, bench_version: int) -> LedgerEntry:
-    return entry.model_copy(update={"bench_version": bench_version})
+    """``entry`` re-stamped at ``bench_version``. A dueling (16+) row only
+    folds with its season and signed aggregates, so it gets a one-season
+    report whose public-default columns mask nothing."""
+    update: dict[str, object] = {"bench_version": bench_version}
+    if is_dueling_bench_version(bench_version):
+        update["dueling_season_id"] = _DUELING_SEASON
+        update["dueling"] = DuelingReport(
+            season_id=_DUELING_SEASON,
+            season_index=1,
+            slice_sha256="ab" * 32,
+            owner_key=f"coldkey:{entry.miner_hotkey}",
+            datagen_raw=entry.composite,
+            datagen_gate=1.0,
+            column_weight=0.1,
+            columns=[
+                DuelingColumnAggregate(
+                    column_id=f"c{index}",
+                    owner_key="",
+                    n=35,
+                    sum=entry.composite * 35,
+                    sum_sq=entry.composite * entry.composite * 35,
+                )
+                for index in range(5)
+            ],
+            composite_stderr=0.01,
+        )
+    return entry.model_copy(update=update)
 
 
 def _ordinary_vs_full_leaders() -> tuple[LedgerEntry, LedgerEntry]:

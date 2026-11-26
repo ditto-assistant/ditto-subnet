@@ -1,0 +1,11 @@
+[Unit]
+Description=Pull and activate a signed CPM scorer release
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ditto-cpm-scorer-auto-update
+# A drain waits for the run in hand, up to Platform's 4 h default lease.
+TimeoutStartSec=270min
+UMask=0022

@@ -41,8 +41,57 @@ from ditto.api_server.embedding import EmbeddingConfig, NullEmbedder
 from ditto.api_server.factory import _process_role
 from ditto.api_server.pricing import PricingConfig
 from ditto.api_server.storage import ObjectMetadata, StorageConfig
-from ditto.chain import ChainConfig
+from ditto.chain import ChainConfig, HotkeyRegistration
 from ditto.db.config import PostgresConfig
+
+
+def fake_registration(
+    hotkey: str,
+    netuid: int,
+    coldkey: str | None,
+    *,
+    uid: int = 0,
+    snapshot_block: int = 42,
+    chain_block: int | None = None,
+) -> HotkeyRegistration:
+    """A :class:`HotkeyRegistration` for fakes; ``coldkey=None`` is unregistered.
+
+    ``chain_block`` marks an answer confirmed in chain storage; ``None`` is the
+    metagraph cache's answer alone.
+    """
+    return HotkeyRegistration(
+        hotkey=hotkey,
+        netuid=netuid,
+        uid=None if coldkey is None else uid,
+        coldkey=coldkey,
+        snapshot_block=snapshot_block,
+        chain_block=chain_block,
+    )
+
+
+def answer_registration_from_neurons(chain: Any) -> None:
+    """Make a fake chain answer ``get_hotkey_registration`` from its neurons.
+
+    Fakes that model registration as a ``get_recent_neurons`` list keep doing
+    so; the lookup reads that list on every call, so a test that replaces it
+    later is still honoured.
+    """
+
+    async def _registration(
+        hotkey: str, netuid: int, *, confirm_absence: bool = True
+    ) -> HotkeyRegistration:
+        neurons = await chain.get_recent_neurons(netuid)
+        neuron = next((n for n in neurons if n.hotkey == hotkey), None)
+        if neuron is None:
+            return fake_registration(
+                hotkey,
+                netuid,
+                None,
+                chain_block=42 if confirm_absence else None,
+            )
+        return fake_registration(hotkey, netuid, neuron.coldkey, uid=neuron.uid)
+
+    chain.get_hotkey_registration = AsyncMock(side_effect=_registration)
 
 
 def make_api_server_config(**overrides: Any) -> ApiServerConfig:
@@ -268,11 +317,17 @@ def override_get_chain_client(app: FastAPI, *, raises: Exception | None = None) 
             chain.get_latest_block = AsyncMock(side_effect=raises)
             chain.is_registered = AsyncMock(side_effect=raises)
             chain.get_registered_coldkey = AsyncMock(side_effect=raises)
+            chain.get_hotkey_registration = AsyncMock(side_effect=raises)
             chain.get_weights = AsyncMock(side_effect=raises)
         else:
             chain.get_latest_block = AsyncMock(return_value=MagicMock(number=42))
             chain.is_registered = AsyncMock(return_value=True)
             chain.get_registered_coldkey = AsyncMock(return_value="5Coldkey")
+            chain.get_hotkey_registration = AsyncMock(
+                side_effect=lambda hotkey, netuid, **_: fake_registration(
+                    hotkey, netuid, "5Coldkey"
+                )
+            )
             # Empty revealed weight matrix by default: the king-weight sweep on
             # the score path finds nothing to confirm unless a test says otherwise.
             chain.get_weights = AsyncMock(return_value=MagicMock(vectors=()))

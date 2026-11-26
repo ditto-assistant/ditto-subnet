@@ -117,7 +117,6 @@ describe('Dedicated receipt OAuth protocol authority', () => {
       { jsonrpc: '2.0', id: 1, method: 'resources/list' },
       { jsonrpc: '2.0', id: 1, method: 'resources/read', params: { uri: 'file:///secret' } },
       [call('get_treasury_settings', { revision: 1 })],
-      { ...call('get_treasury_settings'), padding: 'x'.repeat(65_536) },
     ]
     for (const message of messages) {
       const response = await handler().fetch(request(message))
@@ -125,6 +124,9 @@ describe('Dedicated receipt OAuth protocol authority', () => {
       expect(response.headers.get('Cache-Control')).toBe('no-store')
     }
     for (const method of ['GET', 'DELETE']) expect((await handler().fetch(request({}, method))).status).toBe(403)
+    const oversized = await handler().fetch(request({ ...call('get_treasury_settings'), padding: 'x'.repeat(65_536) }))
+    expect(oversized.status).toBe(413)
+    expect(oversized.headers.get('Cache-Control')).toBe('no-store')
     expect(fetchMock).not.toHaveBeenCalled()
   })
 

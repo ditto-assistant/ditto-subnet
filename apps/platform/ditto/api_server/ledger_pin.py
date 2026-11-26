@@ -25,6 +25,7 @@ import hashlib
 import json
 import logging
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,7 +46,7 @@ from ditto.api_models.treasury_readiness import (
 )
 from ditto.api_models.validator import ConfirmationSeedAnchorPin
 from ditto.api_server.koth import (
-    TOP5_MAX_CONFIRMATION_SEEDS,
+    CONFIRMATION_SEED_CEILING,
     CrownGate,
     crown_gate_marker,
     koth_entries_from_ledger,
@@ -238,11 +239,22 @@ def served_crown_gate(served: dict[str, Any]) -> CrownGate | None:
         or isinstance(standing, bool)
         or not isinstance(min_seeds, int)
         or not isinstance(standing, int)
-        or not 2 <= min_seeds <= TOP5_MAX_CONFIRMATION_SEEDS
+        or not 2 <= min_seeds <= CONFIRMATION_SEED_CEILING
         or not 1 <= standing <= 5
     ):
         return None
-    return CrownGate(min_shared_seeds=min_seeds, standing_rank=standing)
+    # Protocol 35: out of range reads as absent, as the validator reads it.
+    window = raw.get("duel_window_pairs")
+    duel_window = (
+        window
+        if isinstance(window, int)
+        and not isinstance(window, bool)
+        and 2 <= window <= CONFIRMATION_SEED_CEILING
+        else None
+    )
+    return CrownGate(
+        min_shared_seeds=min_seeds, standing_rank=standing, duel_window=duel_window
+    )
 
 
 def served_track_shares(served: dict[str, Any]) -> dict[str, int]:
@@ -1016,6 +1028,86 @@ class LedgerPinMaterializer:
                 return LedgerPin.from_row(winner) if winner is not None else None
 
 
+def pin_champion_hotkey(pin: LedgerPin) -> str | None:
+    """The hotkey of the agent ``pin`` crowned, read from the pin's own bytes.
+
+    The champion is either one of the pin's entries or, under protocol 28, the
+    crown-only provisional incumbent it froze into ``served``.
+    """
+    if pin.champion_agent_id is None:
+        return None
+    candidates: list[LedgerEntry] = list(pin.entries)
+    try:
+        provisional = pin_provisional_incumbent(pin.context.get("served") or {})
+    except (AttributeError, KeyError, TypeError, ValueError):
+        provisional = None
+    if provisional is not None:
+        candidates.append(provisional)
+    return next(
+        (
+            entry.miner_hotkey
+            for entry in candidates
+            if str(entry.agent_id) == str(pin.champion_agent_id)
+        ),
+        None,
+    )
+
+
+def pin_row_champion_hotkey(row: LedgerEpochSnapshot) -> str | None:
+    """Resolve the crowned champion hotkey from a persisted pin row.
+
+    Falls back to ``None`` when stored pin JSON fails validation so read-only
+    projections retain the stored-root fallback instead of raising.
+    """
+    try:
+        return pin_champion_hotkey(LedgerPin.from_row(row))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def crown_family_root(
+    *,
+    stored_root: str | None,
+    champion_agent_id: Any | None,
+    champion_hotkey: str | None,
+    members: Iterable[tuple[Any, str, str | None]],
+) -> str | None:
+    """The previous champion's owner family as it is named in this read.
+
+    An owner root is not an identity: it is the smallest node of the owner
+    component, recomputed on every read, so an owner-link attestation or a
+    linked hotkey's first payment can rename the family between two pins
+    (#2991). Matching the stored string alone would then drop incumbency and
+    open a first-seen walk the champion never lost on score.
+
+    ``members`` is every ``(agent_id, miner_hotkey, current_root)`` the read
+    can crown. The champion's family is found, in order, through:
+
+    1. the previous champion agent itself, still present;
+    2. any generation uploaded by the previous champion's hotkey -- a hotkey is
+       a node of its own owner component, so all its uploads share one root;
+    3. the stored root string, for a family the read reaches only by name.
+
+    The first two follow the champion's own identity, so a family split by a
+    revoked link keeps the crown on the champion's side even when the stored
+    string now names the other half. A legacy pin without a stored root
+    returns ``None`` and keeps its exact-agent fallback unchanged.
+    """
+    if stored_root is None:
+        return None
+    members = tuple(members)
+    if champion_agent_id is not None:
+        champion_id = str(champion_agent_id)
+        for agent_id, _hotkey, root in members:
+            if root is not None and str(agent_id) == champion_id:
+                return root
+    if champion_hotkey is not None:
+        for _agent_id, hotkey, root in members:
+            if root is not None and hotkey == champion_hotkey:
+                return root
+    return stored_root
+
+
 def build_pin_draft(
     schedule: EpochSchedule,
     *,
@@ -1059,6 +1151,10 @@ def build_pin_draft(
             "min_dethrone_confirmations": crown_gate.min_shared_seeds,
             "champion_standing_rank": crown_gate.standing_rank,
         }
+        # Keyed only when the protocol-35 title duel rides the gate, so a
+        # protocol-34 pin keeps its digest byte for byte.
+        if crown_gate.duel_window is not None:
+            served["crown_gate"]["duel_window_pairs"] = crown_gate.duel_window
     # Keyed only when a fleet-ready operator curve is served, so every pin taken
     # on the frozen curve keeps its digest byte for byte.
     rank_shares = getattr(snapshot, "rank_shares", None)
@@ -1087,13 +1183,27 @@ def build_pin_draft(
         ]
     entries_json = canonical_entries(snapshot.entries)
     owner_roots: dict = getattr(snapshot, "owner_roots", None) or {}
+    withheld_entries = tuple(getattr(snapshot, "withheld_entries", None) or ())
+    champion_root = crown_family_root(
+        stored_root=previous_champion_owner_root,
+        champion_agent_id=(
+            previous_pin.champion_agent_id if previous_pin is not None else None
+        ),
+        champion_hotkey=(
+            pin_champion_hotkey(previous_pin) if previous_pin is not None else None
+        ),
+        members=(
+            (entry.agent_id, entry.miner_hotkey, owner_roots.get(entry.agent_id))
+            for entry in (*snapshot.entries, *withheld_entries)
+        ),
+    )
     incumbent = None
-    if previous_champion_owner_root is not None:
+    if champion_root is not None:
         incumbent = next(
             (
                 entry.agent_id
                 for entry in snapshot.entries
-                if owner_roots.get(entry.agent_id) == previous_champion_owner_root
+                if owner_roots.get(entry.agent_id) == champion_root
             ),
             None,
         )
@@ -1114,15 +1224,15 @@ def build_pin_draft(
     provisional = None
     if (
         incumbent is None
-        and previous_champion_owner_root is not None
+        and champion_root is not None
         and snapshot.crown_mode == "incumbent"
         and reward_eligibility_mode == "enforce"
     ):
         provisional = next(
             (
                 entry
-                for entry in getattr(snapshot, "withheld_entries", None) or ()
-                if owner_roots.get(entry.agent_id) == previous_champion_owner_root
+                for entry in withheld_entries
+                if owner_roots.get(entry.agent_id) == champion_root
             ),
             None,
         )

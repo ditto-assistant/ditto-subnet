@@ -70,6 +70,7 @@ from ditto.tests.confirmation_evidence_fixtures import (
     signed_report,
     verification_profile,
 )
+from ditto_screening_protocol.bench_v9 import V9_EVIDENCE_BENCH_VERSIONS
 
 pytestmark = pytest.mark.asyncio
 
@@ -446,7 +447,23 @@ class TestBundleResolution:
                     verification_profile=verification_profile(),
                 )
 
-    @pytest.mark.parametrize("live_version", [11])
+    # 16 is the dueling bench: its bundle is the same LongMem execution with no
+    # run seed and no generator slice (dueling-bench.md section 4), so nothing
+    # in the lane asks for dueling fields. The lane admits 16 once the shared
+    # evidence set carries it (the bench v16 support release).
+    @pytest.mark.parametrize(
+        "live_version",
+        [
+            11,
+            pytest.param(
+                16,
+                marks=pytest.mark.skipif(
+                    16 not in V9_EVIDENCE_BENCH_VERSIONS,
+                    reason="bench v16 is not in the shared evidence set yet",
+                ),
+            ),
+        ],
+    )
     async def test_bundle_is_written_for_a_later_live_benchmark(
         self, session: AsyncSession, live_version: int
     ) -> None:

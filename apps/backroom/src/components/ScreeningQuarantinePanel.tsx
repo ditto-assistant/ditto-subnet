@@ -445,27 +445,33 @@ export function ScreeningQuarantinePanel({
           confirmed: true,
         },
       })
-      setNotice(
-        `${result.applied_count} applied, ${result.already_applied_count} already recorded, ${result.failed_count} failed.`,
-      )
-      if (result.failed_count > 0) {
-        setError(
-          result.items
-            .filter((item) => item.status === 'failed')
-            .map((item) => `${short(item.quarantine_id, 8)}: ${item.message}`)
-            .join('\n'),
-        )
-      }
+      // Only rows Platform recorded leave the selection; a failed or
+      // unconfirmed row stays selected for the next preview.
       const completed = new Set(
         result.items
-          .filter((item) => item.status !== 'failed')
+          .filter((item) => item.status === 'applied' || item.status === 'already_applied')
           .map((item) => item.quarantine_id),
       )
       setBatchSelection((current) => current.filter((id) => !completed.has(id)))
       setBatchPreview(null)
       setPendingDecisions([])
       setReason('')
+      // Refresh first: it clears the error, which would otherwise erase the
+      // per-row messages below as soon as they appear.
       await refresh()
+      setNotice(
+        result.reconciled_after
+          ? `The batch request ${result.reconciled_after === 'timeout' ? 'timed out' : result.reconciled_after === 'gateway' ? 'got a gateway error' : 'lost its answer'}; read back from Platform: ${result.already_applied_count} recorded, ${result.failed_count} failed, ${result.unconfirmed_count} not confirmed. Preview again before executing the rest.`
+          : `${result.applied_count} applied, ${result.already_applied_count} already recorded, ${result.failed_count} failed.`,
+      )
+      if (result.failed_count > 0 || result.unconfirmed_count > 0) {
+        setError(
+          result.items
+            .filter((item) => item.status === 'failed' || item.status === 'unconfirmed')
+            .map((item) => `${short(item.quarantine_id, 8)}: ${item.message}`)
+            .join('\n'),
+        )
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to execute this preview')
     } finally {

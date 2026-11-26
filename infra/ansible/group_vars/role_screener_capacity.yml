@@ -10,3 +10,8 @@ ansible_ssh_common_args: >-
   --verbosity=warning"
 base_ssh_set_allow_users: false
 base_install_go: false
+
+# DITTO-2594: the on-demand AWS primary, created by the protected aws-screener
+# apply. Google-to-AWS federation uses the controller's attached identity.
+screener_capacity_aws_primary_instance_id: i-01415282991f4b0fa
+screener_capacity_aws_primary_role_arn: arn:aws:iam::339713011188:role/ditto-screener-capacity-wake

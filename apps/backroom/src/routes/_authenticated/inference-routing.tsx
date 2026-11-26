@@ -45,12 +45,12 @@ function InferenceRoutingPending() {
   )
 }
 
-function InferenceRoutingError({ error }: { error: Error }) {
+function InferenceRoutingError({ error }: { error: unknown }) {
   return (
     <div className="mx-auto mt-6 max-w-2xl rounded-xl border border-[var(--red)]/25 bg-[var(--red-dim)] p-6">
       <AlertTriangle className="h-6 w-6 text-[var(--red)]" />
       <h2 className="mt-4 text-lg font-semibold">Inference routing is unavailable</h2>
-      <p className="mt-2 text-sm leading-6 text-[var(--muted-strong)]">{error.message}</p>
+      <p className="mt-2 text-sm leading-6 text-[var(--muted-strong)]">{error instanceof Error ? error.message : 'An unexpected error occurred'}</p>
       <p className="mt-3 text-xs text-[var(--muted)]">
         This page times out when Platform aggregates the inference_requests
         ledger. Confirm the listing that omits those totals is deployed, then

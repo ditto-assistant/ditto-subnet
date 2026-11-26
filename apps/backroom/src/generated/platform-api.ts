@@ -172,6 +172,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/{agent_id}/harness-memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Harness Memory
+         * @description One agent version's rollup and newest observed runs.
+         */
+        get: operations["get_agent_harness_memory_api_v1_admin_agents__agent_id__harness_memory_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents/{agent_id}/lineage-source-diff": {
         parameters: {
             query?: never;
@@ -248,6 +268,91 @@ export interface paths {
          * @description Read publication proof without source URLs or fetcher information.
          */
         get: operations["get_agent_source_release_evidence_api_v1_admin_agents__agent_id__source_release_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/airdrops": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Airdrop Runs
+         * @description Recent runs, newest first, plus the caps and executors in force.
+         */
+        get: operations["list_airdrop_runs_api_v1_admin_airdrops_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/airdrops/execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Execute Airdrop
+         * @description Run an airdrop. ``dry_run`` defaults to true and then only previews.
+         *
+         *     With ``dry_run=false`` the request must echo the preview's
+         *     ``confirmation_digest`` and exact ``confirmation`` phrase. A retry with
+         *     the same ``idempotency_key`` resumes the recorded run and never sends a
+         *     recipient that has already been claimed.
+         */
+        post: operations["execute_airdrop_api_v1_admin_airdrops_execute_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/airdrops/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Airdrop
+         * @description Resolve, cap and price a run. Never writes the ledger or moves anything.
+         */
+        post: operations["preview_airdrop_api_v1_admin_airdrops_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/airdrops/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Airdrop Run
+         * @description One run with every recipient's settlement result.
+         */
+        get: operations["get_airdrop_run_api_v1_admin_airdrops__run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1258,12 +1363,14 @@ export interface paths {
         put?: never;
         /**
          * Void Infra Confirmation Scores
-         * @description Void continual-retest samples whose own grant shows an inference outage.
+         * @description Void samples or canonical scores whose own grant shows an inference outage.
          *
          *     Each item is guarded on its exact run id and composite and gated on the
          *     serving grant's outage-class failures. ``dry_run`` (the default) writes
-         *     nothing. A voided sample counts toward nothing and its seed is re-leased;
-         *     the score row itself is never changed.
+         *     nothing. A voided retest sample counts toward nothing and its seed is
+         *     re-leased; the score row itself is never changed. A voided canonical score
+         *     queues a same-validator replacement re-test that swaps the score when it
+         *     lands (no miner retry budget is spent).
          */
         post: operations["void_infra_confirmation_scores_api_v1_admin_confirmation_score_voids_post"];
         delete?: never;
@@ -1721,6 +1828,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/edge-lane-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_api_v1_admin_edge_lane_settings_get"];
+        put?: never;
+        /** Create Settings Revision */
+        post: operations["create_settings_revision_api_v1_admin_edge_lane_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/edge/ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ledger */
+        get: operations["ledger_api_v1_admin_edge_ledger_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/edge/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Nodes */
+        get: operations["nodes_api_v1_admin_edge_nodes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/edge/objects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Objects */
+        get: operations["objects_api_v1_admin_edge_objects_get"];
+        put?: never;
+        /** Ingest */
+        post: operations["ingest_api_v1_admin_edge_objects_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/edge/objects/{digest}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke */
+        post: operations["revoke_api_v1_admin_edge_objects__digest__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/edge/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Overview */
+        get: operations["overview_api_v1_admin_edge_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/efficiency-bonus-settings": {
         parameters: {
             query?: never;
@@ -1889,6 +2100,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/dueling/seasons/{season_id}/republish-commitment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Republish Dueling Season Commitment
+         * @description Ask elected validators to publish a committed season's commitment again.
+         *
+         *     Platform never publishes a commitment itself. This reopens publication
+         *     (``pending``) and forgets every failed or unconfirmed validator claim, so
+         *     the season's publisher order elects again from the validators fresh now.
+         *     Confirmed publications are kept and still count toward the target.
+         */
+        post: operations["admin_republish_dueling_season_commitment_api_v1_admin_generator_competition_dueling_seasons__season_id__republish_commitment_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/dueling/slices": {
         parameters: {
             query?: never;
@@ -1898,9 +2134,93 @@ export interface paths {
         };
         /**
          * Admin Dueling Slices
-         * @description Slice preparations, newest first, with latency and digests.
+         * @description Slice preparations, newest first, with latency, digests and whether a
+         *     failed one can be retried (``retry_dueling_slice_preparation``).
          */
         get: operations["admin_dueling_slices_api_v1_admin_generator_competition_dueling_slices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/dueling/slices/{preparation_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Retry Dueling Slice
+         * @description Re-queue exactly one failed slice preparation: status pending, attempts
+         *     kept, error cleared, so the next lease of its seed reserves it again.
+         */
+        post: operations["admin_retry_dueling_slice_api_v1_admin_generator_competition_dueling_slices__preparation_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/dueling/source-releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Generator Source Releases
+         * @description Every pinned generator's source release: due time and status.
+         */
+        get: operations["admin_generator_source_releases_api_v1_admin_generator_competition_dueling_source_releases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/frontier/audits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Frontier Audits
+         * @description The frontier audit queue: sampled oracle-attested cases awaiting an
+         *     operator ruling, oldest round first. ``include_ruled`` also lists ruled
+         *     audits of rounds that have not settled yet.
+         */
+        get: operations["admin_frontier_audits_api_v1_admin_generator_competition_frontier_audits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/prescreens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin List Prescreens
+         * @description Pre-screen batches, newest first, without their datasets.
+         */
+        get: operations["admin_list_prescreens_api_v1_admin_generator_competition_prescreens_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2004,7 +2324,8 @@ export interface paths {
         };
         /**
          * Admin Round Loop
-         * @description The round driver's last tick: actions taken, errors, chain position.
+         * @description The round driver's last tick: actions taken, errors, chain position,
+         *     and whether (and when last) it skipped an unchanged round.
          */
         get: operations["admin_round_loop_api_v1_admin_generator_competition_rounds_loop_get"];
         put?: never;
@@ -2112,6 +2433,101 @@ export interface paths {
         get: operations["admin_round_dataset_api_v1_admin_generator_competition_rounds__round_index__dataset_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/frontier": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Round Frontier
+         * @description A scored round's frontier lane: candidates, the oracle run, the
+         *     attestations, each column's audit, and the credit applied.
+         */
+        get: operations["admin_round_frontier_api_v1_admin_generator_competition_rounds__round_index__frontier_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/frontier/audits/{column_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Frontier Audit Detail
+         * @description One column's audit sample as the generator wrote it: question, gold
+         *     and declared competitors, cited evidence, the panel's and the oracle's
+         *     outcomes, and the user's visible memory (filtered by ``q``) to look for a
+         *     contradicting fact.
+         */
+        get: operations["admin_frontier_audit_detail_api_v1_admin_generator_competition_rounds__round_index__frontier_audits__column_id__get"];
+        put?: never;
+        /**
+         * Admin Rule Frontier Audit
+         * @description Rule one column's frontier audit. ``valid`` keeps every oracle
+         *     attestation on the column; an invalid ruling names the sampled cases that
+         *     are not fair memory questions and voids all of the column's frontier
+         *     credit for the round. The round settles once every audit is ruled.
+         */
+        post: operations["admin_rule_frontier_audit_api_v1_admin_generator_competition_rounds__round_index__frontier_audits__column_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/frontier/rerun": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Rerun Frontier
+         * @description Re-run a held or zero-credit settled round's frontier oracle under the
+         *     current generator-competition oracle settings, routing its results through
+         *     the normal oracle -> audit -> settle lifecycle.
+         */
+        post: operations["admin_rerun_frontier_api_v1_admin_generator_competition_rounds__round_index__frontier_rerun_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/frontier/settle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Settle Frontier
+         * @description Settle a round's frontier lane now, without waiting for its audits or
+         *     the oracle: attestations of columns whose audit did not fail apply (none
+         *     while the oracle has not reported).
+         */
+        post: operations["admin_settle_frontier_api_v1_admin_generator_competition_rounds__round_index__frontier_settle_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2300,8 +2716,10 @@ export interface paths {
          *     infrastructure failure read as a generator verdict). The submission
          *     qualifies again from scratch on fresh secret seeds and holds no round
          *     column until it passes. Guarded by the exact status and status_reason the
-         *     operator read. Refused while the hotkey has another active or a newer
-         *     submission, and for an operator ruling unless ``override_operator_ruling``.
+         *     operator read. Refused while the hotkey has a newer submission or another
+         *     active one uploaded after it, and for an operator ruling unless
+         *     ``override_operator_ruling``. An older active generator (the one this
+         *     submission superseded, restored when it was rejected) is superseded again.
          */
         post: operations["reinstate_submission_api_v1_admin_generator_competition_submissions__submission_id__reinstate_post"];
         delete?: never;
@@ -2357,6 +2775,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/submissions/{submission_id}/source-file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Generator Source File
+         * @description Audited, bounded line excerpt from one generator source file.
+         *
+         *     A generator that ships hand-built cases (a JSON world file, an answer
+         *     table) can be audited here before any round runs it.
+         */
+        get: operations["admin_generator_source_file_api_v1_admin_generator_competition_submissions__submission_id__source_file_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/submissions/{submission_id}/source-files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Generator Source Files
+         * @description Audited, bounded file inventory of one generator's source archive.
+         */
+        get: operations["admin_generator_source_files_api_v1_admin_generator_competition_submissions__submission_id__source_files_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/submissions/{submission_id}/source-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Generator Source Search
+         * @description Audited grep across one generator's readable source, in one request.
+         *
+         *     Finds where a generator builds its cases or which data file holds a case
+         *     id, so the operator reads only the region a match names.
+         */
+        get: operations["admin_generator_source_search_api_v1_admin_generator_competition_submissions__submission_id__source_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/github-links/{link_id}": {
         parameters: {
             query?: never;
@@ -2385,6 +2869,26 @@ export interface paths {
         put?: never;
         /** Revoke Github Link */
         post: operations["revoke_github_link_api_v1_admin_github_links__link_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/harness-memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Harness Memory
+         * @description Agents with memory observations, heaviest P95 first.
+         */
+        get: operations["get_harness_memory_api_v1_admin_harness_memory_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2745,6 +3249,187 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/model-context/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Run Detail
+         * @description One run (submission or reference), its season and its base floor.
+         */
+        get: operations["admin_run_detail_api_v1_admin_model_context_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-context/scorer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Scorer Status
+         * @description Scorer heartbeats, the run and screening backlog, and this process's
+         *     season and screening loop.
+         */
+        get: operations["scorer_status_api_v1_admin_model_context_scorer_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-context/seasons/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate
+         * @description Close the open season now and open the next on the finalized head.
+         */
+        post: operations["rotate_api_v1_admin_model_context_seasons_rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-context/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Settings
+         * @description Current policy, append-only history, the default, and what is in force.
+         */
+        get: operations["get_settings_api_v1_admin_model_context_settings_get"];
+        put?: never;
+        /**
+         * Create Settings Revision
+         * @description Append one optimistic, confirmation-gated revision.
+         */
+        post: operations["create_settings_revision_api_v1_admin_model_context_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-context/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin List Submissions
+         * @description Every submission newest first, any hotkey, with its latest run.
+         *
+         *     ``total`` counts what the filters match across all pages;
+         *     ``counts_by_status`` stays subnet-wide.
+         */
+        get: operations["admin_list_submissions_api_v1_admin_model_context_submissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-context/submissions/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Submission Detail
+         * @description One submission: manifest, screening, every run and the operator audit.
+         */
+        get: operations["admin_submission_detail_api_v1_admin_model_context_submissions__submission_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-context/submissions/{submission_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Submission By Operator
+         * @description Reject a submission by operator ruling (abuse, a copy screening missed).
+         *
+         *     It leaves the board and ledger at once and its queued or leased runs are
+         *     abandoned (a scorer's late result is refused). A ``screening`` submission
+         *     can be rejected too: the screen in flight finds it no longer screening and
+         *     changes nothing. The hotkey's earlier submission is not restored; the
+         *     miner can submit again after the cooldown.
+         */
+        post: operations["reject_submission_by_operator_api_v1_admin_model_context_submissions__submission_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-context/submissions/{submission_id}/rescore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rescore Submission
+         * @description Queue one more run of an active submission in the open season.
+         *
+         *     For a run that failed for a reason that was not the model's (a
+         *     ``nondeterministic`` verdict traced to the host, an abandoned run). The
+         *     submission keeps its status, and a score it already has this season
+         *     stays on the board until the new run lands; the latest scored run of the
+         *     season then stands. Refused while the lane is off, no season is open, or
+         *     a run of it is already queued or leased.
+         */
+        post: operations["rescore_submission_api_v1_admin_model_context_submissions__submission_id__rescore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/operator-diagnostic/{agent_id}": {
         parameters: {
             query?: never;
@@ -2951,6 +3636,52 @@ export interface paths {
          *     next read is never stale.
          */
         post: operations["create_settings_revision_api_v1_admin_queue_policy_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/readmissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Readmissions
+         * @description Every paid, credited and classified readmission, newest first.
+         *
+         *     ``bench_version`` and ``miner_coldkey`` filter the rows and the totals.
+         *     ``free_admissions_by_category`` always describes the whole active era.
+         */
+        get: operations["list_readmissions_api_v1_admin_readmissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/registration-freshness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Registration Freshness
+         * @description Read Pylon's snapshot block, a fresh finalized head and any correction.
+         *
+         *     One finalized header read; never starts a chain-storage registration read
+         *     and changes nothing.
+         */
+        get: operations["get_registration_freshness_api_v1_admin_registration_freshness_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3480,12 +4211,10 @@ export interface paths {
         put?: never;
         /**
          * Schedule Activation
-         * @description Append one optimistic, confirmation-gated schedule revision.
+         * @description Retired: the required screening policy is frozen at its last activation.
          *
-         *     The required version rises to ``target_policy_version`` when
-         *     ``activate_at`` passes, not when this row is written — miners get the full
-         *     notice window. Superseding an earlier schedule is a normal append: the
-         *     newest due revision governs.
+         *     Validators lease on the benchmark contract floor alone, so nothing waits on
+         *     a new review-policy version. Reads of the activation history still work.
          */
         post: operations["schedule_activation_api_v1_admin_screener_policy_activation_post"];
         delete?: never;
@@ -3505,13 +4234,7 @@ export interface paths {
         put?: never;
         /**
          * Advance Scored Rescreen
-         * @description Fill a bounded current-board window after an explicit checkpoint.
-         *
-         *     The policy schedule establishes the rule.  It does *not* bulk-requeue
-         *     every existing score: a false V11 clear remains observable before more than
-         *     the configured window of V10 scores is touched.  A non-verdict leaves its
-         *     row paused, prevents the window from widening, and requires an explicit
-         *     retry rather than silently advancing.
+         * @description Retired: scored agents are never rescreened for a review policy.
          */
         post: operations["advance_scored_rescreen_api_v1_admin_screener_policy_activation_advance_scored_rescreen_post"];
         delete?: never;
@@ -3558,7 +4281,7 @@ export interface paths {
         put?: never;
         /**
          * Schedule V13 Review Clock
-         * @description Schedule a future first-claim clock; never backfill existing attempts.
+         * @description Retired: source review no longer runs, so no review clock is scheduled.
          */
         post: operations["schedule_v13_review_clock_api_v1_admin_screener_policy_activation_review_clock_post"];
         delete?: never;
@@ -3859,6 +4582,33 @@ export interface paths {
         get: operations["get_quarantine_api_v1_admin_screening_quarantines__quarantine_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screening-quarantines/{quarantine_id}/amend-reason": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Amend Quarantine Reject Reason
+         * @description Correct the miner-visible reason on a resolved reject (SN-439).
+         *
+         *     The reject stands: status, decision-maker, moderation record and evidence
+         *     are untouched. The quarantine's resolution reason, the attempt's public
+         *     reason and the agent's screening reason -- wherever they still carry the
+         *     replaced text -- take the corrected text. The replaced text stays in the
+         *     append-only resolution history, seeded with the original decision when
+         *     the reject (an automated confirmed violation, say) wrote no history row.
+         */
+        post: operations["amend_quarantine_reject_reason_api_v1_admin_screening_quarantines__quarantine_id__amend_reason_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5107,6 +5857,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/upload-payments/{block_hash}/{extrinsic_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Upload Payment Proof
+         * @description Return the upload a proof funded, the credit holding it, or neither.
+         */
+        get: operations["get_upload_payment_proof_api_v1_admin_upload_payments__block_hash___extrinsic_index__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/v13-official-controls": {
         parameters: {
             query?: never;
@@ -6010,6 +6780,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/edge/ack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Acknowledge */
+        post: operations["acknowledge_api_v1_edge_ack_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/challenges/{challenge_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Answer */
+        post: operations["answer_api_v1_edge_challenges__challenge_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enroll */
+        post: operations["enroll_api_v1_edge_nodes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/nodes/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Node Status */
+        get: operations["node_status_api_v1_edge_nodes_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/nodes/me/leave": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Leave */
+        post: operations["leave_api_v1_edge_nodes_me_leave_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/objects/{digest}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fill */
+        get: operations["fill_api_v1_edge_objects__digest__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Poll */
+        post: operations["poll_api_v1_edge_poll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/feedback-track/contributions": {
         parameters: {
             query?: never;
@@ -6141,7 +7030,8 @@ export interface paths {
         put?: never;
         /**
          * Post Round Results
-         * @description Store a round's generated dataset for the current generation lease.
+         * @description Store a round's (or a pre-screen batch's) generated dataset for the
+         *     current generation lease.
          */
         post: operations["post_round_results_api_v1_generator_scorer_round_results_post"];
         delete?: never;
@@ -6161,7 +7051,8 @@ export interface paths {
         put?: never;
         /**
          * Post Round Score
-         * @description Store a round's scored matrix for the current scoring lease.
+         * @description Store a round's (or a pre-screen batch's) scored matrix for the current
+         *     scoring lease.
          */
         post: operations["post_round_score_api_v1_generator_scorer_round_score_post"];
         delete?: never;
@@ -6179,7 +7070,8 @@ export interface paths {
         };
         /**
          * Lease Round
-         * @description Lease the oldest round needing generation or scoring, if any.
+         * @description Lease the oldest round needing generation or scoring, if any, else the
+         *     oldest pre-screen batch (its index rides in ``round_index``).
          *
          *     A generating round whose ``cases_per_column`` the polling scorer refuses
          *     is voided with an ``infra:`` reason instead of leased.
@@ -6965,6 +7857,191 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/model-context-scorer/fault": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Fault
+         * @description Record a scorer fault for the run's current lease.
+         */
+        post: operations["post_fault_api_v1_model_context_scorer_fault_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context-scorer/reference-work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reference Work
+         * @description The open season's base floors, and the bases still without one.
+         */
+        get: operations["reference_work_api_v1_model_context_scorer_reference_work_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context-scorer/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Results
+         * @description Record one scored run for its current lease.
+         */
+        post: operations["post_results_api_v1_model_context_scorer_results_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context-scorer/work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lease Work
+         * @description Lease the next run of the open season, or 204.
+         */
+        get: operations["lease_work_api_v1_model_context_scorer_work_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Board
+         * @description The current season, ranked by score then commitment block.
+         */
+        get: operations["board_api_v1_model_context_board_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context/seasons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Seasons
+         * @description Recent seasons: open block, its hash, the seeds derived from it, and
+         *     each base's floor.
+         */
+        get: operations["seasons_api_v1_model_context_seasons_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Submissions
+         * @description A hotkey's submissions, newest first, with each one's latest run.
+         */
+        get: operations["list_submissions_api_v1_model_context_submissions_get"];
+        put?: never;
+        /**
+         * Submit
+         * @description Admit one signed, committed submission for screening.
+         */
+        post: operations["submit_api_v1_model_context_submissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context/submissions/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Submission
+         * @description One submission and its latest run.
+         */
+        get: operations["get_submission_api_v1_model_context_submissions__submission_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context/upload-terms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Upload Terms
+         * @description What a submission needs now; read it before writing the commitment.
+         */
+        get: operations["upload_terms_api_v1_model_context_upload_terms_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/name-claims": {
         parameters: {
             query?: never;
@@ -7529,6 +8606,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/dueling/generator-sources/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public Generator Source */
+        get: operations["public_generator_source_api_v1_public_dueling_generator_sources__submission_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/dueling/generator-sources/{submission_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Generator Source Archive
+         * @description The exact pinned archive (``source_sha256``) once it is released.
+         *
+         *     403 while the live source release policy withholds source, 425 before
+         *     ``release_at``. The policy is re-read here, never trusted from the
+         *     release row.
+         */
+        get: operations["public_generator_source_archive_api_v1_public_dueling_generator_sources__submission_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/dueling/seasons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Dueling Seasons
+         * @description Revealed seasons, newest first.
+         *
+         *     Page backwards with the last row's ``season_index`` as ``before_index``
+         *     and its ``bench_version`` as ``before_bench_version`` (a shadow and an
+         *     authoritative season can share an index); ``before_index`` alone skips
+         *     the whole index.
+         */
+        get: operations["public_dueling_seasons_api_v1_public_dueling_seasons_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/dueling/seasons/{season_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public Dueling Season */
+        get: operations["public_dueling_season_api_v1_public_dueling_seasons__season_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/dueling/seasons/{season_id}/slices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Dueling Slices
+         * @description Every slice of a revealed season that has a digest, by run seed.
+         */
+        get: operations["public_dueling_slices_api_v1_public_dueling_seasons__season_id__slices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/efficiency/snapshots/{snapshot_id}": {
         parameters: {
             query?: never;
@@ -8048,6 +9228,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/readmission/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check
+         * @description Pre-payment dry run: every reason this readmission would be refused.
+         *
+         *     With ``reserve_slot`` and no refusal, reserves the price (exactly the
+         *     upload fee) and the payment address for 24 hours. A miner should pay only
+         *     after ``ok`` with an ``admission_token``.
+         */
+        post: operations["check_api_v1_readmission_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/readmission/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Commit
+         * @description Verify the finalized payment and readmit the agent, or bank a credit.
+         *
+         *     An exact retry (same proof, agent, era, hotkey) returns the original
+         *     outcome. A proof another lane holds is a 3207 replay. A verified payment
+         *     whose admission is refused is recorded ``credited`` and banked as a credit
+         *     for this hotkey, spendable on an upload or a readmission for 30 days.
+         */
+        post: operations["commit_api_v1_readmission_commit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/retrieval/agent-by-hotkey": {
         parameters: {
             query?: never;
@@ -8106,6 +9335,33 @@ export interface paths {
          *     zero emission. ``mode=off`` serves an empty ledger.
          */
         get: operations["generator_ledger_api_v1_scoring_generator_ledger_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scoring/model-context-ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Context Ledger
+         * @description The model_context (CPM) ledger, behind the memory ledger's proof.
+         *
+         *     Platform is the competition's system of record, so this is a direct read
+         *     of the open season: each active submission's latest scored run, with
+         *     ``eligible`` when it clears its base's floor plus ``floor_margin``
+         *     (contract section 4.5), ranked by score then commitment block. The track
+         *     is not payable, so validators fold it in shadow; ``mode=off`` or no open
+         *     season serves an empty ledger.
+         */
+        get: operations["model_context_ledger_api_v1_scoring_model_context_ledger_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8930,6 +10186,9 @@ export interface paths {
         /**
          * Refresh Screener Node
          * @description Rotate a node bearer while it still owns valid signed authority.
+         *
+         *     An on-demand (AWS) node may also rotate an expired bearer after a bounded
+         *     dormancy; every other node must rotate before expiry or re-enroll.
          */
         post: operations["refresh_screener_node_api_v1_screener_nodes_refresh_post"];
         delete?: never;
@@ -8968,6 +10227,11 @@ export interface paths {
         /**
          * Queue
          * @description List completion-lane contenders, then least-scored pending agents.
+         *
+         *     ``policy_only=true`` answers just ``required_policy_version`` with no items.
+         *     Workers read the policy before every claim, and running the full priority
+         *     query (with its per-agent score aggregates) only to discard the rows was a
+         *     standing load on the API at a two-second poll interval.
          */
         get: operations["queue_api_v1_screener_queue_get"];
         put?: never;
@@ -9231,8 +10495,9 @@ export interface paths {
          *     1. Form fields auto-validated by FastAPI regex (already done by
          *        the time this body runs; malformed input returns 422).
          *     2. Fresh domain-separated upload signature (CPU only, no I/O; 400).
-         *     3. Hotkey registered on the configured netuid (1 Pylon call;
-         *        400 if absent, 503 if chain unreachable).
+         *     3. Hotkey registered on the configured netuid (the cached metagraph,
+         *        plus one chain-storage read when the cache lacks the hotkey; 400 if
+         *        absent, 503 if chain unreachable).
          *     4. Stream tar bytes: size cap (413) + sha256 re-verify (400).
          *     5. Resolve the proof as an idempotent retry or an available duplicate-upload
          *        credit. Reusing an assigned proof for different upload data remains a
@@ -9460,6 +10725,46 @@ export interface paths {
          */
         put: operations["submit_transcript_api_v1_validator_agent__agent_id__transcript__run_id__put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/dueling-season-commitment-job": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Dueling Season Commitment Job
+         * @description Claim a committed dueling season's on-chain commitment if elected.
+         */
+        post: operations["request_dueling_season_commitment_job_api_v1_validator_dueling_season_commitment_job_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/dueling-season-commitment-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report Dueling Season Commitment
+         * @description Record a claimed season commitment publication's signed outcome.
+         */
+        post: operations["report_dueling_season_commitment_api_v1_validator_dueling_season_commitment_report_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9933,7 +11238,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
             /** Case Set Sha256 */
             case_set_sha256: string;
             /** Contract Version */
@@ -10029,6 +11334,13 @@ export interface components {
              * @constant
              */
             upstream_requests: 0;
+        };
+        /** AckResponse */
+        AckResponse: {
+            /** Accepted */
+            accepted: number;
+            /** Ignored */
+            ignored: number;
         };
         /** ActivateV13ScorerCohortRequest */
         ActivateV13ScorerCohortRequest: {
@@ -10445,7 +11757,7 @@ export interface components {
              */
             status: "applied" | "already_applied" | "failed";
             /** Steps Applied */
-            steps_applied?: ("open" | "clear" | "attest" | "reject")[];
+            steps_applied?: ("open" | "clear" | "attest" | "reject" | "close_terminal")[];
             /** Would Change Crown */
             would_change_crown: boolean | null;
             /**
@@ -10498,7 +11810,7 @@ export interface components {
             /** Stale Guard */
             stale_guard: boolean;
             /** Steps */
-            steps?: ("open" | "clear" | "attest" | "reject")[];
+            steps?: ("open" | "clear" | "attest" | "reject" | "close_terminal")[];
             /** Would Change Crown */
             would_change_crown: boolean;
         };
@@ -11225,6 +12537,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Dueling Season Id */
+            dueling_season_id?: string | null;
             /** Pinned */
             pinned: boolean;
             /** Pinned At */
@@ -11267,7 +12581,7 @@ export interface components {
              * Admission Reason
              * @enum {string}
              */
-            admission_reason: "in_cohort" | "same_owner_challenger" | "owner_suppressed" | "outside_cohort" | "not_current_finalized_ledger";
+            admission_reason: "in_cohort" | "same_owner_challenger" | "owner_suppressed" | "outside_cohort" | "expired_dueling_season" | "not_current_finalized_ledger";
             /**
              * Agent Id
              * Format: uuid
@@ -11307,6 +12621,18 @@ export interface components {
             /** Configured Max Size */
             configured_max_size: number;
             /**
+             * Confirmation Seed Cap
+             * @default 0
+             */
+            confirmation_seed_cap: number;
+            /**
+             * Confirmation Seed Floor
+             * @default 0
+             */
+            confirmation_seed_floor: number;
+            /** Confirmation Seed Target */
+            confirmation_seed_target?: number | null;
+            /**
              * Eligibility Mode
              * @enum {string}
              */
@@ -11324,14 +12650,20 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
+            /** In Current Pin */
+            in_current_pin?: boolean | null;
             /** In Emission Set */
             in_emission_set: boolean;
             /** In Raw Wave */
             in_raw_wave: boolean;
             /** In Retest Cohort */
             in_retest_cohort: boolean;
+            /** In Window Score Count */
+            in_window_score_count?: number | null;
             /** Is Same Owner Challenger */
             is_same_owner_challenger: boolean;
+            /** Last Valid Composite */
+            last_valid_composite?: number | null;
             /** Latest Confirmation Composite */
             latest_confirmation_composite?: number | null;
             /** Latest Confirmation Recorded At */
@@ -11378,12 +12710,18 @@ export interface components {
              * @default none
              * @enum {string}
              */
-            representative_selection: "self" | "official_composite" | "efficiency_tiebreak" | "newest_generation" | "agent_id_tiebreak" | "none";
+            representative_selection: "self" | "official_composite" | "efficiency_tiebreak" | "newest_generation" | "agent_id_tiebreak" | "superseded_rerun" | "none";
             /**
              * Retest Samples
              * @default []
              */
             retest_samples: components["schemas"]["RetestSampleInference"][];
+            /**
+             * Score Dueling Season Ids
+             * @default []
+             */
+            score_dueling_season_ids: string[];
+            season_retest?: components["schemas"]["PublicSeasonRetest"] | null;
             /** Seed Anchor Block */
             seed_anchor_block: number | null;
             /** Seed Anchor Champion Id */
@@ -11405,6 +12743,11 @@ export interface components {
              * @enum {string}
              */
             wave_membership: "strict" | "participants" | "per_agent";
+            /**
+             * Window Dueling Season Ids
+             * @default []
+             */
+            window_dueling_season_ids: string[];
         };
         /** AdminContinualRetestSettingsRequest */
         AdminContinualRetestSettingsRequest: {
@@ -11744,6 +13087,7 @@ export interface components {
             reason_source: "original_hold" | "reconsideration";
             /** Reference Provenance */
             reference_provenance: string;
+            reference_public_release?: components["schemas"]["AdminCopyReviewReferenceRelease"] | null;
             /**
              * Review Kind
              * @default copy
@@ -11825,6 +13169,12 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+            /**
+             * Order
+             * @default oldest
+             * @enum {string}
+             */
+            order: "oldest" | "public_reference_first";
             /** Review Kind */
             review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score") | null;
             /** Rollout Bench Version */
@@ -11924,6 +13274,26 @@ export interface components {
              */
             status: "resolved" | "all";
         };
+        /**
+         * AdminCopyReviewReferenceRelease
+         * @description Publication of a copy hold's reference, relative to the held upload.
+         */
+        AdminCopyReviewReferenceRelease: {
+            /** Public Before Upload */
+            public_before_upload: boolean;
+            /** Published At */
+            published_at?: string | null;
+            /**
+             * Reference Agent Id
+             * Format: uuid
+             */
+            reference_agent_id: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "recorded" | "derived";
+        };
         /** AdminCopyReviewResolveRequest */
         AdminCopyReviewResolveRequest: {
             /** Reason */
@@ -11943,6 +13313,7 @@ export interface components {
             /** Reconciled Quarantine Ids */
             reconciled_quarantine_ids?: string[];
             review: components["schemas"]["AdminCopyReviewItem"];
+            season_retest?: components["schemas"]["AdminSeasonRetestOutcome"] | null;
         };
         /** AdminCopySimilarityEvidence */
         AdminCopySimilarityEvidence: {
@@ -12070,6 +13441,21 @@ export interface components {
             triggers: ("top_five" | "composite_anomaly" | "tool_anomaly" | "memory_anomaly")[];
         };
         /**
+         * AdminDuelingCommitmentRepublishRequest
+         * @description Re-elect validators to publish a committed season's commitment.
+         */
+        AdminDuelingCommitmentRepublishRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
          * AdminDuelingRotateRequest
          * @description Close an open dueling season early (an audited mini-rollout).
          */
@@ -12104,12 +13490,40 @@ export interface components {
             next: components["schemas"]["DuelingSeasonView"][];
             /** Recent */
             recent: components["schemas"]["DuelingSeasonView"][];
+            rotation_spend?: components["schemas"]["DuelingRotationSpendView"] | null;
             /**
              * Scores Without Dueling
              * @default 0
              */
             scores_without_dueling: number;
             target: components["schemas"]["DuelingTargetView"];
+        };
+        /**
+         * AdminDuelingSliceRetryRequest
+         * @description Re-queue exactly one failed slice preparation (audited).
+         */
+        AdminDuelingSliceRetryRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Error */
+            expected_error: string | null;
+            /**
+             * Expected Status
+             * @constant
+             */
+            expected_status: "failed";
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+            /** Reason */
+            reason: string;
         };
         /** AdminDuelingSlicesResponse */
         AdminDuelingSlicesResponse: {
@@ -12141,6 +13555,35 @@ export interface components {
             sample_truncated: boolean;
             /** Total */
             total: number;
+        };
+        /** AdminEdgeLaneSettingsRequest */
+        AdminEdgeLaneSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @default *
+             */
+            scope: string;
+            settings: components["schemas"]["EdgeLaneSettings"];
+        };
+        /** AdminEdgeLaneSettingsResponse */
+        AdminEdgeLaneSettingsResponse: {
+            /** Current */
+            current: components["schemas"]["EdgeLaneSettingsRevision"][];
+            default: components["schemas"]["EdgeLaneSettings"];
+            effective: components["schemas"]["EffectiveEdgeLaneSettings"];
+            /** History */
+            history: components["schemas"]["EdgeLaneSettingsRevision"][];
         };
         /**
          * AdminEfficiencyBonusSettingsRequest
@@ -12457,6 +13900,15 @@ export interface components {
             /** Unmetered */
             unmetered: boolean;
         };
+        /** AdminGeneratorPrescreenListResponse */
+        AdminGeneratorPrescreenListResponse: {
+            /** Counts By Status */
+            counts_by_status: {
+                [key: string]: number;
+            };
+            /** Prescreens */
+            prescreens: components["schemas"]["GeneratorPrescreenView"][];
+        };
         /** AdminGeneratorProbeResponse */
         AdminGeneratorProbeResponse: {
             current: components["schemas"]["GeneratorProbeEpochView"] | null;
@@ -12527,7 +13979,7 @@ export interface components {
              * Expected Status
              * @enum {string}
              */
-            expected_status: "committed" | "generating" | "running" | "scoring" | "scored" | "void";
+            expected_status: "committed" | "generating" | "running" | "scoring" | "scored" | "skipped" | "void";
             /** Reason */
             reason: string;
         };
@@ -12565,6 +14017,7 @@ export interface components {
             commitment_publishers_target: number;
             /** Dataset Bytes */
             dataset_bytes: number | null;
+            frontier?: components["schemas"]["GeneratorFrontierView"] | null;
             /** Generation */
             generation: {
                 [key: string]: unknown;
@@ -12639,6 +14092,8 @@ export interface components {
             bench_contract?: components["schemas"]["GeneratorRoundBenchContractPreview"] | null;
             /** Blockers */
             blockers: string[];
+            /** Challenger Queue */
+            challenger_queue?: components["schemas"]["GeneratorChallengerQueueEntry"][];
             /** Columns */
             columns: components["schemas"]["GeneratorRoundColumnSlot"][];
             /** Panel */
@@ -12741,6 +14196,103 @@ export interface components {
             effective: components["schemas"]["EffectiveGeneratorSettings"];
             /** History */
             history: components["schemas"]["GeneratorSettingsRevision"][];
+        };
+        /**
+         * AdminGeneratorSourceExcerpt
+         * @description A bounded line range from one file of a generator's source archive.
+         */
+        AdminGeneratorSourceExcerpt: {
+            /** End Line */
+            end_line: number;
+            /** Lines */
+            lines: components["schemas"]["AdminSourceLine"][];
+            /** Path */
+            path: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /** Start Line */
+            start_line: number;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Total Lines */
+            total_lines: number;
+        };
+        /**
+         * AdminGeneratorSourceListing
+         * @description Bounded file inventory of one generator's stored source archive.
+         */
+        AdminGeneratorSourceListing: {
+            /** File Count */
+            file_count: number;
+            /** Files */
+            files: components["schemas"]["AdminSourceFileEntry"][];
+            /** Opaque Blobs */
+            opaque_blobs: components["schemas"]["AdminOpaqueBlobEntry"][];
+            /** Opaque Total */
+            opaque_total: number;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** AdminGeneratorSourceReleasesResponse */
+        AdminGeneratorSourceReleasesResponse: {
+            /** Counts */
+            counts?: {
+                [key: string]: number;
+            };
+            /** Items */
+            items: components["schemas"]["GeneratorSourceReleaseView"][];
+        };
+        /**
+         * AdminGeneratorSourceSearchResult
+         * @description Regex/literal hits across one generator's readable source files.
+         */
+        AdminGeneratorSourceSearchResult: {
+            /** Files Matched */
+            files_matched: number;
+            /** Files Searched */
+            files_searched: number;
+            /** Has More */
+            has_more: boolean;
+            /** Limit */
+            limit: number;
+            /** Match Count */
+            match_count: number;
+            /** Matches */
+            matches: components["schemas"]["AdminSourceSearchMatch"][];
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "regex" | "literal";
+            /** Offset */
+            offset: number;
+            /** Opaque Skipped */
+            opaque_skipped: number;
+            /** Path Glob */
+            path_glob?: string | null;
+            /** Pattern */
+            pattern: string;
+            /** Returned */
+            returned: number;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Truncated */
+            truncated: boolean;
         };
         /**
          * AdminGeneratorSubmissionActionRequest
@@ -13029,6 +14581,7 @@ export interface components {
             payment_address: string;
             /** Priced Submissions */
             priced_submissions: number;
+            readmission?: components["schemas"]["MinerFeeReadmissionLane"] | null;
             /** Recent Days */
             recent_days: components["schemas"]["MinerFeeDay"][];
             /** Unique Paying Coldkeys */
@@ -13083,6 +14636,183 @@ export interface components {
              * @enum {string}
              */
             status: "active" | "resolved";
+        };
+        /** AdminModelContextRunDetail */
+        AdminModelContextRunDetail: {
+            /** Floor */
+            floor: number | null;
+            run: components["schemas"]["AdminModelContextRunView"];
+            season: components["schemas"]["ModelContextSeasonView"] | null;
+            submission: components["schemas"]["ModelContextSubmissionSummary"] | null;
+        };
+        /**
+         * AdminModelContextRunView
+         * @description One run as Platform stores it (the lease id, a scorer credential, is
+         *     never served). Season seeds are public, so ``per_seed`` is too.
+         */
+        AdminModelContextRunView: {
+            /** Attempts */
+            attempts: number;
+            /** Base Id */
+            base_id: string;
+            /** Components */
+            components: {
+                [key: string]: unknown;
+            } | null;
+            /** Cpm Score Version */
+            cpm_score_version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Fault */
+            fault: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Gpu Sku */
+            gpu_sku: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "submission" | "reference";
+            /** Lease Expires At */
+            lease_expires_at: string | null;
+            /** Per Seed */
+            per_seed: {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score: number | null;
+            /** Scorer Id */
+            scorer_id: string | null;
+            /** Scorer Version */
+            scorer_version: string | null;
+            /** Season */
+            season: number;
+            /** Started At */
+            started_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "leased" | "scored" | "failed" | "abandoned";
+            /** Submission Id */
+            submission_id: string | null;
+        };
+        /** AdminModelContextScorerStatus */
+        AdminModelContextScorerStatus: {
+            /** Current Season */
+            current_season: number | null;
+            /** Leased Runs */
+            leased_runs: number;
+            /** Loop Last Error */
+            loop_last_error?: string | null;
+            /** Loop Running */
+            loop_running?: boolean | null;
+            /** Queued Runs */
+            queued_runs: number;
+            /** Scorers */
+            scorers: components["schemas"]["ModelContextScorerHeartbeatView"][];
+            /** Screening Submissions */
+            screening_submissions: number;
+        };
+        /** AdminModelContextSettingsRequest */
+        AdminModelContextSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @default *
+             */
+            scope: string;
+            settings: components["schemas"]["ModelContextSettings"];
+        };
+        /** AdminModelContextSettingsResponse */
+        AdminModelContextSettingsResponse: {
+            /** Current */
+            current: components["schemas"]["ModelContextSettingsRevision"][];
+            default: components["schemas"]["ModelContextSettings"];
+            effective: components["schemas"]["EffectiveModelContextSettings"];
+            /** History */
+            history: components["schemas"]["ModelContextSettingsRevision"][];
+        };
+        /**
+         * AdminModelContextSubmissionActionRequest
+         * @description A guarded write on one submission (rescore or reject).
+         *
+         *     ``expected_status`` is the status the operator read; a submission that
+         *     moved since is refused (409) so a ruling never lands on a different
+         *     state. ``reason`` is unbounded audit evidence.
+         */
+        AdminModelContextSubmissionActionRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Expected Status
+             * @enum {string}
+             */
+            expected_status: "screening" | "queued" | "scored" | "rejected" | "superseded";
+            /** Reason */
+            reason: string;
+        };
+        /** AdminModelContextSubmissionDetail */
+        AdminModelContextSubmissionDetail: {
+            /** Actions */
+            actions: components["schemas"]["ModelContextOperatorActionView"][];
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /** Runs */
+            runs: components["schemas"]["AdminModelContextRunView"][];
+            /** Screening Attempts */
+            screening_attempts: number;
+            /** Screening Detail */
+            screening_detail: {
+                [key: string]: unknown;
+            } | null;
+            /** Screening Lease Until */
+            screening_lease_until: string | null;
+            summary: components["schemas"]["ModelContextSubmissionSummary"];
+            /** Total Bytes */
+            total_bytes: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** AdminModelContextSubmissionListResponse */
+        AdminModelContextSubmissionListResponse: {
+            /** Counts By Status */
+            counts_by_status: {
+                [key: string]: number;
+            };
+            /** Submissions */
+            submissions: components["schemas"]["ModelContextSubmissionSummary"][];
+            /** Total */
+            total?: number | null;
         };
         /**
          * AdminOpaqueBlobEntry
@@ -13830,6 +15560,65 @@ export interface components {
              */
             terminal_ghost_count: number;
         };
+        /**
+         * AdminQuarantineReasonAmendRequest
+         * @description Guarded correction of the public reason on a resolved reject (SN-439).
+         *
+         *     The rejection itself stands; only the miner-visible reason changes, and
+         *     the text it replaces is kept in the quarantine's resolution history.
+         */
+        AdminQuarantineReasonAmendRequest: {
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "AMEND PUBLIC REJECT REASON";
+            /**
+             * Expected Agent Id
+             * Format: uuid
+             */
+            expected_agent_id: string;
+            /** Expected Artifact Sha256 */
+            expected_artifact_sha256: string;
+            /**
+             * Expected Attempt Id
+             * Format: uuid
+             */
+            expected_attempt_id: string;
+            /** Expected Reason */
+            expected_reason: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminQuarantineReasonAmendResponse */
+        AdminQuarantineReasonAmendResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Idempotent
+             * @default false
+             */
+            idempotent: boolean;
+            /** Previous Reason */
+            previous_reason: string;
+            /**
+             * Quarantine Id
+             * Format: uuid
+             */
+            quarantine_id: string;
+            /** Reason */
+            reason: string;
+            /** Resolved By */
+            resolved_by?: string | null;
+        };
         /** AdminQuarantineResolutionEvent */
         AdminQuarantineResolutionEvent: {
             /** Actor */
@@ -13912,6 +15701,32 @@ export interface components {
             effective: components["schemas"]["EffectiveQueuePolicySettings"];
             /** History */
             history: components["schemas"]["QueuePolicySettingsRevision"][];
+        };
+        /** AdminReadmissionsResponse */
+        AdminReadmissionsResponse: {
+            activation: components["schemas"]["ReadmissionActivationState"];
+            /** Bench Version */
+            bench_version?: number | null;
+            cost_basis?: components["schemas"]["ReadmissionCostBasis"] | null;
+            /** Free Admissions By Category */
+            free_admissions_by_category?: {
+                [key: string]: number;
+            };
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Paid */
+            paid?: components["schemas"]["PaidReadmissionRow"][];
+            totals: components["schemas"]["ReadmissionTotals"];
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+            /** Uploads */
+            uploads?: components["schemas"]["UploadReadmissionRow"][];
         };
         /**
          * AdminReinstatementRetryBudget
@@ -14216,6 +16031,18 @@ export interface components {
         };
         /** AdminRolloutSupersedeRequest */
         AdminRolloutSupersedeRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminRotateSeasonRequest */
+        AdminRotateSeasonRequest: {
             /**
              * Actor
              * @default admin_api
@@ -15022,6 +16849,8 @@ export interface components {
             miner_coldkey?: string | null;
             /** Miner Hotkey */
             miner_hotkey: string;
+            /** Public Status */
+            public_status?: string | null;
             /** Screening Policy Version */
             screening_policy_version: number;
             /** Screening Reason */
@@ -15138,6 +16967,46 @@ export interface components {
             receipt_id: string;
             /** Worker Hotkey */
             worker_hotkey: string;
+        };
+        /**
+         * AdminSeasonRetestOutcome
+         * @description What a clear queued so the hold cannot expire the agent's scores.
+         *
+         *     Bench v16+ scores count for two dueling seasons. A clear that leaves the
+         *     agent scored with less than a full quorum in the open season queues one
+         *     platform re-test per accepted score on that season (free to the miner).
+         */
+        AdminSeasonRetestOutcome: {
+            /**
+             * Already Current
+             * @default 0
+             */
+            already_current: number;
+            /** Bench Version */
+            bench_version?: number | null;
+            /**
+             * Busy
+             * @default 0
+             */
+            busy: number;
+            /** Catch Up Source */
+            catch_up_source?: "ath_clear" | null;
+            /** Dueling Season Id */
+            dueling_season_id?: string | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Queued
+             * @default 0
+             */
+            queued: number;
+            /**
+             * Replaced
+             * @default 0
+             */
+            replaced: number;
+            /** Skipped */
+            skipped?: string | null;
         };
         /** AdminSetOwnerCooldownRequest */
         AdminSetOwnerCooldownRequest: {
@@ -15444,6 +17313,8 @@ export interface components {
              * @default admin_api
              */
             actor: string;
+            /** Category */
+            category?: ("ditto_fault" | "owner_policy") | null;
             /** Confirmation */
             confirmation: string;
             /** Expected Active Version */
@@ -15494,6 +17365,7 @@ export interface components {
             dominant_failure_code?: string | null;
             /** Earliest Retry After */
             earliest_retry_after: string | null;
+            era_change?: components["schemas"]["PublicEraChange"] | null;
             /** Exhausted Validator Count */
             exhausted_validator_count: number;
             /** Miner Hotkey */
@@ -15517,6 +17389,11 @@ export interface components {
             retry_state: "running" | "retry_available" | "cooling_down" | "exhausted" | "queued";
             /** Score Count */
             score_count: number;
+            /**
+             * Serves Active Bench
+             * @default true
+             */
+            serves_active_bench: boolean;
             /** Silent Expiry Count */
             silent_expiry_count: number;
             /** Snapshot */
@@ -15621,6 +17498,11 @@ export interface components {
              * @default admin_api
              */
             actor: string;
+            /**
+             * Clear Readmission Announcement
+             * @default false
+             */
+            clear_readmission_announcement: boolean;
             /** Competition Fees */
             competition_fees?: {
                 [key: string]: components["schemas"]["CompetitionFeePolicy"];
@@ -15633,6 +17515,8 @@ export interface components {
             expected_revision: number;
             /** Fee Amount Rao */
             fee_amount_rao?: number | null;
+            /** Readmission Announced At */
+            readmission_announced_at?: string | null;
             /** Reason */
             reason: string;
         };
@@ -15643,6 +17527,7 @@ export interface components {
             effective_competition_fees?: components["schemas"]["EffectiveCompetitionFee"][];
             /** History */
             history: components["schemas"]["SubmissionSettingsRevision"][];
+            readmission?: components["schemas"]["ReadmissionActivationState"] | null;
         };
         /** AdminTargetedValidationRetryRequest */
         AdminTargetedValidationRetryRequest: {
@@ -16255,6 +18140,8 @@ export interface components {
             reinstated_at?: string | null;
             /** Score Count */
             score_count: number;
+            /** Terminal Failure Code */
+            terminal_failure_code?: string | null;
             /**
              * Withdrawal Id
              * Format: uuid
@@ -16818,37 +18705,6 @@ export interface components {
             quarantine: components["schemas"]["AdminQuarantineItem"];
         };
         /**
-         * AdvanceScoredPolicyRescreenRequest
-         * @description Fill a bounded top-down scored-rescreen window, or retry one pause.
-         */
-        AdvanceScoredPolicyRescreenRequest: {
-            /** Actor */
-            actor?: string | null;
-            /** Confirmation */
-            confirmation: string;
-            /** Expected Activation Revision */
-            expected_activation_revision: number;
-            /**
-             * Expected Agent Id
-             * Format: uuid
-             */
-            expected_agent_id: string;
-            /**
-             * Max Active Releases
-             * @default 1
-             */
-            max_active_releases: number;
-            /** Reason */
-            reason: string;
-            /**
-             * Retry Paused
-             * @default false
-             */
-            retry_paused: boolean;
-            /** Review Settings Revision */
-            review_settings_revision?: number | null;
-        };
-        /**
          * AgentEmissionEligibility
          * @description The shared eligibility record, bound to one exact artifact.
          *
@@ -16910,6 +18766,20 @@ export interface components {
              * Format: date-time
              */
             window_start: string;
+        };
+        /**
+         * AgentHarnessMemory
+         * @description One agent's rollup and newest runs. ``rollup`` is null with no runs.
+         */
+        AgentHarnessMemory: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            rollup: components["schemas"]["HarnessMemoryRollupView"] | null;
+            /** Runs */
+            runs: components["schemas"]["HarnessMemoryRunView"][];
         };
         /**
          * AgentResponse
@@ -16988,12 +18858,15 @@ export interface components {
             agent_name: string;
             /** Blocking Reasons */
             blocking_reasons: string[];
+            era_change?: components["schemas"]["PublicEraChange"] | null;
             /** Has Versioned Dataset */
             has_versioned_dataset: boolean;
             /** Leaseable */
             leaseable: boolean;
             /** Miner Hotkey */
             miner_hotkey: string;
+            /** Public Status */
+            public_status?: string | null;
             /** Required Screening Policy Version */
             required_screening_policy_version: number;
             /** Requires Screened Image */
@@ -17071,6 +18944,412 @@ export interface components {
             /** Reliability Provider Order */
             reliability_provider_order: string[];
         };
+        /** AirdropAssetPolicy */
+        AirdropAssetPolicy: {
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "alpha" | "ditto_credits";
+            /** Funding Source */
+            funding_source: string | null;
+            /** Live Executor */
+            live_executor: string | null;
+            /** Max Total Amount */
+            max_total_amount: number;
+            /**
+             * Recipient Kind
+             * @enum {string}
+             */
+            recipient_kind: "wallet" | "account";
+            /** Rehearsal Executor */
+            rehearsal_executor: string | null;
+            /** Unit */
+            unit: string;
+        };
+        /** AirdropBalanceCheck */
+        AirdropBalanceCheck: {
+            /** Available */
+            available: number | null;
+            /** Detail */
+            detail: string;
+            /** Required */
+            required: number;
+            /** Source */
+            source: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "sufficient" | "insufficient" | "unavailable";
+        };
+        /** AirdropCapCheck */
+        AirdropCapCheck: {
+            /** Max Recipients */
+            max_recipients: number;
+            /** Max Total Amount */
+            max_total_amount: number;
+            /** Recipient Count */
+            recipient_count: number;
+            /** Total Amount */
+            total_amount: number;
+            /** Within Cap */
+            within_cap: boolean;
+        };
+        /**
+         * AirdropExecuteRequest
+         * @description Execute, guarded by the preview's digest and exact phrase.
+         *
+         *     ``dry_run`` defaults to true: without an explicit ``false`` this returns
+         *     the preview and writes nothing.
+         */
+        AirdropExecuteRequest: {
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "alpha" | "ditto_credits";
+            /** Confirmation */
+            confirmation?: string | null;
+            /** Confirmation Digest */
+            confirmation_digest?: string | null;
+            /**
+             * Dry Run
+             * @default true
+             */
+            dry_run: boolean;
+            /**
+             * Idempotency Key
+             * @description 8-128 chars of [A-Za-z0-9._:-]. Names one run forever: a retry with the same key resumes it and never pays a recipient twice.
+             */
+            idempotency_key: string;
+            /**
+             * Mode
+             * @default rehearsal
+             * @enum {string}
+             */
+            mode: "rehearsal" | "live";
+            /** Reason */
+            reason: string;
+            /** Recipients */
+            recipients: components["schemas"]["AirdropRecipientInput"][];
+        };
+        /** AirdropExecuteResponse */
+        AirdropExecuteResponse: {
+            /** Dry Run */
+            dry_run: boolean;
+            preview: components["schemas"]["AirdropPreview"];
+            run: components["schemas"]["AirdropRunReport"] | null;
+        };
+        /** AirdropPolicy */
+        AirdropPolicy: {
+            /** Assets */
+            assets: components["schemas"]["AirdropAssetPolicy"][];
+            /** Max Recipients */
+            max_recipients: number;
+        };
+        /** AirdropPreview */
+        AirdropPreview: {
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "alpha" | "ditto_credits";
+            balance: components["schemas"]["AirdropBalanceCheck"];
+            /** Blockers */
+            blockers: string[];
+            cap: components["schemas"]["AirdropCapCheck"];
+            /** Confirmation */
+            confirmation: string;
+            /** Confirmation Digest */
+            confirmation_digest: string;
+            /**
+             * Dry Run
+             * @default true
+             * @constant
+             */
+            dry_run: true;
+            /** Executor */
+            executor: string | null;
+            /** Existing Run Id */
+            existing_run_id: string | null;
+            /** Existing Run Matches */
+            existing_run_matches: boolean | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "rehearsal" | "live";
+            /** Ready */
+            ready: boolean;
+            /** Reason */
+            reason: string;
+            /** Recipient Count */
+            recipient_count: number;
+            /** Recipients */
+            recipients: components["schemas"]["AirdropPreviewRecipient"][];
+            /** Refused Count */
+            refused_count: number;
+            /**
+             * Spending Authority
+             * @default none
+             * @constant
+             */
+            spending_authority: "none";
+            /** Total Amount */
+            total_amount: number;
+            /** Unit */
+            unit: string;
+            /**
+             * Warnings
+             * @description Advisories that do not block, such as prior payments.
+             */
+            warnings: string[];
+        };
+        /** AirdropPreviewRecipient */
+        AirdropPreviewRecipient: {
+            /** Address */
+            address: string;
+            /** Amount */
+            amount: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "wallet" | "account";
+            /**
+             * Payee
+             * @description Who is paid: the coldkey, or the linked Ditto account id.
+             */
+            payee: string | null;
+            /** Position */
+            position: number;
+            /**
+             * Prior Amount
+             * @description What this payee already received or is being paid (every status but failed) for this asset and mode under other run keys, to catch a retry made with a new key.
+             */
+            prior_amount: number;
+            /**
+             * Recipient Key
+             * @description Per-recipient idempotency key; null on a refused row.
+             */
+            recipient_key: string | null;
+            /**
+             * Refused
+             * @description Why this row cannot be paid, or null when it can.
+             */
+            refused: string | null;
+        };
+        /** AirdropPreviewRequest */
+        AirdropPreviewRequest: {
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "alpha" | "ditto_credits";
+            /**
+             * Idempotency Key
+             * @description 8-128 chars of [A-Za-z0-9._:-]. Names one run forever: a retry with the same key resumes it and never pays a recipient twice.
+             */
+            idempotency_key: string;
+            /**
+             * Mode
+             * @default rehearsal
+             * @enum {string}
+             */
+            mode: "rehearsal" | "live";
+            /** Reason */
+            reason: string;
+            /** Recipients */
+            recipients: components["schemas"]["AirdropRecipientInput"][];
+        };
+        /** AirdropRecipientInput */
+        AirdropRecipientInput: {
+            /**
+             * Address
+             * @description SS58 coldkey for a wallet, SS58 miner hotkey for an account.
+             */
+            address: string;
+            /**
+             * Amount
+             * @description Integer amount in the asset's base unit (rao or credit).
+             */
+            amount: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "wallet" | "account";
+        };
+        /** AirdropRecipientResult */
+        AirdropRecipientResult: {
+            /** Address */
+            address: string;
+            /** Amount */
+            amount: number;
+            /** Attempted At */
+            attempted_at: string | null;
+            /** Error */
+            error: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "wallet" | "account";
+            /** Payee */
+            payee: string;
+            /** Position */
+            position: number;
+            /** Receipt */
+            receipt: string | null;
+            /** Recipient Key */
+            recipient_key: string;
+            /** Settled At */
+            settled_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "dispatching" | "settled" | "failed" | "uncertain";
+        };
+        /** AirdropRunList */
+        AirdropRunList: {
+            policy: components["schemas"]["AirdropPolicy"];
+            /** Runs */
+            runs: components["schemas"]["AirdropRunSummary"][];
+        };
+        /** AirdropRunReport */
+        AirdropRunReport: {
+            /** Actor */
+            actor: string;
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "alpha" | "ditto_credits";
+            /** Completed At */
+            completed_at: string | null;
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Digest */
+            digest: string;
+            /** Executor */
+            executor: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "rehearsal" | "live";
+            /** Reason */
+            reason: string;
+            /** Recipient Count */
+            recipient_count: number;
+            /** Recipients */
+            recipients: components["schemas"]["AirdropRecipientResult"][];
+            /**
+             * Resumed
+             * @description True when this call found the run already recorded under its key.
+             * @default false
+             */
+            resumed: boolean;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Settled Amount */
+            settled_amount: number;
+            /**
+             * Stale Dispatching
+             * @description Rows claimed over ten minutes ago with no recorded outcome. They are never resent and need reconciliation (SN-490).
+             */
+            stale_dispatching: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "settled" | "needs_attention";
+            /** Total Amount */
+            total_amount: number;
+            /** Unit */
+            unit: string;
+        };
+        /** AirdropRunSummary */
+        AirdropRunSummary: {
+            /** Actor */
+            actor: string;
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "alpha" | "ditto_credits";
+            /** Completed At */
+            completed_at: string | null;
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Digest */
+            digest: string;
+            /** Executor */
+            executor: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "rehearsal" | "live";
+            /** Reason */
+            reason: string;
+            /** Recipient Count */
+            recipient_count: number;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Settled Amount */
+            settled_amount: number;
+            /**
+             * Stale Dispatching
+             * @description Rows claimed over ten minutes ago with no recorded outcome. They are never resent and need reconciliation (SN-490).
+             */
+            stale_dispatching: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "settled" | "needs_attention";
+            /** Total Amount */
+            total_amount: number;
+            /** Unit */
+            unit: string;
+        };
+        /**
+         * AnswerResponse
+         * @description Receipt only. Platform never tells a node whether an answer passed.
+         */
+        AnswerResponse: {
+            /** Received */
+            received: boolean;
+        };
         /** AppliedScreenerReviewSettings */
         AppliedScreenerReviewSettings: {
             /** Checksum */
@@ -17131,7 +19410,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "agent_harness_tarball" | "generator_source_archive";
+            kind: "agent_harness_tarball" | "generator_source_archive" | "model_weights_repo";
             /** Limits */
             limits?: components["schemas"]["ArtifactLimit"][];
             /** Notes */
@@ -17250,7 +19529,7 @@ export interface components {
              * Unit
              * @enum {string}
              */
-            unit: "bytes" | "files" | "lines" | "characters" | "cases" | "version";
+            unit: "bytes" | "files" | "lines" | "characters" | "cases" | "version" | "rank";
             /** Value */
             value: number | string;
         };
@@ -17325,6 +19604,20 @@ export interface components {
              * @description Expected SHA-256 of the tarball, lowercase hex.
              */
             sha256: string;
+        };
+        /**
+         * Assignment
+         * @description One object the node should hold until its lease lapses.
+         */
+        Assignment: {
+            /** Digest */
+            digest: string;
+            /** Lease Expires At */
+            lease_expires_at: number;
+            /** Media Type */
+            media_type: string;
+            /** Size Bytes */
+            size_bytes: number;
         };
         /**
          * AthReviewQueueSlo
@@ -17685,6 +19978,22 @@ export interface components {
              * @default 4
              */
             case_concurrency: number;
+            /**
+             * Memory Factor Floor Bps
+             * @default 9000
+             */
+            memory_factor_floor_bps: number;
+            /**
+             * Memory Factor Free Mib
+             * @default 512
+             */
+            memory_factor_free_mib: number;
+            /**
+             * Memory Factor Posture
+             * @default shadow
+             * @enum {string}
+             */
+            memory_factor_posture: "off" | "shadow" | "enforce";
             /**
              * Relay Delay Fingerprint Max Ms
              * @default 250
@@ -19422,6 +21731,11 @@ export interface components {
              */
             audit_half: string;
             /**
+             * Budget Exhausted
+             * @description True when the run's priced-cost budget was spent before this case started (bench v18+): the case never ran and scores 0. The harness's own spend, never an infrastructure failure. Absent when the case ran, so pre-v18 rows keep their shape.
+             */
+            budget_exhausted?: boolean | null;
+            /**
              * Called
              * @description Tool names the agent called.
              */
@@ -19817,6 +22131,51 @@ export interface components {
              * @default 0
              */
             std_err: number;
+        };
+        /**
+         * ChainRegistrationRead
+         * @description The newest registration map Platform read straight from chain storage.
+         */
+        ChainRegistrationRead: {
+            /** Block */
+            block: number;
+            /** Block Timestamp */
+            block_timestamp: string | null;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Provider */
+            provider: string;
+        };
+        /**
+         * Challenge
+         * @description Prove possession of a byte range, or return it.
+         *
+         *     ``possession`` asks for ``sha256(nonce || bytes[offset:offset+length])``;
+         *     ``retrieval`` asks for the exact bytes. A challenge for a digest the node
+         *     was told to revoke is an ordinary possession challenge: the only correct
+         *     answer is a refusal.
+         */
+        Challenge: {
+            /** Challenge Id */
+            challenge_id: string;
+            /** Deadline At */
+            deadline_at: number;
+            /** Digest */
+            digest: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "possession" | "retrieval";
+            /** Length */
+            length: number;
+            /** Nonce Hex */
+            nonce_hex?: string | null;
+            /** Offset */
+            offset: number;
         };
         /** ClaControl */
         ClaControl: {
@@ -20550,10 +22909,11 @@ export interface components {
              * Competition
              * @enum {string}
              */
-            competition: "memory" | "generator";
+            competition: "memory" | "generator" | "model_context";
             cooldown: components["schemas"]["SubmissionCooldownTerms"];
             deliverable: components["schemas"]["ArtifactContract"];
             fee: components["schemas"]["SubmissionFeeTerms"];
+            readmission?: components["schemas"]["ReadmissionTerms"] | null;
             /** Terms Endpoint */
             terms_endpoint?: string | null;
         };
@@ -21057,7 +23417,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
             composite_policy: components["schemas"]["ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -21102,7 +23462,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
             /** Checksum */
             checksum: string;
             composite: components["schemas"]["ConfirmationCompositeProfile"];
@@ -21513,6 +23873,12 @@ export interface components {
              */
             champion_standing_rank: number;
             /**
+             * Crown Duel Mode
+             * @default disabled
+             * @enum {string}
+             */
+            crown_duel_mode: "disabled" | "fleet_ready";
+            /**
              * Crown Gate Mode
              * @default disabled
              * @enum {string}
@@ -21562,11 +23928,27 @@ export interface components {
              */
             retest_eligibility_z: number;
             /**
+             * Retest Mode
+             * @default continual
+             * @enum {string}
+             */
+            retest_mode: "continual" | "season_duel";
+            /**
              * Rollout Standdown
              * @default capable_validators
              * @enum {string}
              */
             rollout_standdown: "off" | "capable_validators" | "all";
+            /**
+             * Season Duel Rotation Seeds
+             * @default false
+             */
+            season_duel_rotation_seeds: boolean;
+            /**
+             * Season Duel Seeds
+             * @default 3
+             */
+            season_duel_seeds: number;
             /**
              * Statistical Band Mode
              * @default disabled
@@ -21642,6 +24024,11 @@ export interface components {
              */
             busy_skips: number;
             /**
+             * Idle Skips
+             * @default 0
+             */
+            idle_skips: number;
+            /**
              * In Flight
              * @default false
              */
@@ -21686,16 +24073,22 @@ export interface components {
             expires_at: string;
             /**
              * Harness Budget Microusd
-             * @default 5000000
-             * @constant
+             * @default 150000
+             * @enum {integer}
              */
-            harness_budget_microusd: 5000000;
+            harness_budget_microusd: 5000000 | 150000;
+            /**
+             * Instrument
+             * @default conversational-continuity-v1
+             * @enum {string}
+             */
+            instrument: "conversational-continuity-v1" | "conversational-continuity-v2";
             /**
              * Judge Budget Microusd
-             * @default 25000000
-             * @constant
+             * @default 850000
+             * @enum {integer}
              */
-            judge_budget_microusd: 25000000;
+            judge_budget_microusd: 25000000 | 850000;
             /**
              * Lease Token
              * Format: uuid
@@ -21705,6 +24098,17 @@ export interface components {
             screened_image_sha256: string;
             /** Seed */
             seed: string;
+        };
+        /**
+         * ConversationClaimRequest
+         * @description What an enrolled worker can run. A worker that sends no body predates
+         *     v2 and is offered nothing while Platform admits v2.
+         */
+        ConversationClaimRequest: {
+            /** Instruments */
+            instruments: string[];
+            /** Reservation Microusd */
+            reservation_microusd?: number | null;
         };
         /**
          * ConversationLaunch
@@ -21732,16 +24136,22 @@ export interface components {
             expires_at: string;
             /**
              * Harness Budget Microusd
-             * @default 5000000
-             * @constant
+             * @default 150000
+             * @enum {integer}
              */
-            harness_budget_microusd: 5000000;
+            harness_budget_microusd: 5000000 | 150000;
+            /**
+             * Instrument
+             * @default conversational-continuity-v1
+             * @enum {string}
+             */
+            instrument: "conversational-continuity-v1" | "conversational-continuity-v2";
             /**
              * Judge Budget Microusd
-             * @default 25000000
-             * @constant
+             * @default 850000
+             * @enum {integer}
              */
-            judge_budget_microusd: 25000000;
+            judge_budget_microusd: 25000000 | 850000;
             /**
              * Lease Token
              * Format: uuid
@@ -21783,15 +24193,52 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Empty Answers */
+            empty_answers?: number | null;
             /** Error Code */
             error_code: string | null;
+            /** Exchange Count */
+            exchange_count?: number | null;
             /**
              * Expires At
              * Format: date-time
              */
             expires_at: string;
+            /** Failed Turns */
+            failed_turns?: number[] | null;
+            /** Harness Failure Code */
+            harness_failure_code?: string | null;
+            /** Harness Failure Http Status */
+            harness_failure_http_status?: number | null;
+            /** Harness Failure Stage */
+            harness_failure_stage?: string | null;
+            /** Harness Provider Retries */
+            harness_provider_retries?: number | null;
+            /** Harness Requests */
+            harness_requests?: number | null;
+            /** Harness Spent Microusd */
+            harness_spent_microusd?: number | null;
+            /** Instrument */
+            instrument?: string | null;
+            /** Judge Cost Basis */
+            judge_cost_basis?: string | null;
+            /** Judge Input Tokens */
+            judge_input_tokens?: number | null;
+            /** Judge Model */
+            judge_model?: string | null;
+            /** Judge Output Tokens */
+            judge_output_tokens?: number | null;
+            /** Judge Requests */
+            judge_requests?: number | null;
+            /** Judge Spent Microusd */
+            judge_spent_microusd?: number | null;
             /** Proposed Quality Micros */
             proposed_quality_micros: number | null;
+            /**
+             * Repeat Index
+             * @default 0
+             */
+            repeat_index: number;
             /** Report Sha256 */
             report_sha256?: string | null;
             /** Reserved Microusd */
@@ -21801,6 +24248,8 @@ export interface components {
             retry_authorization?: components["schemas"]["ConversationRetryAuthorization"] | null;
             /** Retry Of */
             retry_of?: string | null;
+            /** Spent Is Upper Bound */
+            spent_is_upper_bound?: boolean | null;
             /** Spent Microusd */
             spent_microusd: number | null;
             /**
@@ -21808,6 +24257,8 @@ export interface components {
              * @enum {string}
              */
             status: "leased" | "completed" | "incomplete" | "expired";
+            /** Truncated Answers */
+            truncated_answers?: number | null;
         };
         /** ConversationObservations */
         ConversationObservations: {
@@ -21876,10 +24327,12 @@ export interface components {
             input_tokens: number;
             /**
              * Instrument
-             * @default conversational-continuity-v1
-             * @constant
+             * @default conversational-continuity-v2
+             * @enum {string}
              */
-            instrument: "conversational-continuity-v1";
+            instrument: "conversational-continuity-v1" | "conversational-continuity-v2";
+            /** Judge Cost Basis */
+            judge_cost_basis?: ("billed" | "tariff" | "reservation") | null;
             /**
              * Judge Cost Is Upper Bound
              * @default true
@@ -21889,10 +24342,10 @@ export interface components {
             judge_requests: number;
             /**
              * Model
-             * @default gpt-6-astra
-             * @constant
+             * @default claude-opus-5-5
+             * @enum {string}
              */
-            model: "gpt-6-astra";
+            model: "gpt-6-astra" | "claude-opus-5-5";
             /** Output Tokens */
             output_tokens: number;
             /** Provider Model */
@@ -21901,7 +24354,7 @@ export interface components {
             reserved_microusd: number;
             /**
              * Rubric Sha256
-             * @default 0ad55fd9b1c2df67935db3431b4448212203c9d67ec2d21f23516fd51e024a40
+             * @default 49155f2deed7339bffd5bf2584cd3742a044fba0aef4dafaa64b6e4b2bff02fb
              */
             rubric_sha256: string;
             /** Screened Image Sha256 */
@@ -22098,10 +24551,29 @@ export interface components {
              */
             champion_standing_rank: number;
             /**
+             * Duel Window Pairs
+             * @description Protocol-35 title duel. When present, two bench >= 16 rows are compared on the newest this-many pair-masked (season, seed) pairs of duel_history across dueling seasons, and the challenger dethrones only past the frozen sequential boundary (docs/title-duels.md). Absent is the protocol-34 gate.
+             */
+            duel_window_pairs?: number | null;
+            /**
              * Min Dethrone Confirmations
              * @description Shared-seed confirmations a challenger must hold against the champion before the paired comparison may move the crown.
              */
             min_dethrone_confirmations: number;
+        };
+        /** DaniLabsBindingSnapshot */
+        DaniLabsBindingSnapshot: {
+            /** Deadline */
+            deadline?: string | null;
+            /** Key Present */
+            key_present: boolean;
+            /** Router Competition */
+            router_competition: boolean;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "unset_or_invalid" | "canary" | "fleet";
         };
         /** DatabaseBackupManifest */
         DatabaseBackupManifest: {
@@ -22351,66 +24823,120 @@ export interface components {
             window_seconds: number;
         };
         /**
-         * DeferredSourceReviewSettings
-         * @description Hot-swappable post-score deep-review admission and anomaly policy.
-         *
-         *     This board decides *where* the expensive source review runs -- before
-         *     scoring (automatic, by a screener), after it (as an operator-adjudicated
-         *     hold), or, in ``bypass``, nowhere at all. Three of the four modes review
-         *     every submission somewhere; ``bypass`` is the one that does not, and it is
-         *     the only way to send admitted submissions straight to validator scoring.
-         *
-         *     SCOPE -- source integrity only
-         *     ==============================
-         *
-         *     Nothing on this board touches **copy/plagiarism** enforcement. Copy holds
-         *     (``review_kind: "copy"``) are opened from the duplicate-signal decision at
-         *     score finalization, which never reads this board, runs *before* the deferred
-         *     path, and wins outright: a copy hold moves the agent to
-         *     ``ATH_PENDING_REVIEW``, and the deferred path only acts on agents still in
-         *     ``SCORED``/``LIVE``. Setting ``mode="off"`` or ``mode="bypass"`` disables the
-         *     deferred source-integrity branch and **leaves plagiarism detection fully
-         *     armed**. The same is true of the transform/overfit audit, which has its own
-         *     switch. "No source review" never means "no copy detection".
+         * DispatchFenceBusyPair
+         * @description Polls from one validator that bounced off a fence another poll held.
          */
-        DeferredSourceReviewSettings: {
+        DispatchFenceBusyPair: {
+            /** Busy Declines */
+            busy_declines: number;
             /**
-             * Axis Mad Multiplier
-             * @default 6
+             * By Slot
+             * @description The declined validator's busy count per slot.
              */
-            axis_mad_multiplier: number;
+            by_slot: {
+                [key: string]: number;
+            };
             /**
-             * Composite Mad Multiplier
-             * @default 6
+             * Holder Hotkey
+             * @description Whose job transaction held the fence. Null when the holder was not a tracked job poll (an operator cohort write).
              */
-            composite_mad_multiplier: number;
+            holder_hotkey: string | null;
             /**
-             * Integrity Double Check Mode
-             * @default off
-             * @enum {string}
+             * Same Validator
+             * @description The holder was this validator's own sibling slot: the host polls in synchronized bursts and collides with itself.
              */
-            integrity_double_check_mode: "off" | "observe" | "enforce";
+            same_validator: boolean;
             /**
-             * Min Axis Delta
-             * @default 0.15
+             * Validator Hotkey
+             * @description The validator declined.
              */
-            min_axis_delta: number;
+            validator_hotkey: string;
+        };
+        /**
+         * DispatchFenceHolder
+         * @description The job transaction holding the allocator fence at read time.
+         */
+        DispatchFenceHolder: {
             /**
-             * Min Cohort Size
-             * @default 8
+             * Acquired At
+             * Format: date-time
              */
-            min_cohort_size: number;
+            acquired_at: string;
+            /** Held Seconds */
+            held_seconds: number;
+            /** Slot Id */
+            slot_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * DispatchFenceSnapshot
+         * @description What the job allocator's dispatch fence is busy with.
+         *
+         *     A high `recent_utilization` means the allocator transaction itself is slow.
+         *     A low one with many `recent_busy_same_validator` means a host's slots poll
+         *     in bursts and collide with each other, not with the allocator.
+         */
+        DispatchFenceSnapshot: {
+            /** Busy By Validator */
+            busy_by_validator: components["schemas"]["DispatchFenceBusyPair"][];
+            /** Hold Max Seconds */
+            hold_max_seconds: number | null;
             /**
-             * Min Composite Delta
-             * @default 0.1
+             * Hold Outcomes
+             * @description How the recent holds ended: issued, no_candidate, a decline gate, or error_<Exception>.
              */
-            min_composite_delta: number;
+            hold_outcomes: {
+                [key: string]: number;
+            };
+            /** Hold P50 Seconds */
+            hold_p50_seconds: number | null;
+            /** Hold P95 Seconds */
+            hold_p95_seconds: number | null;
+            holder: components["schemas"]["DispatchFenceHolder"] | null;
+            /** Holds By Validator */
+            holds_by_validator: components["schemas"]["DispatchFenceValidatorHolds"][];
             /**
-             * Mode
-             * @default off
-             * @enum {string}
+             * Observed At
+             * Format: date-time
              */
-            mode: "off" | "observe" | "enforce" | "bypass";
+            observed_at: string;
+            /** Recent Busy Declines */
+            recent_busy_declines: number;
+            /** Recent Busy Same Validator */
+            recent_busy_same_validator: number;
+            /** Recent Busy Untracked Holder */
+            recent_busy_untracked_holder: number;
+            /** Recent Held Seconds */
+            recent_held_seconds: number;
+            /** Recent Holds */
+            recent_holds: number;
+            /**
+             * Recent Utilization
+             * @description Share of the window (or of the time since tracking started, if shorter) the fence was held.
+             */
+            recent_utilization: number;
+            /** Recent Window Seconds */
+            recent_window_seconds: number;
+            /**
+             * Tracking Since
+             * Format: date-time
+             */
+            tracking_since: string;
+        };
+        /**
+         * DispatchFenceValidatorHolds
+         * @description One validator's fence holds in the recent window.
+         */
+        DispatchFenceValidatorHolds: {
+            /** Held Seconds */
+            held_seconds: number;
+            /** Holds */
+            holds: number;
+            /** Max Hold Seconds */
+            max_hold_seconds: number;
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /**
          * DockerHealth
@@ -22579,7 +25105,12 @@ export interface components {
          * @description The ``details.dueling`` block of a bench >= 16 score report.
          *
          *     ``owner_key`` is the scored agent's owner; the reported composite is
-         *     :meth:`self_composite` (the agent's own columns masked).
+         *     :meth:`self_composite` (the agent's own columns masked). ``column_weight``
+         *     is the bench version's column weight; ``datagen_qualifier`` is present from
+         *     bench 19 only (``min(1, datagen_raw / 0.8)``) and omitted from the dump
+         *     below it, so a bench 16..18 block round-trips unchanged. The block carries
+         *     no bench version: a consumer that knows the row's version checks it with
+         *     :meth:`check_bench_version`.
          */
         DuelingReport: {
             /** Column Weight */
@@ -22590,6 +25121,8 @@ export interface components {
             composite_stderr: number;
             /** Datagen Gate */
             datagen_gate: number;
+            /** Datagen Qualifier */
+            datagen_qualifier?: number | null;
             /** Datagen Raw */
             datagen_raw: number;
             /** Owner Key */
@@ -22600,6 +25133,246 @@ export interface components {
             season_index: number;
             /** Slice Sha256 */
             slice_sha256: string;
+        };
+        /**
+         * DuelingRotationSpend
+         * @description Rotation re-test leases started and their metered inference cost.
+         */
+        DuelingRotationSpend: {
+            /**
+             * Cost Usd
+             * @default 0
+             */
+            cost_usd: number;
+            /**
+             * Priced Runs
+             * @default 0
+             */
+            priced_runs: number;
+            /**
+             * Runs
+             * @default 0
+             */
+            runs: number;
+        };
+        /**
+         * DuelingRotationSpendView
+         * @description Opening rotation and catch-up spend side by side, so the catch-up's
+         *     incremental cost reads directly.
+         */
+        DuelingRotationSpendView: {
+            last_24h_catchup: components["schemas"]["DuelingRotationSpend"];
+            last_24h_opening: components["schemas"]["DuelingRotationSpend"];
+            /** Seasons */
+            seasons?: components["schemas"]["DuelingSeasonSpendView"][];
+        };
+        /**
+         * DuelingRotationView
+         * @description The season-open mini-rollout and how far its re-scoring has got.
+         */
+        DuelingRotationView: {
+            /**
+             * Already Current
+             * @default 0
+             */
+            already_current: number;
+            /**
+             * Busy
+             * @default 0
+             */
+            busy: number;
+            /**
+             * Closed
+             * @default 0
+             */
+            closed: number;
+            /** Cohort */
+            cohort?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Cohort Quorum In Season
+             * @default 0
+             */
+            cohort_quorum_in_season: number;
+            /**
+             * Cohort Scores In Season
+             * @default 0
+             */
+            cohort_scores_in_season: number;
+            /**
+             * Confirmation Scores In Season
+             * @default 0
+             */
+            confirmation_scores_in_season: number;
+            /** Error */
+            error?: string | null;
+            /**
+             * Pending
+             * @default 0
+             */
+            pending: number;
+            /**
+             * Queued
+             * @default 0
+             */
+            queued: number;
+            /** Queued At */
+            queued_at?: string | null;
+            /**
+             * Running
+             * @default 0
+             */
+            running: number;
+            /**
+             * Scores In Season
+             * @default 0
+             */
+            scores_in_season: number;
+            /** Source */
+            source?: string | null;
+            /**
+             * Standing
+             * @enum {string}
+             */
+            standing: "current" | "provisional" | "expired" | "not_opened";
+        };
+        /**
+         * DuelingSeasonCommitmentJobRequest
+         * @description Ask Platform whether this validator should publish a season commitment.
+         */
+        DuelingSeasonCommitmentJobRequest: {
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /**
+             * Signature
+             * @default 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+             */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * DuelingSeasonCommitmentJobResponse
+         * @description One committed dueling season this validator is elected to publish.
+         *
+         *     ``payload`` is exactly ``season_commitment_payload(season_index,
+         *     commitment)``; a validator refuses any other value. ``claim_expires_at`` is
+         *     when Platform stops waiting for this validator's report.
+         */
+        DuelingSeasonCommitmentJobResponse: {
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Claim Expires At
+             * Format: date-time
+             */
+            claim_expires_at: string;
+            /** Commitment */
+            commitment: string;
+            /** Payload */
+            payload: string;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
+            /** Shadow */
+            shadow: boolean;
+        };
+        /**
+         * DuelingSeasonCommitmentReportRequest
+         * @description Signed outcome of one elected season-commitment publication.
+         *
+         *     Same semantics as :class:`GeneratorRoundCommitmentReportRequest`:
+         *     ``confirmed`` names the block the validator read its own commitment back
+         *     at; ``failed`` means the submission or the read-back did not succeed.
+         */
+        DuelingSeasonCommitmentReportRequest: {
+            /** Block Number */
+            block_number?: number | null;
+            /** Commitment */
+            commitment: string;
+            /** Detail */
+            detail?: string | null;
+            /** Extrinsic Hash */
+            extrinsic_hash?: string | null;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "failed";
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
+            /**
+             * Signature
+             * @default 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+             */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** DuelingSeasonCommitmentReportResponse */
+        DuelingSeasonCommitmentReportResponse: {
+            /** Accepted */
+            accepted: boolean;
+            /**
+             * Confirmations
+             * @default 0
+             */
+            confirmations: number;
+            /**
+             * Duplicate
+             * @default false
+             */
+            duplicate: boolean;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /**
+             * Target
+             * @default 0
+             */
+            target: number;
+        };
+        /** DuelingSeasonSpendView */
+        DuelingSeasonSpendView: {
+            catchup: components["schemas"]["DuelingRotationSpend"];
+            opening: components["schemas"]["DuelingRotationSpend"];
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
         };
         /** DuelingSeasonView */
         DuelingSeasonView: {
@@ -22623,6 +25396,24 @@ export interface components {
             }[] | null;
             /** Commitment */
             commitment: string;
+            /** Commitment Block */
+            commitment_block?: number | null;
+            /** Commitment Error */
+            commitment_error?: string | null;
+            /** Commitment Extrinsic Hash */
+            commitment_extrinsic_hash?: string | null;
+            /**
+             * Commitment Publication
+             * @default disabled
+             * @enum {string}
+             */
+            commitment_publication: "pending" | "published" | "failed" | "disabled";
+            /** Commitment Publications */
+            commitment_publications?: components["schemas"]["GeneratorRoundCommitmentPublicationView"][];
+            /** Commitment Published At */
+            commitment_published_at?: string | null;
+            /** Commitment Publishers Elected */
+            commitment_publishers_elected?: string[];
             /**
              * Committed At
              * Format: date-time
@@ -22647,6 +25438,7 @@ export interface components {
             reveal_at_epoch: number | null;
             /** Revealed At */
             revealed_at: string | null;
+            rotation?: components["schemas"]["DuelingRotationView"] | null;
             /** Rotation Actor */
             rotation_actor: string | null;
             /** Rotation Immediate */
@@ -22802,10 +25594,28 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Last Retry Actor */
+            last_retry_actor?: string | null;
+            /** Last Retry At */
+            last_retry_at?: string | null;
+            /** Last Retry Reason */
+            last_retry_reason?: string | null;
             /** Latency Seconds */
             latency_seconds: number | null;
             /** Ready At */
             ready_at: string | null;
+            /**
+             * Retries
+             * @default 0
+             */
+            retries: number;
+            /** Retry Refusal */
+            retry_refusal?: string | null;
+            /**
+             * Retryable
+             * @default false
+             */
+            retryable: boolean;
             /** Run Seed */
             run_seed: string;
             /** Scorer Version */
@@ -22886,6 +25696,361 @@ export interface components {
         /** DuelingWorkResponse */
         DuelingWorkResponse: {
             work?: components["schemas"]["DuelingWork"] | null;
+        };
+        /** EdgeLaneOverview */
+        EdgeLaneOverview: {
+            /** Active Object Bytes */
+            active_object_bytes: number;
+            /** Current Window Index */
+            current_window_index: number;
+            /** Held Assignments */
+            held_assignments: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /** Nodes Active */
+            nodes_active: number;
+            /** Nodes Live */
+            nodes_live: number;
+            /** Nodes Retired */
+            nodes_retired: number;
+            /** Nodes Suspended */
+            nodes_suspended: number;
+            /** Objects Active */
+            objects_active: number;
+            /** Objects Revoked */
+            objects_revoked: number;
+            /** Open Assignments */
+            open_assignments: number;
+            /**
+             * Payouts
+             * @default none
+             * @constant
+             */
+            payouts: "none";
+            /** Recent Windows */
+            recent_windows: components["schemas"]["EdgeWindowRow"][];
+            /** Settings Revision */
+            settings_revision: number;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * EdgeLaneSettings
+         * @description The complete lane policy (one revision = the whole object).
+         *
+         *     Mirrors :class:`ditto_edge_protocol.settings.LaneSettings` field for field,
+         *     and validates by building one, so Platform can never accept a policy the
+         *     shared lane rules would refuse. ``max_total_object_bytes`` is
+         *     Platform-only: it bounds what operators may ingest into object storage.
+         */
+        EdgeLaneSettings: {
+            /**
+             * Availability Floor
+             * @default 0.8
+             */
+            availability_floor: number;
+            /**
+             * Challenge Deadline Seconds
+             * @default 60
+             */
+            challenge_deadline_seconds: number;
+            /**
+             * Challenges Per Window
+             * @default 6
+             */
+            challenges_per_window: number;
+            /**
+             * Lease Seconds
+             * @default 900
+             */
+            lease_seconds: number;
+            /**
+             * Max New Assignments Per Poll
+             * @default 16
+             */
+            max_new_assignments_per_poll: number;
+            /**
+             * Max Nodes
+             * @default 100
+             */
+            max_nodes: number;
+            /**
+             * Max Object Bytes
+             * @default 8388608
+             */
+            max_object_bytes: number;
+            /**
+             * Max Total Object Bytes
+             * @default 1073741824
+             */
+            max_total_object_bytes: number;
+            /**
+             * Min Challenges
+             * @default 3
+             */
+            min_challenges: number;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /**
+             * Node Quota Cap Bytes
+             * @default 2147483648
+             */
+            node_quota_cap_bytes: number;
+            /**
+             * Poll Interval Seconds
+             * @default 30
+             */
+            poll_interval_seconds: number;
+            /**
+             * Replicas
+             * @default 3
+             */
+            replicas: number;
+            /**
+             * Retrieval Share
+             * @default 0.2
+             */
+            retrieval_share: number;
+            /**
+             * Revoked Lookback Seconds
+             * @default 86400
+             */
+            revoked_lookback_seconds: number;
+            /**
+             * Revoked Share
+             * @default 0.15
+             */
+            revoked_share: number;
+            /**
+             * Window Seconds
+             * @default 3600
+             */
+            window_seconds: number;
+        };
+        /** EdgeLaneSettingsRevision */
+        EdgeLaneSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["EdgeLaneSettings"];
+        };
+        /** EdgeLedgerResponse */
+        EdgeLedgerResponse: {
+            /** Closed Now */
+            closed_now: number[];
+            /** Rows */
+            rows: components["schemas"]["EdgeLedgerRow"][];
+        };
+        /** EdgeLedgerRow */
+        EdgeLedgerRow: {
+            /** Availability */
+            availability: number;
+            /**
+             * Computed At
+             * Format: date-time
+             */
+            computed_at: string;
+            /** Eligible */
+            eligible: boolean;
+            /** Failed */
+            failed: number;
+            /** Held Gib Hours */
+            held_gib_hours: number;
+            /** Hypothetical Share */
+            hypothetical_share: number;
+            /** Missed */
+            missed: number;
+            /** Node Id */
+            node_id: string;
+            /** Operator */
+            operator: string;
+            /** Passed */
+            passed: number;
+            /** Reasons */
+            reasons: string[];
+            /** Refilled */
+            refilled: number;
+            /** Refused */
+            refused: number;
+            /** Revocation Checks */
+            revocation_checks: number;
+            /** Revocation Violations */
+            revocation_violations: number;
+            /** Scheduled */
+            scheduled: number;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Verified Units */
+            verified_units: number;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+            /** Window Index */
+            window_index: number;
+        };
+        /** EdgeNodeRow */
+        EdgeNodeRow: {
+            /** Client Name */
+            client_name: string;
+            /** Client Version */
+            client_version: string;
+            /**
+             * Enrolled At
+             * Format: date-time
+             */
+            enrolled_at: string;
+            /** Held Bytes */
+            held_bytes: number;
+            /** Held Objects */
+            held_objects: number;
+            /** Hotkey Ss58 */
+            hotkey_ss58: string | null;
+            /** Last Poll At */
+            last_poll_at: string | null;
+            latest_window: components["schemas"]["EdgeLedgerRow"] | null;
+            /** Node Id */
+            node_id: string;
+            /** Operator */
+            operator: string;
+            /** Platform */
+            platform: {
+                [key: string]: unknown;
+            };
+            /** Quota Bytes */
+            quota_bytes: number;
+            /** Status */
+            status: string;
+        };
+        /** EdgeNodesResponse */
+        EdgeNodesResponse: {
+            /** Nodes */
+            nodes: components["schemas"]["EdgeNodeRow"][];
+        };
+        /**
+         * EdgeObjectIngestRequest
+         * @description Add one public object to the lane. Admin only, shadow test data.
+         */
+        EdgeObjectIngestRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Data B64 */
+            data_b64: string;
+            /** Media Type */
+            media_type: string;
+            /** Source */
+            source: string;
+        };
+        /** EdgeObjectIngestResponse */
+        EdgeObjectIngestResponse: {
+            /** Created */
+            created: boolean;
+            /** Digest */
+            digest: string;
+            /** Media Type */
+            media_type: string;
+            /** Size Bytes */
+            size_bytes: number;
+        };
+        /** EdgeObjectRevokeRequest */
+        EdgeObjectRevokeRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Reason */
+            reason: string;
+        };
+        /** EdgeObjectRevokeResponse */
+        EdgeObjectRevokeResponse: {
+            /** Digest */
+            digest: string;
+            /** Newly Revoked */
+            newly_revoked: boolean;
+            /** Revoke Reason */
+            revoke_reason: string;
+            /**
+             * Revoked At
+             * Format: date-time
+             */
+            revoked_at: string;
+        };
+        /** EdgeObjectRow */
+        EdgeObjectRow: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Digest */
+            digest: string;
+            /** Holders */
+            holders: number;
+            /** Media Type */
+            media_type: string;
+            /** Revoke Reason */
+            revoke_reason: string | null;
+            /** Revoked At */
+            revoked_at: string | null;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Source */
+            source: string;
+        };
+        /** EdgeObjectsResponse */
+        EdgeObjectsResponse: {
+            /** Objects */
+            objects: components["schemas"]["EdgeObjectRow"][];
+        };
+        /** EdgeWindowRow */
+        EdgeWindowRow: {
+            /**
+             * Closed At
+             * Format: date-time
+             */
+            closed_at: string;
+            /** Eligible Nodes */
+            eligible_nodes: number;
+            /** Node Count */
+            node_count: number;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Verified Units */
+            verified_units: number;
+            /** Window Index */
+            window_index: number;
         };
         /** EffectiveBurnSettings */
         EffectiveBurnSettings: {
@@ -23000,6 +26165,21 @@ export interface components {
             /** Checksum */
             checksum: string;
             /**
+             * Crown Duel Active
+             * @default false
+             */
+            crown_duel_active: boolean;
+            /**
+             * Crown Duel Fleet Ready
+             * @default false
+             */
+            crown_duel_fleet_ready: boolean;
+            /**
+             * Crown Duel Required Protocol
+             * @default 35
+             */
+            crown_duel_required_protocol: number;
+            /**
              * Crown Gate Active
              * @default false
              */
@@ -23095,6 +26275,29 @@ export interface components {
              * @default false
              */
             tie_weighting_fleet_ready: boolean;
+        };
+        /** EffectiveEdgeLaneSettings */
+        EffectiveEdgeLaneSettings: {
+            /** Checksum */
+            checksum: string;
+            /** Max Age Seconds */
+            max_age_seconds: number;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["EdgeLaneSettings"];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "revision" | "default";
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
         };
         /**
          * EffectiveEfficiencyBonusSettings
@@ -23212,6 +26415,24 @@ export interface components {
             settings: components["schemas"]["InferenceConcurrencySettings"];
             /** Source */
             source: string;
+        };
+        /** EffectiveModelContextSettings */
+        EffectiveModelContextSettings: {
+            /** Checksum */
+            checksum: string;
+            /** Revision */
+            revision: number;
+            settings: components["schemas"]["ModelContextSettings"];
+            /**
+             * Settings Valid
+             * @default true
+             */
+            settings_valid: boolean;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "revision" | "default";
         };
         /**
          * EffectiveQueuePolicySettings
@@ -23809,6 +27030,19 @@ export interface components {
              */
             version: 2;
         };
+        /** EnrollResponse */
+        EnrollResponse: {
+            limits: components["schemas"]["LaneLimits"];
+            /** Node Id */
+            node_id: string;
+            /** Server Time */
+            server_time: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "suspended" | "retired";
+        };
         /**
          * EvalPricingResponse
          * @description Returned by ``GET /upload/eval-pricing``.
@@ -23823,6 +27057,13 @@ export interface components {
         Exchange: {
             /** Assistant */
             assistant: string;
+            /**
+             * Assistant Truncated
+             * @default false
+             */
+            assistant_truncated: boolean;
+            /** Failure */
+            failure?: ("harness_run_timeout" | "harness_run_failed" | "harness_seed_timeout" | "harness_seed_failed") | null;
             /** Session */
             session: number;
             /** Turn Id */
@@ -23859,6 +27100,8 @@ export interface components {
              * @description Reporter's own failure code or diagnostic message behind ``reason``. Advisory: drives no policy, unsigned, and optional.
              */
             failure_detail?: string | null;
+            /** @description The run's harness memory (peak, time-weighted P50/P95). Unsigned operator telemetry; drives no policy and is never published (SN-500). */
+            harness_memory?: components["schemas"]["HarnessMemoryTelemetry"] | null;
             /**
              * Nonce
              * Format: uuid
@@ -24292,6 +27535,57 @@ export interface components {
             status: "discriminating" | "trivial" | "unsolved" | "duplicate";
         };
         /**
+         * GeneratorChallengerQueueEntry
+         * @description One never-scored qualified miner generator in the challenger queue.
+         *
+         *     The public default generator is never in the queue: it only fills counted
+         *     columns no miner generator can fill.
+         */
+        GeneratorChallengerQueueEntry: {
+            /** Column Id */
+            column_id?: string | null;
+            /** Family */
+            family: string;
+            /** Family Measured */
+            family_measured: number;
+            /** Family Position */
+            family_position: number;
+            /** Family Size */
+            family_size: number;
+            /** File Count */
+            file_count: number;
+            /** In Flight Round */
+            in_flight_round?: number | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Module */
+            module: string;
+            /** Novelty */
+            novelty?: number | null;
+            /** Owner Key */
+            owner_key: string;
+            /** Prescreen Index */
+            prescreen_index?: number | null;
+            /** Prescreen Score */
+            prescreen_score?: number | null;
+            /** Qualified At */
+            qualified_at: string | null;
+            /** Queue Position */
+            queue_position: number | null;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "challenger" | "counted" | "in_flight" | "owner_has_column" | "waiting";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /**
          * GeneratorCompetitionSettings
          * @description The complete generator competition policy (one revision = whole object).
          *
@@ -24339,6 +27633,52 @@ export interface components {
              */
             epochs_per_round: number;
             /**
+             * Frontier Audit Cases
+             * @default 3
+             */
+            frontier_audit_cases: number;
+            /**
+             * Frontier Audit Grace Hours
+             * @default 24
+             */
+            frontier_audit_grace_hours: number;
+            /** Frontier Escalation Agent Id */
+            frontier_escalation_agent_id?: string | null;
+            /**
+             * Frontier Escalation Max Cases
+             * @default 8
+             */
+            frontier_escalation_max_cases: number;
+            /**
+             * Frontier Escalation Max Cases Per Column
+             * @default 4
+             */
+            frontier_escalation_max_cases_per_column: number;
+            /**
+             * Frontier Escalation Max Failed Fraction
+             * @default 0.25
+             */
+            frontier_escalation_max_failed_fraction: number;
+            /**
+             * Frontier Escalation Solve Threshold
+             * @default 1
+             */
+            frontier_escalation_solve_threshold: number;
+            /** Frontier Oracle Agent Id */
+            frontier_oracle_agent_id?: string | null;
+            /** Frontier Oracle Model */
+            frontier_oracle_model?: "z-ai/glm-5.3-flash" | null;
+            /**
+             * Frontier Oracle Timeout Hours
+             * @default 12
+             */
+            frontier_oracle_timeout_hours: number;
+            /**
+             * Frontier Weight
+             * @default 1
+             */
+            frontier_weight: number;
+            /**
              * Lease Ttl Seconds
              * @default 7200
              */
@@ -24380,6 +27720,26 @@ export interface components {
              */
             panel_size: number;
             /**
+             * Prescreen Cases
+             * @default 16
+             */
+            prescreen_cases: number;
+            /**
+             * Prescreen Columns
+             * @default 4
+             */
+            prescreen_columns: number;
+            /**
+             * Prescreen Enabled
+             * @default false
+             */
+            prescreen_enabled: boolean;
+            /**
+             * Prescreen Panel Size
+             * @default 3
+             */
+            prescreen_panel_size: number;
+            /**
              * Privacy Window Rounds
              * @default 6
              */
@@ -24397,10 +27757,35 @@ export interface components {
              */
             rounds_per_season: number;
             /**
+             * Season Catchup Budget Usd
+             * @default 10
+             */
+            season_catchup_budget_usd: number;
+            /**
+             * Season Catchup Enabled
+             * @default true
+             */
+            season_catchup_enabled: boolean;
+            /**
+             * Season Catchup Max Agents
+             * @default 5
+             */
+            season_catchup_max_agents: number;
+            /**
+             * Season Catchup Run Cost Usd
+             * @default 0.5
+             */
+            season_catchup_run_cost_usd: number;
+            /**
              * Seeds Per Run
              * @default 2
              */
             seeds_per_run: number;
+            /**
+             * Skip Unchanged Rounds
+             * @default true
+             */
+            skip_unchanged_rounds: boolean;
             /**
              * Solve Threshold
              * @default 0.5
@@ -24426,6 +27811,305 @@ export interface components {
              * @default 7
              */
             window_days: number;
+        };
+        /** GeneratorFrontierAuditDetail */
+        GeneratorFrontierAuditDetail: {
+            audit: components["schemas"]["GeneratorFrontierAuditView"];
+            /** Cases */
+            cases: components["schemas"]["GeneratorFrontierCaseView"][];
+        };
+        /** GeneratorFrontierAuditListResponse */
+        GeneratorFrontierAuditListResponse: {
+            /** Audits */
+            audits: components["schemas"]["GeneratorFrontierAuditView"][];
+            /** Count */
+            count: number;
+            /** Has More */
+            has_more: boolean;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Returned */
+            returned: number;
+        };
+        /**
+         * GeneratorFrontierAuditRuling
+         * @description An operator's ruling on one frontier audit sample.
+         */
+        GeneratorFrontierAuditRuling: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Invalid Case Ids */
+            invalid_case_ids?: string[];
+            /** Reason */
+            reason: string;
+            /** Valid */
+            valid: boolean;
+        };
+        /**
+         * GeneratorFrontierAuditView
+         * @description One column's sampled operator audit of its oracle-attested cases.
+         */
+        GeneratorFrontierAuditView: {
+            /** Actor */
+            actor?: string | null;
+            /** Attested Cases */
+            attested_cases: number;
+            /** Audit Deadline */
+            audit_deadline?: string | null;
+            /** Column Id */
+            column_id: string;
+            /** Invalid Case Ids */
+            invalid_case_ids?: string[];
+            /** Miner Hotkey */
+            miner_hotkey: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Round Index */
+            round_index: number;
+            /** Ruled At */
+            ruled_at?: string | null;
+            /** Sample */
+            sample: string[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "passed" | "failed";
+            /** Submission Id */
+            submission_id: string | null;
+        };
+        /**
+         * GeneratorFrontierCaseView
+         * @description One audited case as the generator wrote it, with its evidence, the
+         *     panel's and the oracle's outcomes, and the user's visible memory.
+         */
+        GeneratorFrontierCaseView: {
+            /** Accept Any */
+            accept_any?: string[];
+            /** Answer Items */
+            answer_items?: string[];
+            /** Answer Kind */
+            answer_kind?: string | null;
+            /** Case Id */
+            case_id: string;
+            /** Distractor Answers */
+            distractor_answers?: string[];
+            /** Dump Guard */
+            dump_guard?: string[];
+            /** Evidence */
+            evidence: components["schemas"]["GeneratorFrontierMemoryPair"][];
+            /** Expected Answer */
+            expected_answer: string;
+            /** Forbidden Answer */
+            forbidden_answer?: string | null;
+            /** Memory Matches */
+            memory_matches: components["schemas"]["GeneratorFrontierMemoryPair"][];
+            /**
+             * Memory Truncated
+             * @default false
+             */
+            memory_truncated: boolean;
+            /** Oracle Fault */
+            oracle_fault?: boolean | null;
+            /** Oracle Score */
+            oracle_score?: number | null;
+            /** Panel Mean Score */
+            panel_mean_score?: number | null;
+            /** Panel Size */
+            panel_size?: number | null;
+            /** Panel Solvers */
+            panel_solvers?: number | null;
+            /** Question */
+            question: string;
+            /**
+             * Run After Wave
+             * @default 0
+             */
+            run_after_wave: number;
+            /**
+             * User Id
+             * @default
+             */
+            user_id: string;
+            /** Visible Pairs */
+            visible_pairs: number;
+        };
+        /**
+         * GeneratorFrontierEscalationView
+         * @description The escalation tier's re-check of the cases the oracle failed
+         *     (``frontier_escalation_agent_id``).
+         */
+        GeneratorFrontierEscalationView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Attempts */
+            attempts: number;
+            /** Deadline */
+            deadline?: string | null;
+            /** Oracle Failed */
+            oracle_failed: number;
+            /** Outcome */
+            outcome: string;
+            /** Passed */
+            passed?: string[];
+            /** Recorded At */
+            recorded_at?: string | null;
+            /** Results */
+            results?: {
+                [key: string]: unknown;
+            }[];
+            /** Run Id */
+            run_id?: string | null;
+            /** Selected */
+            selected: string[];
+            /** Skipped Columns */
+            skipped_columns?: {
+                [key: string]: string;
+            };
+            /** Solve Threshold */
+            solve_threshold: number;
+            /** Validator Hotkey */
+            validator_hotkey?: string | null;
+        };
+        /** GeneratorFrontierMemoryPair */
+        GeneratorFrontierMemoryPair: {
+            /** Pair Id */
+            pair_id: string;
+            /** Prompt */
+            prompt: string;
+            /** Response */
+            response: string;
+            /** Timestamp */
+            timestamp: string;
+            /** Wave */
+            wave: number;
+        };
+        /**
+         * GeneratorFrontierOracleView
+         * @description The oracle run's outcome on a round's frontier candidates.
+         */
+        GeneratorFrontierOracleView: {
+            /** Failed */
+            failed: number;
+            /** Faulted */
+            faulted: number;
+            /** Passed */
+            passed: number;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Results */
+            results: {
+                [key: string]: unknown;
+            }[];
+            /** Run Id */
+            run_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * GeneratorFrontierRerunRequest
+         * @description Re-run a held or zero-credit settled round's frontier oracle through the
+         *     normal oracle -> audit -> settle lifecycle.
+         */
+        GeneratorFrontierRerunRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * GeneratorFrontierSettleRequest
+         * @description Settle a round's frontier lane now, applying what has survived.
+         */
+        GeneratorFrontierSettleRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * GeneratorFrontierView
+         * @description A scored round's frontier lane: candidates, oracle, audits, outcome.
+         */
+        GeneratorFrontierView: {
+            /** Applied */
+            applied?: {
+                [key: string]: string[];
+            } | null;
+            /** Attested */
+            attested: {
+                [key: string]: string[];
+            };
+            /** Audit Cases */
+            audit_cases: number;
+            /** Audits */
+            audits: components["schemas"]["GeneratorFrontierAuditView"][];
+            /** Base Column Scores */
+            base_column_scores?: {
+                [key: string]: number;
+            } | null;
+            /** Candidates */
+            candidates: string[];
+            /** Column Scores */
+            column_scores: {
+                [key: string]: number;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            escalation?: components["schemas"]["GeneratorFrontierEscalationView"] | null;
+            /** Frontier Weight */
+            frontier_weight: number;
+            /** Hold Reason */
+            hold_reason?: string | null;
+            oracle: components["schemas"]["GeneratorFrontierOracleView"] | null;
+            /**
+             * Oracle Agent Id
+             * Format: uuid
+             */
+            oracle_agent_id: string;
+            /** Oracle Attempts */
+            oracle_attempts: number;
+            /** Oracle Deadline */
+            oracle_deadline: string | null;
+            /** Oracle Model */
+            oracle_model?: string | null;
+            /** Round Index */
+            round_index: number;
+            /** Settle Reason */
+            settle_reason?: string | null;
+            /** Settled At */
+            settled_at?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "oracle_pending" | "audit_pending" | "settled";
         };
         /** GeneratorLedgerEntry */
         GeneratorLedgerEntry: {
@@ -24502,6 +28186,52 @@ export interface components {
             champion: boolean;
             /** Owner Key */
             owner_key: string;
+        };
+        /**
+         * GeneratorPrescreenView
+         * @description One pre-screen batch (``ditto.api_server.generator_prescreens``): a few
+         *     never-scored generators on a small panel, never paid, only ordering the
+         *     challenger queue.
+         */
+        GeneratorPrescreenView: {
+            /** Bench Version */
+            bench_version: number;
+            /** Cases Per Column */
+            cases_per_column: number;
+            /** Closed At */
+            closed_at?: string | null;
+            /** Columns */
+            columns: components["schemas"]["GeneratorRoundColumnSlot"][];
+            /** Dataset Sha256 */
+            dataset_sha256?: string | null;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Lease Attempts
+             * @default 0
+             */
+            lease_attempts: number;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Panel */
+            panel: components["schemas"]["GeneratorRoundPanelSlot"][];
+            /** Prescreen Index */
+            prescreen_index: number;
+            /** Settings Revision */
+            settings_revision: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "generating" | "running" | "scoring" | "scored" | "void";
+            /** Void Reason */
+            void_reason?: string | null;
         };
         /**
          * GeneratorProbeEpochView
@@ -24621,7 +28351,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "committed" | "generating" | "running" | "scoring" | "scored" | "void";
+            status: "committed" | "generating" | "running" | "scoring" | "scored" | "skipped" | "void";
         };
         /** GeneratorRoundAttemptView */
         GeneratorRoundAttemptView: {
@@ -24728,6 +28458,10 @@ export interface components {
             discriminating?: number | null;
             /** Duplicate */
             duplicate?: number | null;
+            /** Frontier */
+            frontier?: number | null;
+            /** Frontier State */
+            frontier_state?: string | null;
             /** Generated */
             generated?: boolean | null;
             /** Grading Bench Version */
@@ -25016,10 +28750,12 @@ export interface components {
         };
         /**
          * GeneratorRoundJobResponse
-         * @description One leased round panel run.
+         * @description One leased round panel run, or one frontier oracle run.
          *
          *     ``seed`` is a positive placeholder the scorer requires on ``/v2/score``;
-         *     the round dataset, not the seed, determines every case.
+         *     the round dataset, not the seed, determines every case. An oracle run
+         *     (``dataset_mode`` ``generator-frontier-oracle-v1``) answers only
+         *     ``oracle_case_ids``, and its results must name exactly those cases.
          */
         GeneratorRoundJobResponse: {
             /**
@@ -25038,9 +28774,9 @@ export interface components {
             /**
              * Dataset Mode
              * @default generator-round-v1
-             * @constant
+             * @enum {string}
              */
-            dataset_mode: "generator-round-v1";
+            dataset_mode: "generator-round-v1" | "generator-frontier-oracle-v1";
             /** Dataset Sha256 */
             dataset_sha256: string;
             /**
@@ -25053,6 +28789,8 @@ export interface components {
             miner_hotkey: string;
             /** Minimum Screening Policy Version */
             minimum_screening_policy_version?: number | null;
+            /** Oracle Case Ids */
+            oracle_case_ids?: string[] | null;
             /**
              * Requires Screened Image
              * @default true
@@ -25082,7 +28820,15 @@ export interface components {
         GeneratorRoundLoopResponse: {
             /** Available */
             available: boolean;
+            last_skipped_round?: components["schemas"]["GeneratorRoundSkipView"] | null;
             schedule: components["schemas"]["GeneratorRoundSchedule"] | null;
+            /** Skip Unchanged Rounds */
+            skip_unchanged_rounds?: boolean | null;
+            /**
+             * Skipped Rounds
+             * @default 0
+             */
+            skipped_rounds: number;
             status: components["schemas"]["GeneratorRoundLoopStatus"] | null;
         };
         /**
@@ -25188,6 +28934,8 @@ export interface components {
             last_error?: string | null;
             /** Mode */
             mode: string;
+            /** Next Epoch Block */
+            next_epoch_block?: number | null;
             /** Next Round Epoch */
             next_round_epoch?: number | null;
             /** Observed At */
@@ -25254,6 +29002,20 @@ export interface components {
             scorer_version: string;
         };
         /**
+         * GeneratorRoundSkipView
+         * @description One round skipped because it would only repeat the last scored round.
+         */
+        GeneratorRoundSkipView: {
+            /** Carried From Round */
+            carried_from_round: number | null;
+            /** Reason */
+            reason: string;
+            /** Round Index */
+            round_index: number;
+            /** Skipped At */
+            skipped_at: string | null;
+        };
+        /**
          * GeneratorRoundSkippedAgent
          * @description A ranked owner passed over when the panel froze: its agent could not
          *     run, so the next eligible owner took the seat.
@@ -25315,6 +29077,8 @@ export interface components {
              * @default 0
              */
             answered_results: number;
+            /** Carried From Round */
+            carried_from_round?: number | null;
             /** Closed At */
             closed_at?: string | null;
             /**
@@ -25376,11 +29140,13 @@ export interface components {
             secret_hex?: string | null;
             /** Seed */
             seed?: string | null;
+            /** Skip Reason */
+            skip_reason?: string | null;
             /**
              * Status
              * @enum {string}
              */
-            status: "committed" | "generating" | "running" | "scoring" | "scored" | "void";
+            status: "committed" | "generating" | "running" | "scoring" | "scored" | "skipped" | "void";
             /** Void Reason */
             void_reason?: string | null;
         };
@@ -25609,6 +29375,60 @@ export interface components {
              */
             settings_valid: boolean;
         };
+        /** GeneratorSourceReleaseView */
+        GeneratorSourceReleaseView: {
+            /** Bench Version */
+            bench_version: number;
+            /** Disclosure */
+            disclosure: string;
+            /** Embargo Hours */
+            embargo_hours: number;
+            /** First Closed At */
+            first_closed_at: string | null;
+            /**
+             * First Season Id
+             * Format: uuid
+             */
+            first_season_id: string;
+            /** Last Revealed At */
+            last_revealed_at: string | null;
+            /**
+             * Last Season Id
+             * Format: uuid
+             */
+            last_season_id: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Key */
+            owner_key: string;
+            /** Release At */
+            release_at: string | null;
+            /** Released At */
+            released_at: string | null;
+            /** Scorer Version */
+            scorer_version: string | null;
+            /** Seasons */
+            seasons: number;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "waiting_close" | "waiting_reveal" | "embargoed" | "due" | "withheld" | "released";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Tree Sha256 */
+            tree_sha256: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** GeneratorSubmissionListResponse */
         GeneratorSubmissionListResponse: {
             /** Submissions */
@@ -25629,6 +29449,11 @@ export interface components {
             discriminating: number;
             /** Duplicate */
             duplicate: number;
+            /**
+             * Frontier
+             * @default 0
+             */
+            frontier: number;
             /** Grading Bench Version */
             grading_bench_version?: number | null;
             /** Panel Size */
@@ -26018,6 +29843,156 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * HarnessMemoryList
+         * @description Agents with observations, heaviest P95 first.
+         */
+        HarnessMemoryList: {
+            /** Agents */
+            agents: components["schemas"]["HarnessMemoryRollupView"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /**
+             * Has More
+             * @description More agents follow; page with offset.
+             * @default false
+             */
+            has_more: boolean;
+            /**
+             * Note
+             * @description Coverage reminder: observations start with the release that added them; no earlier run has memory data.
+             */
+            note: string;
+            /**
+             * Offset
+             * @default 0
+             */
+            offset: number;
+        };
+        /**
+         * HarnessMemoryRollupView
+         * @description One agent version's memory across every observed run.
+         */
+        HarnessMemoryRollupView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Failed Runs */
+            failed_runs: number;
+            /**
+             * Last Recorded At
+             * Format: date-time
+             */
+            last_recorded_at: string;
+            /**
+             * Limit Bytes Max
+             * @description Largest harness cap any observed run ran under.
+             */
+            limit_bytes_max?: number | null;
+            /** Miner Hotkey */
+            miner_hotkey?: string | null;
+            /**
+             * Oom Runs
+             * @description Failed runs whose detail is `harness_oom` (charged) or `harness_oom_grace` (the notice period's no-fault form).
+             */
+            oom_runs: number;
+            /**
+             * P50 Bytes Median
+             * @description Median of the per-run time-weighted P50s.
+             */
+            p50_bytes_median: number;
+            /**
+             * P95 Bytes Max
+             * @description Highest per-run time-weighted P95.
+             */
+            p95_bytes_max: number;
+            /**
+             * P95 Bytes Median
+             * @description Median of the per-run time-weighted P95s.
+             */
+            p95_bytes_median: number;
+            /**
+             * Peak Bytes Max
+             * @description Highest per-run `memory.peak`.
+             */
+            peak_bytes_max: number;
+            /** Runs */
+            runs: number;
+            /** Scored Runs */
+            scored_runs: number;
+        };
+        /**
+         * HarnessMemoryRunView
+         * @description One lease's observation.
+         */
+        HarnessMemoryRunView: {
+            /** Bench Version */
+            bench_version: number;
+            /** Failure Detail */
+            failure_detail?: string | null;
+            /** Failure Reason */
+            failure_reason?: string | null;
+            /**
+             * Lease Issued At
+             * Format: date-time
+             */
+            lease_issued_at: string;
+            /** Limit Bytes */
+            limit_bytes?: number | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "scored" | "failed";
+            /** P50 Bytes */
+            p50_bytes: number;
+            /** P95 Bytes */
+            p95_bytes: number;
+            /** Peak Bytes */
+            peak_bytes: number;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Sampled Seconds */
+            sampled_seconds: number;
+            /** Samples */
+            samples: number;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * HarnessMemoryTelemetry
+         * @description One scored or failed run's sandboxed-harness memory (SN-500).
+         *
+         *     Measured by the scorer from the harness cgroup: ``peak_bytes`` is the
+         *     kernel's ``memory.peak`` high-water mark; ``p50_bytes`` and ``p95_bytes``
+         *     are time-weighted percentiles of ``memory.current`` at 1 MiB resolution.
+         *     Unsigned telemetry: it drives no policy. Each agent's own measured runs
+         *     are published on its public pipeline (``harness_memory``).
+         */
+        HarnessMemoryTelemetry: {
+            /** Limit Bytes */
+            limit_bytes?: number | null;
+            /** P50 Bytes */
+            p50_bytes: number;
+            /** P95 Bytes */
+            p95_bytes: number;
+            /** Peak Bytes */
+            peak_bytes: number;
+            /** Sampled Seconds */
+            sampled_seconds: number;
+            /** Samples */
+            samples: number;
+        };
         /** HarnessUsage */
         HarnessUsage: {
             /**
@@ -26033,6 +30008,11 @@ export interface components {
              * @constant
              */
             profile: "conversation-openrouter-oss20b-pplx768-v1";
+            /**
+             * Provider Retries
+             * @default 0
+             */
+            provider_retries: number;
             /** Requests */
             requests: number;
             /** Spent Microusd */
@@ -26233,6 +30213,11 @@ export interface components {
              * @default 25000000
              */
             chat_token_budget: number;
+            /**
+             * Danilabs Percent
+             * @default 0
+             */
+            danilabs_percent: number;
             decision_lane?: components["schemas"]["DecisionLaneSettings"];
             /**
              * Embedding Global Concurrency
@@ -27055,6 +31040,12 @@ export interface components {
             expected_composite: number;
             /** Expected Run Id */
             expected_run_id: string;
+            /**
+             * Sample Kind
+             * @default auto
+             * @enum {string}
+             */
+            sample_kind: "auto" | "continual_retest" | "canonical";
             /** Seed */
             seed: string;
             /** Validator Hotkey */
@@ -27084,7 +31075,7 @@ export interface components {
              * Disposition
              * @enum {string}
              */
-            disposition: "ready" | "applied" | "already_voided" | "not_found" | "stale_guard" | "insufficient_evidence";
+            disposition: "ready" | "applied" | "already_voided" | "already_queued" | "already_replaced" | "not_found" | "stale_guard" | "insufficient_evidence" | "retest_busy" | "retest_closed" | "not_retestable" | "auto_cap_reached";
             /**
              * Evidence
              * @default {}
@@ -27094,6 +31085,14 @@ export interface components {
             };
             /** Evidence Digest */
             evidence_digest?: string | null;
+            /** Retest Request Id */
+            retest_request_id?: string | null;
+            /**
+             * Sample Kind
+             * @default continual_retest
+             * @enum {string}
+             */
+            sample_kind: "continual_retest" | "canonical";
             /** Seed */
             seed: string;
             /** Validator Hotkey */
@@ -27325,12 +31324,22 @@ export interface components {
              */
             seed?: number | null;
             /**
+             * Seed Anchor Agent Id
+             * @description Season scope: champion the season's family is anchored on.
+             */
+            seed_anchor_agent_id?: string | null;
+            /**
+             * Seed Index
+             * @description Season scope: replicate index of the shared seed.
+             */
+            seed_index?: number | null;
+            /**
              * Seed Scope
-             * @description Inputs used by the on-chain seed derivation. Validator scope additionally binds the ticket holder's hotkey.
+             * @description Inputs used by the on-chain seed derivation. Validator scope additionally binds the ticket holder's hotkey. Season scope (protocol 35, title duels) is a dueling season's shared seed: ``crn_seed([seed_anchor_agent_id], bench_version, seed_index, dataset_seed_block_hash)``. Issued only to protocol-35 validators.
              * @default agent
              * @enum {string}
              */
-            seed_scope: "agent" | "validator";
+            seed_scope: "agent" | "validator" | "season";
             /**
              * Sha256
              * @description SHA-256 of the uploaded tarball, lowercase hex.
@@ -27692,6 +31701,27 @@ export interface components {
             target_node_id: string;
         };
         /**
+         * LaneLimits
+         * @description The slice of lane settings a node needs to behave.
+         */
+        LaneLimits: {
+            /** Challenge Deadline Seconds */
+            challenge_deadline_seconds: number;
+            /** Lease Seconds */
+            lease_seconds: number;
+            /** Max Object Bytes */
+            max_object_bytes: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /** Node Quota Cap Bytes */
+            node_quota_cap_bytes: number;
+            /** Poll Interval Seconds */
+            poll_interval_seconds: number;
+        };
+        /**
          * LedgerEntry
          * @description One miner's best eligible score, returned by ``GET /scoring/scores``.
          *
@@ -27745,6 +31775,11 @@ export interface components {
              * @description Activation marker for validator protocol v14+. When present, the weight fold uses the arithmetic mean of the three signed quorum scores plus one aggregate per completed continual cohort wave. Older validators ignore this additive field.
              */
             continual_aggregate_method?: "mean_after_quorum" | null;
+            /**
+             * Duel History
+             * @description Protocol-35 title duel evidence: this agent's bench >= 16 confirmation records from the newest dueling seasons, each with its signed details.dueling. Served only with crown_gate.duel_window_pairs; the dethrone test pairs them by (season, seed). Levels never read it.
+             */
+            duel_history?: components["schemas"]["ConfirmationScoreRecord"][] | null;
             /** @description Bench >= 16 only: the authoritative score's signed ``details.dueling`` aggregates (owner key, datagen half, slice columns). A v16 row without them never ranks or pays. */
             dueling?: components["schemas"]["DuelingReport"] | null;
             /**
@@ -28188,7 +32223,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
             /** Case Set Digest */
             case_set_digest: string;
             /** Dataset Revision */
@@ -28677,6 +32712,50 @@ export interface components {
             priced_submissions: number;
         };
         /**
+         * MinerFeeReadmissionLane
+         * @description The readmission lane's share of miner fee revenue (SN-485).
+         *
+         *     Each proof is counted once: an admitted readmission here, a credited one
+         *     in the upload lane (its banked credit row holds the proof).
+         */
+        MinerFeeReadmissionLane: {
+            /**
+             * Admitted
+             * @default 0
+             */
+            admitted: number;
+            /**
+             * Admitted Amount Rao
+             * @default 0
+             */
+            admitted_amount_rao: number;
+            /**
+             * Credit Funded
+             * @default 0
+             */
+            credit_funded: number;
+            /**
+             * Credited
+             * @default 0
+             */
+            credited: number;
+            /**
+             * Credited Amount Rao
+             * @default 0
+             */
+            credited_amount_rao: number;
+            /**
+             * Upload Readmission Amount Rao
+             * @default 0
+             */
+            upload_readmission_amount_rao: number;
+            /**
+             * Upload Readmissions
+             * @default 0
+             */
+            upload_readmissions: number;
+        };
+        /**
          * MinerGateNote
          * @description One gate note on one case, with the id a dispute can cite.
          */
@@ -28777,6 +32856,8 @@ export interface components {
             inference_cost?: components["schemas"]["InferenceCostSummary"] | null;
             /** Posture */
             posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            priced_cost?: components["schemas"]["PricedCostSummary"] | null;
+            run_budget?: components["schemas"]["RunBudgetSummary"] | null;
             /** Run Id */
             run_id: string;
             twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
@@ -29006,6 +33087,711 @@ export interface components {
             session_id: string;
         };
         /**
+         * ModelContextBase
+         * @description One allowlisted base model (contract section 2.1).
+         */
+        ModelContextBase: {
+            /** Architectures */
+            architectures: string[];
+            /** Base Id */
+            base_id: string;
+            /** Hf Repo */
+            hf_repo: string;
+            /** Lora Target Modules */
+            lora_target_modules: string[];
+            /** Parameters */
+            parameters: number;
+            /** Revision */
+            revision: string;
+        };
+        /** ModelContextBoardEntry */
+        ModelContextBoardEntry: {
+            /** Base Id */
+            base_id: string;
+            /** Commitment Block */
+            commitment_block: number;
+            /** Components */
+            components?: {
+                [key: string]: number | null;
+            };
+            /** Eligible */
+            eligible: boolean;
+            /** Floor */
+            floor?: number | null;
+            /** Hf Repo */
+            hf_repo: string;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "lora" | "full";
+            /** Model Url */
+            model_url: string;
+            /** Rank */
+            rank: number;
+            /** Revision */
+            revision: string;
+            /** Score */
+            score: number;
+            /** Season */
+            season: number;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** ModelContextBoardResponse */
+        ModelContextBoardResponse: {
+            /** Base Floors */
+            base_floors: {
+                [key: string]: number;
+            };
+            /** Count */
+            count: number;
+            /** Entries */
+            entries: components["schemas"]["ModelContextBoardEntry"][];
+            /** Floor Margin */
+            floor_margin: number;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Season */
+            season: number | null;
+        };
+        /** ModelContextFaultAck */
+        ModelContextFaultAck: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "released" | "abandoned" | "failed";
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Run Status
+             * @enum {string}
+             */
+            run_status: "queued" | "leased" | "scored" | "failed" | "abandoned";
+            /** Submission Status */
+            submission_status?: ("screening" | "queued" | "scored" | "rejected" | "superseded") | null;
+        };
+        /** ModelContextFaultRequest */
+        ModelContextFaultRequest: {
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * Error Kind
+             * @enum {string}
+             */
+            error_kind: "infra" | "nondeterministic" | "model_load" | "invalid_model";
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Scorer Id */
+            scorer_id: string;
+            /** Scorer Version */
+            scorer_version: string;
+        };
+        /** ModelContextLedgerEntry */
+        ModelContextLedgerEntry: {
+            /** Commitment Block */
+            commitment_block: number;
+            /** Eligible */
+            eligible: boolean;
+            /** Hotkey */
+            hotkey: string;
+            /** Score */
+            score: number;
+            /** Season */
+            season: number;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /**
+         * ModelContextLedgerResponse
+         * @description The model_context ledger validators fold (in shadow, folded to nothing).
+         *
+         *     Entries are the current season's scored active submissions, best first:
+         *     score descending, then commitment block ascending, then submission id.
+         *     Empty while ``mode`` is ``off`` or no season is open.
+         */
+        ModelContextLedgerResponse: {
+            /**
+             * Count
+             * @default 0
+             */
+            count: number;
+            /**
+             * Cpm Score Version
+             * @default 1
+             */
+            cpm_score_version: number;
+            /** Entries */
+            entries?: components["schemas"]["ModelContextLedgerEntry"][];
+            /** Generated At */
+            generated_at?: string | null;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Rank Shares */
+            rank_shares?: number[];
+            /** Season */
+            season?: number | null;
+        };
+        /** ModelContextOperatorActionView */
+        ModelContextOperatorActionView: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "rotate_season" | "rescore" | "reject";
+            /** Actor */
+            actor: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Detail */
+            detail: {
+                [key: string]: unknown;
+            } | null;
+            /** Id */
+            id: number;
+            /** Reason */
+            reason: string;
+            /** Subject */
+            subject: string;
+        };
+        /**
+         * ModelContextReferenceWork
+         * @description The season's base floors and the reference runs behind them.
+         */
+        ModelContextReferenceWork: {
+            /** Base Floors */
+            base_floors: {
+                [key: string]: number;
+            };
+            /** Bases */
+            bases: components["schemas"]["ModelContextBase"][];
+            /** Bench Version */
+            bench_version: number | null;
+            /** Floor Margin */
+            floor_margin: number;
+            /** Pending */
+            pending: string[];
+            /** Season */
+            season: number | null;
+            /** Seeds */
+            seeds: number[];
+        };
+        /** ModelContextResultRequest */
+        ModelContextResultRequest: {
+            components: components["schemas"]["ScoreComponents"];
+            /** Cpm Score Version */
+            cpm_score_version: number;
+            /** Gpu Sku */
+            gpu_sku: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /** Per Seed */
+            per_seed: components["schemas"]["SeedResult"][];
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score: number;
+            /** Scorer Id */
+            scorer_id: string;
+            /** Scorer Version */
+            scorer_version: string;
+        };
+        /** ModelContextResultResponse */
+        ModelContextResultResponse: {
+            /** Base Floor */
+            base_floor?: number | null;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "leased" | "scored" | "failed" | "abandoned";
+            /** Submission Status */
+            submission_status?: ("screening" | "queued" | "scored" | "rejected" | "superseded") | null;
+        };
+        /** ModelContextRunSummary */
+        ModelContextRunSummary: {
+            /** Cpm Score Version */
+            cpm_score_version: number;
+            /** Fault */
+            fault: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score: number | null;
+            /** Season */
+            season: number;
+            /** Started At */
+            started_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "leased" | "scored" | "failed" | "abandoned";
+        };
+        /** ModelContextScorerHeartbeatView */
+        ModelContextScorerHeartbeatView: {
+            /**
+             * First Seen At
+             * Format: date-time
+             */
+            first_seen_at: string;
+            /** Gpu Sku */
+            gpu_sku: string | null;
+            /** Last Poll */
+            last_poll: string;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /** Scorer Id */
+            scorer_id: string;
+            /** Scorer Version */
+            scorer_version: string | null;
+        };
+        /** ModelContextSeasonListResponse */
+        ModelContextSeasonListResponse: {
+            /** Current */
+            current: number | null;
+            /** Seasons */
+            seasons: components["schemas"]["ModelContextSeasonView"][];
+        };
+        /** ModelContextSeasonView */
+        ModelContextSeasonView: {
+            /** Base Floors */
+            base_floors: {
+                [key: string]: number;
+            };
+            /** Bench Version */
+            bench_version: number;
+            /** Closed At */
+            closed_at: string | null;
+            /**
+             * Closes At
+             * Format: date-time
+             */
+            closes_at: string;
+            /** Cpm Score Version */
+            cpm_score_version: number;
+            /** Gpu Sku */
+            gpu_sku: string | null;
+            /** Open Block */
+            open_block: number;
+            /** Open Block Hash */
+            open_block_hash: string;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Season */
+            season: number;
+            /** Seed Strings */
+            seed_strings?: string[];
+            /** Seeds */
+            seeds: number[];
+        };
+        /**
+         * ModelContextSettings
+         * @description The whole model_context policy (one revision = the whole object).
+         */
+        ModelContextSettings: {
+            /** Base Allowlist */
+            base_allowlist?: components["schemas"]["ModelContextBase"][];
+            /**
+             * Bench Version
+             * @default 18
+             */
+            bench_version: number;
+            /**
+             * Budget Tokens
+             * @default 2048
+             */
+            budget_tokens: number;
+            /**
+             * Floor Margin
+             * @default 0.01
+             */
+            floor_margin: number;
+            /**
+             * Lease Ttl Seconds
+             * @default 14400
+             */
+            lease_ttl_seconds: number;
+            /**
+             * Max Attempts
+             * @default 3
+             */
+            max_attempts: number;
+            /**
+             * Max Lora Rank
+             * @default 64
+             */
+            max_lora_rank: number;
+            /**
+             * Max Total Bytes
+             * @default 6442450944
+             */
+            max_total_bytes: number;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Rank Shares */
+            rank_shares?: number[];
+            /**
+             * Season Days
+             * @default 7
+             */
+            season_days: number;
+            /**
+             * Tool K
+             * @default 8
+             */
+            tool_k: number;
+            /**
+             * Upload Cooldown Seconds
+             * @default 21600
+             */
+            upload_cooldown_seconds: number;
+            /**
+             * Upload Fee Required
+             * @default false
+             */
+            upload_fee_required: boolean;
+        };
+        /** ModelContextSettingsRevision */
+        ModelContextSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["ModelContextSettings"];
+            /**
+             * Settings Valid
+             * @default true
+             */
+            settings_valid: boolean;
+        };
+        /** ModelContextSubmissionListResponse */
+        ModelContextSubmissionListResponse: {
+            /** Submissions */
+            submissions: components["schemas"]["ModelContextSubmissionSummary"][];
+        };
+        /**
+         * ModelContextSubmissionRequest
+         * @description A signed submission.
+         *
+         *     ``manifest`` is the exact UTF-8 text of ``cpm-manifest.json`` at
+         *     ``revision``: ``manifest_sha256`` is computed over these bytes, so a
+         *     client sends the file as it is, not a re-serialized object.
+         */
+        ModelContextSubmissionRequest: {
+            /** Hf Repo */
+            hf_repo: string;
+            /** Hotkey */
+            hotkey: string;
+            /** Manifest */
+            manifest: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /** Revision */
+            revision: string;
+            /** Signature */
+            signature: string;
+            /** Ts */
+            ts: number;
+        };
+        /** ModelContextSubmissionResponse */
+        ModelContextSubmissionResponse: {
+            /** Base Id */
+            base_id: string;
+            /** Commitment Block */
+            commitment_block: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "lora" | "full";
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "screening" | "queued" | "scored" | "rejected" | "superseded";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /**
+         * ModelContextSubmissionSummary
+         * @description Public view of one submission (weights are public by contract).
+         */
+        ModelContextSubmissionSummary: {
+            /** Base Id */
+            base_id: string;
+            /** Commitment Block */
+            commitment_block: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Hf Repo */
+            hf_repo: string;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "lora" | "full";
+            latest_run?: components["schemas"]["ModelContextRunSummary"] | null;
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            /** Mirror Repo */
+            mirror_repo: string | null;
+            /** Model Url */
+            model_url: string;
+            /** Reject Reason */
+            reject_reason: string | null;
+            /** Revision */
+            revision: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "screening" | "queued" | "scored" | "rejected" | "superseded";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Weights Sha256 */
+            weights_sha256: string | null;
+        };
+        /**
+         * ModelContextUploadTerms
+         * @description What a submission must satisfy right now (read before committing).
+         *
+         *     ``blockers`` lists every refusal Platform can decide without the
+         *     manifest: lane closed, banned hotkey, cooldown, a fee path that is not
+         *     available.
+         */
+        ModelContextUploadTerms: {
+            /** Accepting */
+            accepting: boolean;
+            /** Bases */
+            bases: components["schemas"]["ModelContextBase"][];
+            /** Blockers */
+            blockers?: string[];
+            /**
+             * Commitment Format
+             * @default dcpm1:{manifest_sha256}
+             */
+            commitment_format: string;
+            /**
+             * Competition
+             * @default model_context
+             * @constant
+             */
+            competition: "model_context";
+            /**
+             * Cpm Score Version
+             * @default 1
+             */
+            cpm_score_version: number;
+            /** Licenses */
+            licenses?: string[];
+            /**
+             * Manifest Filename
+             * @default cpm-manifest.json
+             */
+            manifest_filename: string;
+            /**
+             * Manifest Schema
+             * @default ditto-cpm-manifest-v1
+             */
+            manifest_schema: string;
+            /** Max Lora Rank */
+            max_lora_rank: number;
+            /** Max Total Bytes */
+            max_total_bytes: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Payment Required */
+            payment_required: boolean;
+            /** Retry At */
+            retry_at?: string | null;
+            /**
+             * Signature Payload
+             * @default ditto-model-context-v1:{hotkey}:{hf_repo}:{revision}:{manifest_sha256}:{ts}:{nonce}
+             */
+            signature_payload: string;
+            /** Upload Cooldown Seconds */
+            upload_cooldown_seconds: number;
+        };
+        /**
+         * ModelContextWorkItem
+         * @description One leased run: a submission, or (``kind=reference``) an unmodified
+         *     base whose score becomes the season floor for that base.
+         */
+        ModelContextWorkItem: {
+            base: components["schemas"]["ModelContextBase"];
+            /** Bench Version */
+            bench_version: number;
+            /** Cpm Score Version */
+            cpm_score_version: number;
+            /** Generate Seeds */
+            generate_seeds: number[];
+            /** Gpu Sku */
+            gpu_sku: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "submission" | "reference";
+            /**
+             * Lease Expires At
+             * Format: date-time
+             */
+            lease_expires_at: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Season */
+            season: number;
+            /** Seeds */
+            seeds: number[];
+            settings: components["schemas"]["ModelContextWorkSettings"];
+            submission: components["schemas"]["ModelContextWorkSubmission"] | null;
+        };
+        /** ModelContextWorkSettings */
+        ModelContextWorkSettings: {
+            /** Budget Tokens */
+            budget_tokens: number;
+            /** Floor Margin */
+            floor_margin: number;
+            /** Tool K */
+            tool_k: number;
+        };
+        /** ModelContextWorkSubmission */
+        ModelContextWorkSubmission: {
+            /** Base Id */
+            base_id: string;
+            /** Hf Repo */
+            hf_repo: string;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "lora" | "full";
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            /** Revision */
+            revision: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Weights Sha256 */
+            weights_sha256: string | null;
+        };
+        /**
          * NameClaimEndorsementView
          * @description One recorded endorsement, minus the raw signature.
          */
@@ -29182,6 +33968,35 @@ export interface components {
              */
             nonce: string;
             proof: components["schemas"]["NameClaimProof"];
+        };
+        /**
+         * NodeStatusResponse
+         * @description What the node's own status screen shows (Desktop, CLI).
+         */
+        NodeStatusResponse: {
+            current_window?: components["schemas"]["WindowSummary"] | null;
+            /** Held Bytes */
+            held_bytes: number;
+            /** Held Objects */
+            held_objects: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /** Node Id */
+            node_id: string;
+            /**
+             * Payouts
+             * @default none
+             * @constant
+             */
+            payouts: "none";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "suspended" | "retired";
         };
         /**
          * ObservedComponentIdentity
@@ -29425,6 +34240,12 @@ export interface components {
             run_id: string;
             /** Validator Hotkey */
             validator_hotkey: string;
+            /** Void Detail */
+            void_detail?: string | null;
+            /** Void Disposition */
+            void_disposition?: string | null;
+            /** Void Request Id */
+            void_request_id?: string | null;
         };
         /** OutageSweepError */
         OutageSweepError: {
@@ -29976,6 +34797,60 @@ export interface components {
              */
             scope: "plagiarism-screening-only";
         };
+        /** PaidReadmissionRow */
+        PaidReadmissionRow: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Amount Rao */
+            amount_rao: number;
+            /** Bench Version */
+            bench_version: number;
+            /** Block Hash */
+            block_hash: string;
+            /** Credit Audit */
+            credit_audit?: {
+                [key: string]: unknown;
+            } | null;
+            /** Credit Expires At */
+            credit_expires_at?: string | null;
+            /** Credit Spent */
+            credit_spent?: boolean | null;
+            /** Extrinsic Index */
+            extrinsic_index: number;
+            /**
+             * Funding
+             * @enum {string}
+             */
+            funding: "fresh" | "credit";
+            /** Miner Coldkey */
+            miner_coldkey: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "admitted" | "credited";
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Refusal Reason */
+            refusal_reason?: string | null;
+            /** Rollout Id */
+            rollout_id?: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** PanelCaseResult */
         PanelCaseResult: {
             /** Case Id */
@@ -30016,6 +34891,27 @@ export interface components {
             reveal_round: number;
             /** Validator Hotkey */
             validator_hotkey: string;
+        };
+        /** PollResponse */
+        PollResponse: {
+            /** Assignments */
+            assignments: components["schemas"]["Assignment"][];
+            /** Challenges */
+            challenges: components["schemas"]["Challenge"][];
+            limits: components["schemas"]["LaneLimits"];
+            /** Next Poll Seconds */
+            next_poll_seconds: number;
+            /** Revocations */
+            revocations: string[];
+            /** Server Time */
+            server_time: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "suspended" | "retired";
+            /** Window Index */
+            window_index: number;
         };
         /**
          * PrevGenCarryoverSettings
@@ -30081,6 +34977,129 @@ export interface components {
              * @default true
              */
             require_desired_era_drained: boolean;
+        };
+        /**
+         * PricedCostSummary
+         * @description Run-level bench v16+ priced inference cost (``details.priced_cost``).
+         *
+         *     The scorer prices the WHOLE run (datagen half and generator slice) at the
+         *     contract's locked public per-token rates, normalises it to a 350-case run
+         *     and maps it to ``factor_bps`` through the published curve
+         *     (``ditto_screening_protocol.priced_cost``). ``applied_factor_bps`` is what
+         *     the composite carries (inside ``details.dueling.datagen_gate``): the factor
+         *     under ``enforce``, 10000 under ``shadow`` or without complete accounting.
+         *     ``rule_consistent`` is Platform's own recomputation of the factor from the
+         *     reported token counts; ``False`` means the scorer's block disagrees with
+         *     the published rule.
+         */
+        PricedCostSummary: {
+            /**
+             * Applied
+             * @default false
+             */
+            applied: boolean;
+            /** Applied Factor Bps */
+            applied_factor_bps?: number | null;
+            /**
+             * Cases
+             * @default 0
+             */
+            cases: number;
+            /**
+             * Completion Cost Nano Usd
+             * @default 0
+             */
+            completion_cost_nano_usd: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /** Contract Id */
+            contract_id?: string | null;
+            /**
+             * Cost Nano Usd
+             * @default 0
+             */
+            cost_nano_usd: number;
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /**
+             * Decision Calls
+             * @default 0
+             */
+            decision_calls: number;
+            /**
+             * Decision Cost Nano Usd
+             * @default 0
+             */
+            decision_cost_nano_usd: number;
+            /**
+             * Decision Input Tokens
+             * @default 0
+             */
+            decision_input_tokens: number;
+            /**
+             * Decision Output Tokens
+             * @default 0
+             */
+            decision_output_tokens: number;
+            /**
+             * Embedding Cost Nano Usd
+             * @default 0
+             */
+            embedding_cost_nano_usd: number;
+            /**
+             * Embedding Tokens
+             * @default 0
+             */
+            embedding_tokens: number;
+            /** Factor Bps */
+            factor_bps?: number | null;
+            /** Floor Bps */
+            floor_bps?: number | null;
+            /**
+             * Normalization Cases
+             * @default 0
+             */
+            normalization_cases: number;
+            /**
+             * Normalized Cost Nano Usd
+             * @default 0
+             */
+            normalized_cost_nano_usd: number;
+            /** Normalized Cost Usd */
+            normalized_cost_usd?: number | null;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            /**
+             * Prompt Cost Nano Usd
+             * @default 0
+             */
+            prompt_cost_nano_usd: number;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Ratio Bps
+             * @default 0
+             */
+            ratio_bps: number;
+            /**
+             * Reference Nano Usd
+             * @default 0
+             */
+            reference_nano_usd: number;
+            /** Result */
+            result?: ("priced" | "insufficient_evidence") | null;
+            /** Rule Consistent */
+            rule_consistent?: boolean | null;
+            /** Source */
+            source?: string | null;
+            /** Window */
+            window?: string | null;
         };
         /** PrivateDatasetRequest */
         PrivateDatasetRequest: {
@@ -30447,6 +35466,8 @@ export interface components {
              * @description Version of the matched submission; null when it is legacy.
              */
             duplicate_version?: number | null;
+            /** @description Set only on an 'era_changed' row: the submission belongs to an earlier bench version the active one does not admit, so it does not compete there, with the miner's next step. Derived at read time from the queue's own admission predicate, so it clears by itself when the row is admitted. */
+            era_change?: components["schemas"]["PublicEraChange"] | null;
             /**
              * Hold Failure Code
              * @description The agreed machine cause behind an 'operator_hold', when every remaining slot reports the same one, drawn from the same allowlist as a validation attempt's failure_code. Null is the ordinary case and means the cause is mixed, unnamed or stale: the row is unattributed rather than proven to be a fleet failure, and must not be described as one.
@@ -30490,6 +35511,12 @@ export interface components {
              * @description Mean composite across accepted validator scores so far.
              */
             provisional_composite?: number | null;
+            /**
+             * Queue Withdrawn
+             * @description Whether a 'not_queued' row is out of the active benchmark's validator queue because an operator withdrew it, rather than because it predates the active era. Its accepted scores stay on file; no validator scores it while the withdrawal stands. Always false on every other status.
+             * @default false
+             */
+            queue_withdrawn: boolean;
             /**
              * Quorum
              * @description Independent validator scores required to finalize.
@@ -30550,6 +35577,8 @@ export interface components {
              * @description Independent validator scores recorded so far.
              */
             score_count: number;
+            /** @description Why this waiting submission is not being scored right now when the hold is not the validator fleet's, e.g. no dueling season is open. Null when nothing beyond the queue holds it, and on every row that is not waiting for validators. */
+            scoring_wait?: components["schemas"]["PublicScoringWait"] | null;
             /**
              * Screening Attempt Id
              * @description Active screening lease, if any.
@@ -30656,7 +35685,7 @@ export interface components {
             page_size: number;
             /**
              * Status Counts
-             * @description Counts by canonical public lifecycle stage before status filters are applied. Search filtering is reflected when present.
+             * @description Counts by canonical public lifecycle stage before status filters are applied. Search filtering is reflected when present. A finalized previous-era row the active bench does not admit is labelled 'era_changed' on its returned row only and still counts under 'scored' or 'live' here; filter by status=era_changed for the exact set.
              */
             status_counts?: {
                 [key: string]: number;
@@ -30782,6 +35811,8 @@ export interface components {
             duplicate_of?: string | null;
             /** Duplicate Version */
             duplicate_version?: number | null;
+            /** @description Same as the activity row's era_change. */
+            era_change?: components["schemas"]["PublicEraChange"] | null;
             /**
              * Generated At
              * Format: date-time
@@ -30803,6 +35834,12 @@ export interface components {
             name_handle?: components["schemas"]["PublicNameHandle"] | null;
             /** Preserved Composite */
             preserved_composite?: number | null;
+            /**
+             * Queue Withdrawn
+             * @description Same as the activity row's queue_withdrawn.
+             * @default false
+             */
+            queue_withdrawn: boolean;
             /** Quorum */
             quorum: number;
             /**
@@ -30827,8 +35864,12 @@ export interface components {
             score_composite?: number | null;
             /** Score Count */
             score_count: number;
+            /** @description Same as the activity row's scoring_wait. */
+            scoring_wait?: components["schemas"]["PublicScoringWait"] | null;
             /** Screening Reason */
             screening_reason?: string | null;
+            /** @description Bench v16+ scored agents only: set when the accepted scores have left the two-season window, so the agent no longer ranks or earns. ``retest`` says whether a free platform re-test is queued and, if not, why. Absent while the quorum is still in the window. */
+            season_expiry?: components["schemas"]["PublicSeasonExpiry"] | null;
             /**
              * Status
              * @description Current public lifecycle stage.
@@ -31364,6 +36405,8 @@ export interface components {
              * @description The bench_version being rolled out (equal to active when idle).
              */
             desired_version: number;
+            /** @description Whether a dueling season is open for the bench version the queue scores at, and roughly when the next one opens if not. From bench v16 every scored run needs one. Null below bench v16. */
+            dueling_season?: components["schemas"]["PublicDuelingSeasonState"] | null;
             /** Members */
             members?: components["schemas"]["PublicBenchRolloutMember"][];
             /**
@@ -31944,7 +36987,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
             /**
              * Bundle Id
              * Format: uuid
@@ -32201,7 +37244,7 @@ export interface components {
              * Method
              * @enum {string}
              */
-            method: "flat" | "unpaired" | "paired";
+            method: "flat" | "unpaired" | "paired" | "duel";
             /**
              * Paired Standard Error
              * @description Standard error of the per-seed challenger-minus-champion differences. Present only on a paired comparison. The statistical term is dethrone_z times this value, before high-score decay and the ceiling cap.
@@ -32225,6 +37268,307 @@ export interface components {
             shared_seed_count?: number | null;
             /** Statistical Lead */
             statistical_lead?: number | null;
+        };
+        /**
+         * PublicDuelingBreakdown
+         * @description Bench v16+ arithmetic from the datagen half and slice to the composite.
+         *
+         *     Projected by Platform from the stored, ingestion-validated
+         *     ``scores.dueling`` aggregates and the ``priced_cost`` gate evidence. It is
+         *     a read-side explanation only: the signed composite is authoritative and
+         *     nothing here feeds ranking, weights or ingestion.
+         */
+        PublicDuelingBreakdown: {
+            /**
+             * Column Weight
+             * @description ``w``: 0.1 on bench 16..18, 0.15 from 19.
+             */
+            column_weight: number;
+            /** Columns */
+            columns?: components["schemas"]["PublicDuelingColumn"][];
+            /**
+             * Composite
+             * @description ``datagen_gate x pre_gate_composite`` (times ``datagen_qualifier`` from v19), recomputed from the aggregates; it reproduces the signed composite.
+             */
+            composite: number;
+            /** Composite Stderr */
+            composite_stderr?: number | null;
+            /**
+             * Counted Columns
+             * @description ``|U|``: columns not self-masked.
+             */
+            counted_columns: number;
+            /**
+             * Datagen Gate
+             * @description The run's whole composite gate (quality gates times the applied priced-cost factor).
+             */
+            datagen_gate: number;
+            /**
+             * Datagen Qualifier
+             * @description Bench v19+ only: ``q = min(1, datagen_raw / 0.8)``, which scales the whole composite so the public datagen half cannot be skipped. Omitted below v19.
+             */
+            datagen_qualifier?: number | null;
+            /**
+             * Datagen Raw
+             * @description The datagen half's raw mean.
+             */
+            datagen_raw: number;
+            /**
+             * Datagen Share
+             * @description ``1 - w x |U|``.
+             */
+            datagen_share: number;
+            /**
+             * Formula
+             * @default gate x ((1 - w x |U|) x datagen + w x sum col)
+             */
+            formula: string;
+            /**
+             * Generator Sum
+             * @description ``w x sum col`` over ``U``.
+             */
+            generator_sum: number;
+            /**
+             * Memory Factor
+             * @description ``memory_factor_applied_factor_bps / 10000``, when applied.
+             */
+            memory_factor?: number | null;
+            /**
+             * Memory Factor Applied Factor Bps
+             * @description The P95 harness-memory factor inside ``datagen_gate`` when it is applied. Null when no memory factor changed this score.
+             */
+            memory_factor_applied_factor_bps?: number | null;
+            /**
+             * Memory Factor P95 Bytes
+             * @description The run's time-weighted P95 harness memory, when applied.
+             */
+            memory_factor_p95_bytes?: number | null;
+            /**
+             * Other Gate Factor
+             * @description ``datagen_gate / (priced_cost_factor x memory_factor)``: every other gate combined (``memory_factor`` is 1 when not applied). Null when the run recorded no priced cost or a factor is 0.
+             */
+            other_gate_factor?: number | null;
+            /**
+             * Pre Gate Composite
+             * @description ``datagen_share x datagen + generator_sum``.
+             */
+            pre_gate_composite: number;
+            /**
+             * Priced Cost Applied Factor Bps
+             * @description The priced-cost factor inside ``datagen_gate`` (10000 under shadow or without complete accounting). Null when the run recorded no priced cost.
+             */
+            priced_cost_applied_factor_bps?: number | null;
+            /**
+             * Priced Cost Factor
+             * @description ``priced_cost_applied_factor_bps / 10000``.
+             */
+            priced_cost_factor?: number | null;
+            /**
+             * Priced Cost Factor Bps
+             * @description The factor the published curve gives, applied or not.
+             */
+            priced_cost_factor_bps?: number | null;
+            /** Priced Cost Posture */
+            priced_cost_posture?: string | null;
+            /** Priced Cost Result */
+            priced_cost_result?: string | null;
+            /** Priced Cost Window */
+            priced_cost_window?: string | null;
+            /** Season Id */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
+        };
+        /**
+         * PublicDuelingColumn
+         * @description One generator-slice column of a bench v16+ run, as aggregates only.
+         *
+         *     Mirrors the Backroom canary read: no owner key, no generator submission
+         *     id, no case text. ``self_masked`` says the column's generator belongs to
+         *     the scored agent's own owner, so the composite dropped it (its weight
+         *     returned to the datagen half).
+         */
+        PublicDuelingColumn: {
+            /** Column Id */
+            column_id: string;
+            /**
+             * Contribution
+             * @description ``w x mean`` when counted, 0 when self-masked.
+             */
+            contribution: number;
+            /** Grading Bench Version */
+            grading_bench_version?: number | null;
+            /**
+             * Mean
+             * @description ``sum / n`` (0 with no cases).
+             */
+            mean: number;
+            /**
+             * N
+             * @description Executed cases in this column.
+             */
+            n: number;
+            /**
+             * Public Default
+             * @description The column's pinned generator is the public default.
+             */
+            public_default: boolean;
+            /**
+             * Self Masked
+             * @description Owned by the scored agent's own owner, so excluded from ``U`` (an agent never scores on its owner's generator).
+             */
+            self_masked: boolean;
+            /**
+             * Substituted
+             * @description The pinned generator failed and the public default generator filled this column.
+             */
+            substituted: boolean;
+            /**
+             * Sum
+             * @description Sum of the column's case scores.
+             */
+            sum: number;
+        };
+        /**
+         * PublicDuelingPin
+         * @description One column pin, exactly as ``challenge-scorer reproduce-slice -pins``
+         *     reads it.
+         */
+        PublicDuelingPin: {
+            /** Column Id */
+            column_id: string;
+            /** Grading Bench Version */
+            grading_bench_version: number;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Key */
+            owner_key: string;
+            /** Public Default */
+            public_default: boolean;
+            /** Slice Seed */
+            slice_seed?: string | null;
+            /** Submission Id */
+            submission_id: string;
+            /** Substituted */
+            substituted: boolean;
+            /** Tree Sha256 */
+            tree_sha256: string;
+        };
+        /**
+         * PublicDuelingPins
+         * @description The ``reproduce-slice -pins`` file: save it as JSON and pass it.
+         */
+        PublicDuelingPins: {
+            /** Columns */
+            columns: components["schemas"]["PublicDuelingPin"][];
+            /** Season Id */
+            season_id: string;
+        };
+        /**
+         * PublicDuelingSeason
+         * @description A revealed season: everything a slice reproduction needs but the run
+         *     seed and the generator sources.
+         */
+        PublicDuelingSeason: {
+            /** Anchor Block */
+            anchor_block: number | null;
+            /** Anchor Block Hash */
+            anchor_block_hash: string | null;
+            /** Bench Version */
+            bench_version: number;
+            /** Closed At */
+            closed_at: string | null;
+            /** Commitment */
+            commitment: string;
+            /** Fallback */
+            fallback: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Opened At */
+            opened_at: string | null;
+            pins: components["schemas"]["PublicDuelingPins"];
+            /** Revealed At */
+            revealed_at: string | null;
+            /** Season Index */
+            season_index: number;
+            /** Season Seed */
+            season_seed: string;
+            /** Secret Hex */
+            secret_hex: string;
+            /** Shadow */
+            shadow: boolean;
+            /**
+             * Slices
+             * @default 0
+             */
+            slices: number;
+            /** Sources */
+            sources?: components["schemas"]["PublicGeneratorSource"][];
+        };
+        /** PublicDuelingSeasonList */
+        PublicDuelingSeasonList: {
+            /** Seasons */
+            seasons: components["schemas"]["PublicDuelingSeason"][];
+        };
+        /**
+         * PublicDuelingSeasonState
+         * @description Whether the bench version the queue scores at has an open season.
+         */
+        PublicDuelingSeasonState: {
+            /**
+             * Bench Version
+             * @description The bench version the queue scores at: the rollout's desired version while a rollout is open, else the active version.
+             */
+            bench_version: number;
+            /**
+             * Next Opens At
+             * @description Approximate UTC time the next season opens, or null when open or when it cannot be estimated.
+             */
+            next_opens_at?: string | null;
+            /**
+             * Next Round Epoch
+             * @description Subnet epoch of the round boundary the next season opens at, or null when open or unknown.
+             */
+            next_round_epoch?: number | null;
+            /**
+             * Open
+             * @description True while a dueling season is open for bench_version. While false, validators cannot score bench_version and waiting submissions resume when the next season opens.
+             */
+            open: boolean;
+        };
+        /**
+         * PublicDuelingSlice
+         * @description One revealed slice: ``-run-seed``, ``-expect-sha256`` and ``-pins``.
+         */
+        PublicDuelingSlice: {
+            pins: components["schemas"]["PublicDuelingPins"];
+            /** Ready At */
+            ready_at: string | null;
+            /** Run Seed */
+            run_seed: string;
+            /** Slice Sha256 */
+            slice_sha256: string;
+        };
+        /** PublicDuelingSlicePage */
+        PublicDuelingSlicePage: {
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Slices */
+            slices: components["schemas"]["PublicDuelingSlice"][];
+            /** Total */
+            total: number;
         };
         /**
          * PublicEfficiencyCohortMember
@@ -32508,6 +37852,34 @@ export interface components {
             share: number;
         };
         /**
+         * PublicEraChange
+         * @description Set only on an ``era_changed`` row.
+         */
+        PublicEraChange: {
+            /**
+             * Bench Version
+             * @description The active bench version it does not compete on.
+             */
+            bench_version: number;
+            /**
+             * Next Step
+             * @description 'resubmit': upload a new version to compete on the active bench version.
+             * @constant
+             */
+            next_step: "resubmit";
+            /**
+             * Reason
+             * @description 'not_admitted_to_active_bench': the submission belongs to an earlier bench version, and nothing admits it to the active one (not the rollout cohort, a previous-generation carryover, an operator admission or an audited contract refresh). Validators score only the active version, so it is not scored or ranked there. This is not a rejection.
+             * @constant
+             */
+            reason: "not_admitted_to_active_bench";
+            /**
+             * Scored Bench Version
+             * @description The earlier bench version this submission finalized on, when it was scored there. Its scores and history on that version stay visible. Null for a submission that was still waiting for scores when the era changed.
+             */
+            scored_bench_version?: number | null;
+        };
+        /**
          * PublicFeedbackTrackResponse
          * @description Counts only. Never the account, the email, or the report text.
          */
@@ -32527,8 +37899,9 @@ export interface components {
          * PublicGateEvidence
          * @description Run-level v13 gate verdict, published beside a validator's score.
          *
-         *     Aggregates only: the posture the gates ran under, the four gate summaries
-         *     (counts and rates), how many cases the gates would zero, and per-finding
+         *     Aggregates only: the posture the gates ran under, the gate summaries
+         *     (counts and rates), the bench 16+ priced inference cost and its factor,
+         *     how many cases the gates would zero, and per-finding
          *     counts. The per-case notes behind these counts are owner-only
          *     (``GET /me/agents/{agent_id}/gate-notes``).
          */
@@ -32566,6 +37939,7 @@ export interface components {
              * @description The most severe posture any v13 gate ran under: ``enforce`` means at least one gate changed scores; ``shadow`` means every gate only recorded what it would have done. Per-gate postures are on the gate summaries.
              */
             posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            priced_cost?: components["schemas"]["PricedCostSummary"] | null;
             twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
         };
         /**
@@ -32655,6 +38029,37 @@ export interface components {
             window_days: number;
         };
         /**
+         * PublicGeneratorSource
+         * @description Where one pinned generator's exact source stands.
+         */
+        PublicGeneratorSource: {
+            /** Archive Path */
+            archive_path: string;
+            /** Available */
+            available: boolean;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Key */
+            owner_key: string;
+            /** Public Default */
+            public_default: boolean;
+            /** Release At */
+            release_at?: string | null;
+            /** Released At */
+            released_at?: string | null;
+            /** Scorer Version */
+            scorer_version?: string | null;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Tree Sha256 */
+            tree_sha256: string;
+        };
+        /**
          * PublicGeneratorSubmissionDetail
          * @description Everything public about one generator: identity, lifecycle, the
          *     hotkey's other versions, and its round-by-round results. Never source,
@@ -32666,6 +38071,93 @@ export interface components {
             submission: components["schemas"]["GeneratorSubmissionSummary"];
             /** Versions */
             versions: components["schemas"]["GeneratorSubmissionSummary"][];
+        };
+        /**
+         * PublicHarnessMemory
+         * @description This agent's harness memory across its measured runs (SN-500).
+         *
+         *     Measured only since the release that added the telemetry: earlier runs
+         *     and runs on validators that have not updated carry none, so a short or
+         *     absent list means unmeasured, not light.
+         */
+        PublicHarnessMemory: {
+            /**
+             * Last Recorded At
+             * Format: date-time
+             */
+            last_recorded_at: string;
+            /**
+             * Limit Bytes Max
+             * @description Largest harness cap any measured run ran under.
+             */
+            limit_bytes_max?: number | null;
+            /**
+             * P50 Bytes Median
+             * @description Median of the per-run time-weighted P50s.
+             */
+            p50_bytes_median: number;
+            /**
+             * P95 Bytes Max
+             * @description Highest per-run time-weighted P95.
+             */
+            p95_bytes_max: number;
+            /**
+             * P95 Bytes Median
+             * @description Median of the per-run time-weighted P95s.
+             */
+            p95_bytes_median: number;
+            /**
+             * Peak Bytes Max
+             * @description Highest per-run `memory.peak`.
+             */
+            peak_bytes_max: number;
+            /**
+             * Recent Runs
+             * @description Most recently leased runs first, at most 20.
+             */
+            recent_runs?: components["schemas"]["PublicHarnessMemoryRun"][];
+            /** Runs */
+            runs: number;
+        };
+        /**
+         * PublicHarnessMemoryRun
+         * @description Harness memory the scorer measured for one validator run (SN-500).
+         *
+         *     ``peak_bytes`` is the harness cgroup's ``memory.peak``; ``p50_bytes`` and
+         *     ``p95_bytes`` are time-weighted percentiles of ``memory.current`` at 1 MiB
+         *     resolution. Reported by the validator alongside the run's score or
+         *     failure; no failure detail beyond the outcome is published here.
+         */
+        PublicHarnessMemoryRun: {
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Lease Issued At
+             * Format: date-time
+             */
+            lease_issued_at: string;
+            /**
+             * Limit Bytes
+             * @description The harness memory cap the run ran under.
+             */
+            limit_bytes?: number | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "scored" | "failed";
+            /** P50 Bytes */
+            p50_bytes: number;
+            /** P95 Bytes */
+            p95_bytes: number;
+            /** Peak Bytes */
+            peak_bytes: number;
+            /** Sampled Seconds */
+            sampled_seconds: number;
+            /** Samples */
+            samples: number;
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /**
          * PublicHealthResponse
@@ -33307,6 +38799,8 @@ export interface components {
              * @default 3
              */
             score_quorum: number;
+            /** @description Bench v16+ live board only: set when this row's scores have expired from the two-season window. Absent on every row whose quorum is still in the window. */
+            season_expiry?: components["schemas"]["PublicSeasonExpiry"] | null;
             /**
              * Settled Composite
              * @description The agent's finalized median on the settled (active) benchmark version. Only populated in authoritative mode while a rollout is collecting the next version; null when there is no open rollout or the agent never reached quorum on the active version. This is the comparable baseline the dashboard ranks by mid-rollout, even for agents whose headline composite already flipped to the desired version.
@@ -33709,6 +39203,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** @description Set only on an 'era_changed' row: why it does not compete on the active bench version and the miner's next step. Same as the activity row's era_change. */
+            era_change?: components["schemas"]["PublicEraChange"] | null;
             /** Name */
             name: string;
             name_handle?: components["schemas"]["PublicNameHandle"] | null;
@@ -33985,6 +39481,8 @@ export interface components {
              * @description Pinned hash of the exact generated dataset, when recorded.
              */
             dataset_sha256?: string | null;
+            /** @description Bench v16+ dueling arithmetic: datagen half, generator-slice columns (self-masked columns flagged) and the priced-cost factor inside the composite gate. Aggregates only; omitted below v16. */
+            dueling_breakdown?: components["schemas"]["PublicDuelingBreakdown"] | null;
             /** @description Bench v13+ run-level gate verdict (aggregates only); see ``PublicValidatorScore.gate_evidence``. */
             gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             model_use?: components["schemas"]["PublicModelUse"] | null;
@@ -34168,6 +39666,47 @@ export interface components {
             judge_audit?: string | null;
         };
         /**
+         * PublicScoringWait
+         * @description Why a submission that is owed scores is not being scored right now.
+         *
+         *     Set only on a row waiting for validators, and only when the hold is not
+         *     the fleet's: from bench v16 every scored run needs a generator slice from
+         *     an open dueling season of the version the row is leased at, so while none
+         *     is open validators turn the work away and the row waits for a season
+         *     instead. During a benchmark rollout, rows submitted before it started are
+         *     finished at the source version and the rest at the target version, so
+         *     ``bench_version`` is the row's own.
+         */
+        PublicScoringWait: {
+            /**
+             * Bench Version
+             * @description The bench version waiting for a season.
+             */
+            bench_version: number;
+            /**
+             * Next Round Epoch
+             * @description Subnet epoch of that round boundary, or null when unknown.
+             */
+            next_round_epoch?: number | null;
+            /**
+             * Next Season Opens At
+             * @description Approximate UTC time the next season opens: the start of the round boundary it is due at, from the last observed chain position and the nominal block time. Null when that cannot be estimated; the season still opens at a round boundary.
+             */
+            next_season_opens_at?: string | null;
+            /**
+             * Reason
+             * @description 'dueling_season_closed': no dueling season is open for the bench version the queue scores at. Scoring resumes when the next season opens at a generator-round boundary.
+             * @constant
+             */
+            reason: "dueling_season_closed";
+            /**
+             * Season Scheduled
+             * @description True when a season for bench_version opens at a generator-round boundary. False when none is scheduled (for example the source version of an open benchmark rollout, whose seasons pause until the rollout ends): the row waits for a season of its version.
+             * @default true
+             */
+            season_scheduled: boolean;
+        };
+        /**
          * PublicScreenerHeartbeat
          * @description Latest public-safe report from one authenticated screener instance.
          */
@@ -34208,7 +39747,7 @@ export interface components {
             /** Protocol Version */
             protocol_version: number;
             /** Provider */
-            provider?: ("gcp" | "targon" | "hetzner" | "home" | "test") | null;
+            provider?: ("gcp" | "targon" | "hetzner" | "aws" | "home" | "test") | null;
             /**
              * Reported At
              * Format: date-time
@@ -34464,6 +40003,84 @@ export interface components {
             /** Summary */
             summary: string;
         };
+        /**
+         * PublicSeasonExpiry
+         * @description Why a bench v16+ row is shown although its scores left the live window.
+         *
+         *     Scores count for the dueling season they were taken in and the one after
+         *     (``current`` plus the provisional ``previous``); older ones expire from the
+         *     authoritative ledger by design, so the platform never pays to re-score the
+         *     board on every rotation. This label keeps such an agent visible instead of
+         *     dropping it, without changing any pin or weight. ``retest`` says whether a
+         *     free, bounded platform re-test (season catch-up or an ATH clear) is
+         *     queued, and if not, why.
+         */
+        PublicSeasonExpiry: {
+            /**
+             * In Window Score Count
+             * @description Accepted scores inside the live window.
+             */
+            in_window_score_count: number;
+            /**
+             * Last Valid Composite
+             * @description Median of the expired quorum, as stored. Never re-scored.
+             */
+            last_valid_composite: number;
+            /**
+             * Pinned Epoch Index
+             * @description ``pinned_carry`` only: the pin that still carries it.
+             */
+            pinned_epoch_index?: number | null;
+            /** @description Whether a free platform re-test on the open season is queued for this agent, and if not, why. Absent when not read. */
+            retest?: components["schemas"]["PublicSeasonRetest"] | null;
+            /**
+             * Score Dueling Season Ids
+             * @description Distinct dueling seasons the accepted scores were taken in.
+             */
+            score_dueling_season_ids: string[];
+            /**
+             * State
+             * @description ``pinned_carry``: the agent is in the epoch pin validators fold right now, so it keeps its pinned rank and official composite until the next pin, which is built from the live window and will not include it. ``expired``: the last valid quorum, shown unranked for reference only.
+             * @enum {string}
+             */
+            state: "pinned_carry" | "expired";
+            /**
+             * Window Dueling Season Ids
+             * @description The live window: the current season, then the provisional previous one. Only scores from these seasons rank or pay.
+             */
+            window_dueling_season_ids: string[];
+        };
+        /**
+         * PublicSeasonRetest
+         * @description Whether Ditto is re-scoring an expired bench v16+ agent, and why not.
+         *
+         *     A platform re-test (season catch-up or an ATH clear) is free to the
+         *     miner. Only scores taken in the live window rank or pay again.
+         */
+        PublicSeasonRetest: {
+            /**
+             * Dueling Season Id
+             * @description Queued: the open season it is re-scored on. Otherwise the season whose boundary decided it.
+             */
+            dueling_season_id?: string | null;
+            /**
+             * Note
+             * @description One plain sentence for the miner.
+             */
+            note: string;
+            /**
+             * Reason
+             * @description Queued: ``rotation`` (the season-opening cohort), ``board`` (paid or top-five catch-up), ``board_overflow`` (board agent past the catch-up cap, within the per-season budget), ``off_board`` (off-board agent whose scores expired, within the budget), ``ath_clear`` (its review hold was cleared). Not queued: ``retested`` (a catch-up ran but did not restore a full quorum in the window), ``over_budget`` (the season's catch-up budget ran out; the next boundary reconsiders it), ``board_cap`` (past the board catch-up cap, before the budget existed), ``below_board_floor`` (its last valid score is under the lowest score on the board, so a re-test could not place it), ``owner_has_better_agent`` (its owner already has a better agent on the board), ``superseded_rerun`` (a newer run of the same artifact stands for it), ``already_retested`` (it already had its one off-board catch-up on this bench version), ``unranked`` (its last quorum was not a full, positive run), ``catchup_disabled`` (season catch-up is switched off), ``not_considered`` (no boundary recorded a decision for it).
+             * @enum {string}
+             */
+            reason: "rotation" | "board" | "board_overflow" | "off_board" | "ath_clear" | "retested" | "over_budget" | "board_cap" | "below_board_floor" | "owner_has_better_agent" | "superseded_rerun" | "already_retested" | "unranked" | "catchup_disabled" | "not_considered";
+            /**
+             * State
+             * @description ``queued``: a re-test on the open season is queued or running. ``not_queued``: none is pending; ``reason`` says why.
+             * @enum {string}
+             */
+            state: "queued" | "not_queued";
+        };
         /** PublicServiceBucket */
         PublicServiceBucket: {
             /** Allocation Bps */
@@ -34556,7 +40173,7 @@ export interface components {
             /** Output Size Bytes */
             output_size_bytes?: number | null;
             /** Provider */
-            provider?: ("targon" | "gcp" | "hetzner") | null;
+            provider?: ("targon" | "gcp" | "hetzner" | "aws") | null;
             /** Started At */
             started_at?: string | null;
             /**
@@ -34619,6 +40236,8 @@ export interface components {
              * @description Same pin as ``active_bench_version``, named for what it decides. A submission finalized at a different ``score_bench_version`` is not earning on this version's ledger.
              */
             emission_bench_version: number;
+            /** @description Same as the activity row's era_change. */
+            era_change?: components["schemas"]["PublicEraChange"] | null;
             /**
              * Final Composite
              * @description Canonical median over the ``score_bench_version`` scores once quorum is reached; null while scores are still provisional.
@@ -34629,6 +40248,8 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
+            /** @description The harness's measured memory (peak and time-weighted P50/P95) across its validator runs; null when no run has been measured. */
+            harness_memory?: components["schemas"]["PublicHarnessMemory"] | null;
             /** Inference Runs */
             inference_runs?: components["schemas"]["PublicInferenceRun"][];
             /** @description Ordinary source-review clock and reason while the submission is in the pre-score screening pipeline; null once it leaves that pipeline (whichever way). */
@@ -34681,7 +40302,7 @@ export interface components {
             submission_family?: components["schemas"]["PublicSubmissionFamily"] | null;
             /** Validation Attempts */
             validation_attempts?: components["schemas"]["PublicValidationAttempt"][];
-            /** @description Live validator-retry state while the submission is below quorum; null once it finalizes, and before any validator work exists. */
+            /** @description Live validator-retry state while the submission is below quorum; null once it finalizes, before any validator work exists, and while it is 'not_queued' or 'era_changed' (no validator serves that retry). */
             validator_retry?: components["schemas"]["PublicValidatorRetry"] | null;
         };
         /**
@@ -35338,7 +40959,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
             score_gates: components["schemas"]["PublicV9ScoreGateEvidence"];
         };
         /**
@@ -35525,6 +41146,21 @@ export interface components {
              * @default false
              */
             issuance_paused: boolean;
+            /**
+             * Memory Admitted Slots
+             * @description Benchmark slots this host's announced memory admits at the live sandbox memory cap, after the published host reserve: the validator offers no more than this whatever `configured_slots` says. Null when the host announced no memory (heartbeat protocol below 32).
+             */
+            memory_admitted_slots?: number | null;
+            /**
+             * Memory Note
+             * @description When memory admits fewer slots than configured: how many, and the host memory needed for one slot (if none) and for all. A host admitting none also reads `critical` health.
+             */
+            memory_note?: string | null;
+            /**
+             * Memory Required Mib
+             * @description Least host memory that admits every configured slot at the live cap. Null when unknown.
+             */
+            memory_required_mib?: number | null;
             /** Online */
             online: boolean;
             /**
@@ -35597,6 +41233,11 @@ export interface components {
             online_window_seconds: number;
             /** Reported Count */
             reported_count: number;
+            /**
+             * Sandbox Memory Limit Mib
+             * @description The live per-harness memory cap each validator's `memory_admitted_slots` is judged at.
+             */
+            sandbox_memory_limit_mib?: number | null;
             slot_policy: components["schemas"]["PublicValidatorSlotPolicy"];
             /** Stale Window Seconds */
             stale_window_seconds: number;
@@ -35723,6 +41364,8 @@ export interface components {
              * @description Weakest-link pass rate across the conversational-sanity slices, the input to the conversational-sanity gate factor. Null when no conversational case ran.
              */
             conversational_sanity?: number | null;
+            /** @description Bench v16+ dueling arithmetic: datagen half, generator-slice columns (self-masked columns flagged) and the priced-cost factor inside the composite gate. Aggregates only; omitted below v16. */
+            dueling_breakdown?: components["schemas"]["PublicDuelingBreakdown"] | null;
             /** @description Bench v13+ gate verdict for this run: posture, composite with and without the gates, the gate-induced loss and per-gate counts. Aggregates only -- the per-case notes are owner-only (``GET /me/agents/{agent_id}/gate-notes``). Null below v13 and for a scorer that emitted no gate telemetry. */
             gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             /**
@@ -35874,20 +41517,13 @@ export interface components {
          *
          *     Each revision stores the whole policy (not a diff), so a frozen snapshot is
          *     always reconstructable and a read never merges partial revisions.
+         *
+         *     Revisions written before source review was retired (2026-11-07) also carry
+         *     a ``deferred_source_review`` block. Nothing read it after that retirement,
+         *     so it is no longer a field: ``extra="ignore"`` drops it when an old
+         *     revision is read, and a write that still sends it stores nothing for it.
          */
         QueuePolicySettings: {
-            /**
-             * @default {
-             *       "axis_mad_multiplier": 6,
-             *       "composite_mad_multiplier": 6,
-             *       "integrity_double_check_mode": "off",
-             *       "min_axis_delta": 0.15,
-             *       "min_cohort_size": 8,
-             *       "min_composite_delta": 0.1,
-             *       "mode": "off"
-             *     }
-             */
-            deferred_source_review: components["schemas"]["DeferredSourceReviewSettings"];
             /**
              * Fresh Submission Slots
              * @default [
@@ -35965,6 +41601,277 @@ export interface components {
             /** Scope */
             scope: string;
             settings: components["schemas"]["QueuePolicySettings"];
+        };
+        /**
+         * ReadmissionActivationState
+         * @description Whether the readmission fee and self-serve readmission are live.
+         *
+         *     Active only when ``readmission_announced_at`` is set, the active
+         *     benchmark is at least ``min_bench_version`` and ``effective_at``
+         *     (announcement plus the notice period) has passed. Read-only: the price
+         *     is always the upload default fee, never a setting of its own.
+         */
+        ReadmissionActivationState: {
+            /** Active */
+            active: boolean;
+            /** Active Bench Version */
+            active_bench_version: number;
+            /** Announced At */
+            announced_at?: string | null;
+            /** Effective At */
+            effective_at?: string | null;
+            /** Fee Amount Rao */
+            fee_amount_rao: number;
+            /**
+             * Fee Source
+             * @default upload_default
+             * @constant
+             */
+            fee_source: "upload_default";
+            /** Inactive Reasons */
+            inactive_reasons?: ("announcement_unset" | "bench_version_below_minimum" | "notice_period")[];
+            /** Min Bench Version */
+            min_bench_version: number;
+            /** Notice Period Seconds */
+            notice_period_seconds: number;
+            /** Settings Revision */
+            settings_revision: number;
+        };
+        /** ReadmissionCheckRequest */
+        ReadmissionCheckRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Reserve Slot
+             * @default false
+             */
+            reserve_slot: boolean;
+            /** Signature */
+            signature: string;
+            /**
+             * Signature Nonce
+             * Format: uuid4
+             */
+            signature_nonce: string;
+            /** Signature Timestamp */
+            signature_timestamp: number;
+        };
+        /** ReadmissionCheckResponse */
+        ReadmissionCheckResponse: {
+            activation: components["schemas"]["ReadmissionActivationState"];
+            /** Admission Expires At */
+            admission_expires_at?: string | null;
+            /** Admission Token */
+            admission_token?: string | null;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Cooldown Seconds */
+            cooldown_seconds: number;
+            eligibility?: components["schemas"]["ReadmissionEligibilityView"] | null;
+            /** Error Codes */
+            error_codes?: number[];
+            /** Messages */
+            messages?: string[];
+            /** Netuid */
+            netuid: number;
+            /** Ok */
+            ok: boolean;
+            /** Payment Amount Rao */
+            payment_amount_rao?: number | null;
+            /**
+             * Payment Required
+             * @default false
+             */
+            payment_required: boolean;
+            /** Payment Send Address */
+            payment_send_address?: string | null;
+            /** Retry At */
+            retry_at?: string | null;
+            /** Rollout Id */
+            rollout_id?: string | null;
+            /** Subtensor Network */
+            subtensor_network: string;
+        };
+        /** ReadmissionCommitRequest */
+        ReadmissionCommitRequest: {
+            /** Admission Token */
+            admission_token?: string | null;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Hotkey */
+            hotkey: string;
+            /** Payment Block Hash */
+            payment_block_hash: string;
+            /** Payment Block Number */
+            payment_block_number: number;
+            /** Payment Extrinsic Index */
+            payment_extrinsic_index: number;
+            /** Signature */
+            signature: string;
+            /**
+             * Signature Nonce
+             * Format: uuid4
+             */
+            signature_nonce: string;
+            /** Signature Timestamp */
+            signature_timestamp: number;
+        };
+        /** ReadmissionCommitResponse */
+        ReadmissionCommitResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Credit Expires At */
+            credit_expires_at?: string | null;
+            /** Dataset Sha256 */
+            dataset_sha256?: string | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "admitted" | "credited";
+            /**
+             * Payment Disposition
+             * @enum {string}
+             */
+            payment_disposition: "consumed" | "credit_consumed" | "credited";
+            /** Position */
+            position?: number | null;
+            /**
+             * Recovered
+             * @default false
+             */
+            recovered: boolean;
+            /** Refusal Reason */
+            refusal_reason?: string | null;
+            /** Rollout Id */
+            rollout_id?: string | null;
+        };
+        /**
+         * ReadmissionCostBasis
+         * @description The measured cost of evaluating one agent on the active benchmark.
+         *
+         *     Published as the stated cost basis of the readmission fee (SN-485 section
+         *     2); the fee itself is the upload fee. Measured from Platform's inference
+         *     ledger: the median, across agents that reached a scoring quorum on
+         *     ``bench_version``, of each agent's mean scored-run cost, times
+         *     ``runs_per_evaluation``. ``null`` costs mean too few agents to measure.
+         */
+        ReadmissionCostBasis: {
+            /** Agents Sampled */
+            agents_sampled: number;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Measured At
+             * Format: date-time
+             */
+            measured_at: string;
+            /** Median Agent Cost Usd */
+            median_agent_cost_usd?: number | null;
+            /** Median Run Cost Usd */
+            median_run_cost_usd?: number | null;
+            /** Runs Per Evaluation */
+            runs_per_evaluation: number;
+            /**
+             * Source
+             * @default Platform inference ledger: chat + embedding cost of scored leases on the current metering contract
+             */
+            source: string;
+        };
+        /**
+         * ReadmissionEligibilityView
+         * @description What the stranded-era read says about this agent.
+         */
+        ReadmissionEligibilityView: {
+            /** Already Admitted */
+            already_admitted: boolean;
+            /** Cohort Sibling Agent Id */
+            cohort_sibling_agent_id?: string | null;
+            /** Owner Best Stranded */
+            owner_best_stranded?: boolean | null;
+            /** Previous Bench Version */
+            previous_bench_version?: number | null;
+            /** Previous Median Composite */
+            previous_median_composite?: number | null;
+            /** Previous Score Count */
+            previous_score_count?: number | null;
+            /** Stranded */
+            stranded: boolean;
+        };
+        /**
+         * ReadmissionTerms
+         * @description The SN-485 readmission rules for one competition.
+         *
+         *     A readmission is the owner re-entering an existing agent lineage: into a
+         *     new benchmark era, or re-running it unchanged after one of its
+         *     evaluations completed. It costs exactly the upload fee and shares the
+         *     upload cooldown.
+         */
+        ReadmissionTerms: {
+            activation: components["schemas"]["ReadmissionActivationState"];
+            cost_basis?: components["schemas"]["ReadmissionCostBasis"] | null;
+            /** Rules */
+            rules?: string[];
+        };
+        /** ReadmissionTotals */
+        ReadmissionTotals: {
+            /**
+             * Admitted
+             * @default 0
+             */
+            admitted: number;
+            /**
+             * Admitted Amount Rao
+             * @default 0
+             */
+            admitted_amount_rao: number;
+            /**
+             * Credit Funded
+             * @default 0
+             */
+            credit_funded: number;
+            /**
+             * Credited
+             * @default 0
+             */
+            credited: number;
+            /**
+             * Credited Amount Rao
+             * @default 0
+             */
+            credited_amount_rao: number;
+            /**
+             * Upload Readmission Amount Rao
+             * @default 0
+             */
+            upload_readmission_amount_rao: number;
+            /**
+             * Upload Readmissions
+             * @default 0
+             */
+            upload_readmissions: number;
         };
         /** ReceiptDiagnosticObservation */
         ReceiptDiagnosticObservation: {
@@ -36064,6 +41971,59 @@ export interface components {
             fields: string[];
         };
         /**
+         * RegistrationChangeView
+         * @description A uid whose hotkey differs between Pylon's snapshot and what is served.
+         */
+        RegistrationChangeView: {
+            /** Chain Hotkey */
+            chain_hotkey: string | null;
+            /** Pylon Hotkey */
+            pylon_hotkey: string | null;
+            /** Uid */
+            uid: number;
+        };
+        /**
+         * RegistrationFreshnessView
+         * @description Pylon's recent-neurons snapshot height against a fresh finalized head.
+         *
+         *     Pylon ages its cache by when it wrote it, so only ``snapshot_block`` shows
+         *     a refresh that read a lagging node. When ``chain_registrations`` is newer
+         *     than the snapshot, every consumer (upload admission, public activity, the
+         *     emission ledger) is served its uid/hotkey/coldkey and ``changes`` lists
+         *     the uids it corrected.
+         */
+        RegistrationFreshnessView: {
+            chain_registrations: components["schemas"]["ChainRegistrationRead"] | null;
+            /** Changes */
+            changes: components["schemas"]["RegistrationChangeView"][];
+            /** Finalized Block */
+            finalized_block: number | null;
+            /** Finalized Block Error */
+            finalized_block_error: string | null;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Lag Check Interval Seconds */
+            lag_check_interval_seconds: number | null;
+            /** Lag Reconcile Threshold Blocks */
+            lag_reconcile_threshold_blocks: number;
+            /** Netuid */
+            netuid: number;
+            /** Serving Registrations Block */
+            serving_registrations_block: number;
+            /** Snapshot Block */
+            snapshot_block: number;
+            /** Snapshot Lag Blocks */
+            snapshot_lag_blocks: number | null;
+            /**
+             * Snapshot Observed At
+             * Format: date-time
+             */
+            snapshot_observed_at: string;
+        };
+        /**
          * RelayFailure
          * @description Private first-failure metadata; no prompts, headers or exception text.
          */
@@ -36116,6 +42076,7 @@ export interface components {
             };
             /** Checked Out Revision */
             checked_out_revision?: string | null;
+            danilabs_binding?: components["schemas"]["DaniLabsBindingSnapshot"] | null;
             /** Error */
             error?: string | null;
             /** Process Started At */
@@ -36229,6 +42190,13 @@ export interface components {
              * @description Count in the last 15 min.
              */
             recent_15m: number;
+            /**
+             * Recent 15M By Slot
+             * @description The last-15-minute count split by the slot the poll offered (`unknown` when it named none).
+             */
+            recent_15m_by_slot?: {
+                [key: string]: number;
+            };
             /**
              * Total
              * @description Count since tracking_since.
@@ -36345,6 +42313,12 @@ export interface components {
              * @default false
              */
             provider_outage_active: boolean;
+            /**
+             * Retest Mode
+             * @default continual
+             * @enum {string}
+             */
+            retest_mode: "continual" | "season_duel";
             /** Route Position */
             route_position: number | null;
             /**
@@ -36354,6 +42328,12 @@ export interface components {
             route_priority: "champion" | "void_rerun" | "catchup" | "emission" | "extended" | "not_routed";
             /** Scheduled Round */
             scheduled_round: boolean | null;
+            /** Season Duel Anchor Champion Id */
+            season_duel_anchor_champion_id?: string | null;
+            /** Season Duel Held Seed Count */
+            season_duel_held_seed_count?: number | null;
+            /** Season Duel Seed Count */
+            season_duel_seed_count?: number | null;
             /** Spare Capacity Window */
             spare_capacity_window: boolean;
             /**
@@ -37264,6 +43244,71 @@ export interface components {
             /** Speed Weight */
             speed_weight: number;
         };
+        /**
+         * RunBudgetSummary
+         * @description Run-level bench v18 per-run cost budget (``details.run_budget``).
+         *
+         *     The scorer stops admitting cases, in dispatch order, once the run's
+         *     metered priced cost reaches ``budget_nano_usd``; every unrun case scores
+         *     0 with ``budget_exhausted``. A spent budget is the harness's own cost,
+         *     never an infrastructure failure. ``reason`` is ``run_budget_exhausted``,
+         *     or ``run_budget_meter_lost`` when the run's metering session disappeared
+         *     and the scorer stopped admitting cases (``spent_nano_usd_at_cutoff`` is
+         *     then the last successful reading).
+         */
+        RunBudgetSummary: {
+            /**
+             * Admitted Cases
+             * @default 0
+             */
+            admitted_cases: number;
+            /**
+             * Budget Nano Usd
+             * @default 0
+             */
+            budget_nano_usd: number;
+            /** Budget Usd */
+            budget_usd?: number | null;
+            /**
+             * Cases
+             * @default 0
+             */
+            cases: number;
+            /** Contract Id */
+            contract_id?: string | null;
+            /**
+             * Exhausted
+             * @default false
+             */
+            exhausted: boolean;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Spent Nano Usd At Cutoff
+             * @default 0
+             */
+            spent_nano_usd_at_cutoff: number;
+            /**
+             * Unrun Cases
+             * @default 0
+             */
+            unrun_cases: number;
+            /**
+             * Unrun Memory Cases
+             * @default 0
+             */
+            unrun_memory_cases: number;
+            /**
+             * Unrun Slice Cases
+             * @default 0
+             */
+            unrun_slice_cases: number;
+            /**
+             * Unrun Tool Cases
+             * @default 0
+             */
+            unrun_tool_cases: number;
+        };
         /** RuntimeInterfaceReport */
         RuntimeInterfaceReport: {
             /** Block */
@@ -37369,72 +43414,22 @@ export interface components {
             surface: "source_emission" | "treasury_receipt";
         };
         /**
-         * ScheduleScreenerPolicyActivationRequest
-         * @description Append one optimistic, confirmation-gated schedule revision.
-         *
-         *     ``activate_at`` MUST carry a UTC offset (or be an explicit ``Z`` instant):
-         *     a timezone-naive datetime is rejected so an operator who means 9 a.m.
-         *     Eastern cannot silently schedule 9 a.m. server time. The row stores UTC.
+         * ScoreComponents
+         * @description The metrics of contract section 4.3, averaged over cases.
          */
-        ScheduleScreenerPolicyActivationRequest: {
-            /**
-             * Activate At
-             * Format: date-time
-             */
-            activate_at: string;
-            /** Actor */
-            actor?: string | null;
-            /**
-             * Canary Only
-             * @default false
-             */
-            canary_only: boolean;
-            /** Confirmation */
-            confirmation: string;
-            /** Expected Revision */
-            expected_revision: number;
-            /** Reason */
-            reason: string;
-            /**
-             * Rescreen Scored
-             * @default true
-             */
-            rescreen_scored: boolean;
-            /** Target Policy Version */
-            target_policy_version: number;
-        };
-        /**
-         * ScheduleV13ReviewClockRequest
-         * @description A future, manifest-bound deadline schedule; never a retroactive clock.
-         */
-        ScheduleV13ReviewClockRequest: {
-            /**
-             * Activate At
-             * Format: date-time
-             */
-            activate_at: string;
-            /** Actor */
-            actor: string;
-            /**
-             * Confirmation
-             * @constant
-             */
-            confirmation: "SCHEDULE V13 REVIEW CLOCK";
-            /** Expected Revision */
-            expected_revision: number;
-            /** Policy Document Digest */
-            policy_document_digest: string;
-            /** Policy Manifest Digest */
-            policy_manifest_digest: string;
-            /**
-             * Policy Version
-             * @constant
-             */
-            policy_version: 13;
-            /** Reason */
-            reason: string;
-            /** Window Seconds */
-            window_seconds: number;
+        ScoreComponents: {
+            /** Distractor Rate */
+            distractor_rate: number;
+            /** Memory Cases */
+            memory_cases: number;
+            /** Memory Recall */
+            memory_recall: number;
+            /** Packed Tokens */
+            packed_tokens?: number | null;
+            /** Tool Cases */
+            tool_cases: number;
+            /** Tool Recall */
+            tool_recall: number;
         };
         /**
          * ScoreReport
@@ -37656,6 +43651,13 @@ export interface components {
             deterministic_v13_datasets: boolean;
             /** Dueling Slice Bench Versions */
             dueling_slice_bench_versions?: number[] | null;
+            /**
+             * Generator Frontier Oracle
+             * @default false
+             */
+            generator_frontier_oracle: boolean;
+            /** Generator Frontier Oracle Models */
+            generator_frontier_oracle_models?: string[] | null;
             /** Generator Round Bench Versions */
             generator_round_bench_versions?: number[] | null;
             /** Generator Round Max Cases */
@@ -37692,6 +43694,7 @@ export interface components {
             supported_bench_versions: number[];
             v14_scored_runtime_env?: components["schemas"]["V14ScoredRuntimeEnvEvidence"] | null;
             v15_scored_runtime_env?: components["schemas"]["V15ScoredRuntimeEnvEvidence"] | null;
+            v16_scored_runtime_env?: components["schemas"]["V16ScoredRuntimeEnvEvidence"] | null;
             v7_calibration?: components["schemas"]["V7InferenceCalibration"] | null;
         };
         /**
@@ -37809,7 +43812,7 @@ export interface components {
          * @example {
          *       "detail": "",
          *       "passed": true,
-         *       "policy_version": 13,
+         *       "policy_version": 14,
          *       "screener_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
          *       "signature": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
          *     }
@@ -38195,7 +44198,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
             /** Reason */
@@ -38215,7 +44218,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
         };
@@ -38243,7 +44246,7 @@ export interface components {
             /** Node Id */
             node_id?: string | null;
             /** Provider */
-            provider?: ("gcp" | "targon" | "hetzner" | "home" | "test") | null;
+            provider?: ("gcp" | "targon" | "hetzner" | "aws" | "home" | "test") | null;
         };
         /** ScreenerCapacityEventView */
         ScreenerCapacityEventView: {
@@ -38266,7 +44269,7 @@ export interface components {
             /** Node Id */
             node_id?: string | null;
             /** Provider */
-            provider?: ("gcp" | "targon" | "hetzner" | "home" | "test") | null;
+            provider?: ("gcp" | "targon" | "hetzner" | "aws" | "home" | "test") | null;
         };
         /** ScreenerCapacitySnapshotRequest */
         ScreenerCapacitySnapshotRequest: {
@@ -38452,7 +44455,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
             /** Ready */
@@ -38775,7 +44778,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
             /**
@@ -38871,7 +44874,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
             /**
@@ -39065,7 +45068,7 @@ export interface components {
             /** Node Id */
             node_id?: string | null;
             /** Provider */
-            provider?: ("targon" | "gcp" | "hetzner") | null;
+            provider?: ("targon" | "gcp" | "hetzner" | "aws") | null;
             /** Provider Resource Id */
             provider_resource_id?: string | null;
             /** Status */
@@ -39087,7 +45090,7 @@ export interface components {
              *       "gcp"
              *     ]
              */
-            build_provider_priority: ("hetzner" | "targon" | "gcp")[];
+            build_provider_priority: ("hetzner" | "aws" | "targon" | "gcp")[];
             /**
              * Gce Overflow Backlog Multiplier
              * @default 3
@@ -39116,14 +45119,14 @@ export interface components {
              *       "gcp"
              *     ]
              */
-            runtime_provider_priority: ("hetzner" | "targon" | "gcp")[];
+            runtime_provider_priority: ("hetzner" | "aws" | "targon" | "gcp")[];
             /**
              * Source Review Provider Priority
              * @default [
              *       "gcp"
              *     ]
              */
-            source_review_provider_priority: ("hetzner" | "targon" | "gcp")[];
+            source_review_provider_priority: ("hetzner" | "aws" | "targon" | "gcp")[];
         };
         /** ScreenerProviderSettingsControl */
         ScreenerProviderSettingsControl: {
@@ -39988,6 +45991,25 @@ export interface components {
              */
             policy_version: 13;
         };
+        /** SeedResult */
+        SeedResult: {
+            /** Distractor Rate */
+            distractor_rate: number;
+            /** Memory Cases */
+            memory_cases: number;
+            /** Memory Recall */
+            memory_recall: number;
+            /** Packed Tokens */
+            packed_tokens?: number | null;
+            /** Score */
+            score: number;
+            /** Seed */
+            seed: number;
+            /** Tool Cases */
+            tool_cases: number;
+            /** Tool Recall */
+            tool_recall: number;
+        };
         /**
          * ShadowReviewObservationRequest
          * @description Bounded, non-authoritative observation for an active attempt.
@@ -40215,12 +46237,18 @@ export interface components {
             catch_up?: components["schemas"]["CatchUpStatus"] | null;
             /** Collector Blocked Reason */
             collector_blocked_reason?: string | null;
+            /** Collector Cursor Advanced At */
+            collector_cursor_advanced_at?: string | null;
             /** Collector Cursor Block */
             collector_cursor_block?: number | null;
             /** Collector Cursor Hash */
             collector_cursor_hash?: string | null;
             /** Collector Runtime Code Hash */
             collector_runtime_code_hash?: string | null;
+            /** Collector Stall After Seconds */
+            collector_stall_after_seconds?: number | null;
+            /** Collector Stalled */
+            collector_stalled?: boolean | null;
             /** Confirmed Kings */
             confirmed_kings: number;
             /**
@@ -40297,7 +46325,7 @@ export interface components {
             notes_considered: number;
             /**
              * Policy Version
-             * @default 13
+             * @default 14
              */
             policy_version: number;
             /** Prompt Revision */
@@ -40723,6 +46751,8 @@ export interface components {
             agent_name: string;
             /** Agent Sha256 */
             agent_sha256: string | null;
+            /** Category */
+            category?: string | null;
             /** Dataset Sha256 */
             dataset_sha256: string | null;
             /** First Lease At */
@@ -40733,6 +46763,15 @@ export interface components {
             live_lease_count: number;
             /** Miner Hotkey */
             miner_hotkey: string;
+            /**
+             * Origin
+             * @default operator_stranded_admission
+             */
+            origin: string;
+            /** Payment Ref */
+            payment_ref?: {
+                [key: string]: unknown;
+            } | null;
             /** Position */
             position: number | null;
             /** Previous Bench Version */
@@ -41041,6 +47080,8 @@ export interface components {
             fee_amount_rao: number;
             /** Parent Revision */
             parent_revision: number;
+            /** Readmission Announced At */
+            readmission_announced_at?: string | null;
             /** Reason */
             reason: string;
             /** Revision */
@@ -41161,6 +47202,8 @@ export interface components {
          *     }
          */
         SubmitScoreRequest: {
+            /** @description The run's harness memory (peak, time-weighted P50/P95). Unsigned operator telemetry; drives no policy and is never published (SN-500). */
+            harness_memory?: components["schemas"]["HarnessMemoryTelemetry"] | null;
             /** @description The DittoBench score report. */
             report: components["schemas"]["ScoreReport"];
             /**
@@ -42482,7 +48525,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "targon" | "gcp" | "hetzner";
+            provider: "targon" | "gcp" | "hetzner" | "aws";
             /** Provider Resource Id */
             provider_resource_id?: string | null;
             /**
@@ -42531,7 +48574,7 @@ export interface components {
             /** Lease Expires At */
             lease_expires_at?: string | null;
             /** Provider */
-            provider?: ("targon" | "gcp" | "hetzner") | null;
+            provider?: ("targon" | "gcp" | "hetzner" | "aws") | null;
             /** Provider Resource Id */
             provider_resource_id?: string | null;
             /** Reason */
@@ -42740,6 +48783,10 @@ export interface components {
              * @enum {string}
              */
             payment_disposition: "consumed" | "credit_consumed" | "reusable_credit";
+            /** Readmission Kind */
+            readmission_kind?: ("identical_rescore" | "near_duplicate") | null;
+            /** Readmission Of Agent Id */
+            readmission_of_agent_id?: string | null;
             status: components["schemas"]["AgentStatus"];
             /**
              * Version
@@ -42824,10 +48871,147 @@ export interface components {
             payment_required: boolean;
             /** Payment Send Address */
             payment_send_address?: string | null;
+            /** Readmission Kind */
+            readmission_kind?: "identical_rescore" | null;
+            /** Readmission Of Agent Id */
+            readmission_of_agent_id?: string | null;
             /** Retry At */
             retry_at?: string | null;
             /** Subtensor Network */
             subtensor_network?: string | null;
+        };
+        /**
+         * UploadPaymentProofAgent
+         * @description The agent upload a proof funded, or the identical upload behind a credit.
+         */
+        UploadPaymentProofAgent: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Agent Version */
+            agent_version?: number | null;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Submitted At
+             * Format: date-time
+             */
+            submitted_at: string;
+        };
+        /**
+         * UploadPaymentProofReadmission
+         * @description The readmission lane's record of a proof (SN-485).
+         */
+        UploadPaymentProofReadmission: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Credit Audit */
+            credit_audit?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Funding
+             * @enum {string}
+             */
+            funding: "fresh" | "credit";
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "admitted" | "credited";
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Refusal Reason */
+            refusal_reason?: string | null;
+            /** Rollout Id */
+            rollout_id?: string | null;
+        };
+        /**
+         * UploadPaymentProofView
+         * @description Platform's record of one ``(block_hash, extrinsic_index)`` payment proof.
+         */
+        UploadPaymentProofView: {
+            agent?: components["schemas"]["UploadPaymentProofAgent"] | null;
+            /** Amount Rao */
+            amount_rao?: number | null;
+            /** Block Hash */
+            block_hash: string;
+            /** Block Timestamp */
+            block_timestamp?: string | null;
+            /** Dest Address */
+            dest_address?: string | null;
+            /** Extrinsic Index */
+            extrinsic_index: number;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Generator Submission Id */
+            generator_submission_id?: string | null;
+            /** Miner Coldkey */
+            miner_coldkey?: string | null;
+            /** Miner Hotkey */
+            miner_hotkey?: string | null;
+            readmission?: components["schemas"]["UploadPaymentProofReadmission"] | null;
+            /** Recorded At */
+            recorded_at?: string | null;
+            /** Recovery Expired */
+            recovery_expired?: boolean | null;
+            /** Recovery Expires At */
+            recovery_expires_at?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "unrecorded" | "funded_agent" | "reusable_credit" | "funded_generator" | "funded_readmission";
+        };
+        /** UploadReadmissionRow */
+        UploadReadmissionRow: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Amount Rao */
+            amount_rao?: number | null;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "identical_rescore" | "near_duplicate";
+            /**
+             * Lineage Agent Id
+             * Format: uuid
+             */
+            lineage_agent_id: string;
+            /** Lineage Evaluation Completed */
+            lineage_evaluation_completed: boolean;
+            /** Miner Coldkey */
+            miner_coldkey: string;
         };
         /**
          * V12AnswerStuffingGate
@@ -43570,6 +49754,32 @@ export interface components {
             /** Source Revision */
             source_revision: string;
         };
+        /**
+         * V16ScoredRuntimeEnvEvidence
+         * @description Keys reported by a descriptor-verified scorer for its v16 sandbox.
+         *
+         *     v16 (the dueling bench) injects the v15 key set, but the packet is bound to
+         *     its version like every earlier one, so a v15 packet can never qualify a
+         *     v16 rollout.
+         */
+        V16ScoredRuntimeEnvEvidence: {
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 16;
+            /** Injected Keys */
+            injected_keys: string[];
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "scorer-injected-env-only";
+            /** Sha256 */
+            sha256: string;
+            /** Source Revision */
+            source_revision: string;
+        };
         /** V7InferenceCalibration */
         V7InferenceCalibration: {
             /** Manifest Sha256 */
@@ -43620,7 +49830,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
             /** Dataset Sha256 */
             dataset_sha256: string;
             /** Effective Composite Micros */
@@ -43713,7 +49923,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
             composite_policy: components["schemas"]["V9ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -43808,7 +50018,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
             /**
              * Bundle Id
              * Format: uuid
@@ -44121,7 +50331,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
             claim_provenance?: components["schemas"]["V13ClaimProvenanceGate"] | null;
             inference_latency?: components["schemas"]["V12InferenceLatencyGate"] | null;
             model_dependence?: components["schemas"]["V12ModelDependenceGate"] | null;
@@ -44234,6 +50444,11 @@ export interface components {
             /** Screened Images */
             screened_images: boolean;
             /**
+             * Season Commitments
+             * @default false
+             */
+            season_commitments: boolean;
+            /**
              * Signed Score Quorum
              * @default false
              */
@@ -44340,6 +50555,21 @@ export interface components {
             /** Issuance Paused */
             issuance_paused: boolean;
             /**
+             * Memory Admitted Slots
+             * @description Derived: harnesses at the live sandbox memory cap this host's announced memory admits after the published host reserve. Null when the host announced no memory. A validator with a custom reserve may admit slightly fewer or more.
+             */
+            memory_admitted_slots?: number | null;
+            /**
+             * Memory Note
+             * @description When memory admits fewer slots than configured: how many, and the host memory needed for one slot (if none) and for all.
+             */
+            memory_note?: string | null;
+            /**
+             * Memory Required Mib
+             * @description Derived: the least host memory that admits every configured slot at the live sandbox memory cap. Null when unknown.
+             */
+            memory_required_mib?: number | null;
+            /**
              * Reserved Round Slots
              * @description Of the allowed slots, how many are held back for generator-round runs: canonical and retest work cannot take them. Zero while validator rounds are disabled or the validator does not advertise round support.
              * @default 0
@@ -44355,8 +50585,35 @@ export interface components {
              * @description Healthy slots dispatch will fund right now: the fleet view's `allowed_slots` narrowed to `healthy_slots`, and zero unless the validator can serve the active benchmark.
              */
             serviceable_slots: number;
+            /**
+             * Slots
+             * @description Every configured slot with its state or unusable reason.
+             */
+            slots?: components["schemas"]["ValidatorCapacitySlot"][];
+            /**
+             * Unusable Slots
+             * @description Configured slots whose `state` is `unusable`.
+             * @default 0
+             */
+            unusable_slots: number;
             /** Validator Hotkey */
             validator_hotkey: string;
+        };
+        /**
+         * ValidatorCapacitySlot
+         * @description One configured slot and what it is doing, or why it cannot work.
+         */
+        ValidatorCapacitySlot: {
+            /** Reason */
+            reason?: ("admission_draining" | "admission_paused" | "admission_resource_constrained" | "host_memory_admission" | "validator_unhealthy" | "bench_scorer_unverified" | "bench_software_obsolete" | "issuance_paused" | "platform_slot_cap") | null;
+            /** Slot Id */
+            slot_id: string;
+            /**
+             * State
+             * @description `claimed` holds a lease or signed occupancy; `free` can take canonical or retest work now; `reserved_round` is held back for generator-round runs; `unusable` cannot take any ticket, and `reason` says why.
+             * @enum {string}
+             */
+            state: "claimed" | "free" | "reserved_round" | "unusable";
         };
         /**
          * ValidatorCapacitySummary
@@ -44373,6 +50630,12 @@ export interface components {
             active_bench_version: number;
             /** Claimed Slots */
             claimed_slots: number;
+            /**
+             * Configured Slots
+             * @description Sum of every live validator's configured slots.
+             * @default 0
+             */
+            configured_slots: number;
             /**
              * Eligible Unleased Count
              * @description Active-era submissions passing the fleet-wide queue filter with quorum slots left and no live lease. Owner serialization and per-validator exclusions are not applied, so this is an upper bound on leasable work.
@@ -44391,6 +50654,12 @@ export interface components {
             /** Live Validator Count */
             live_validator_count: number;
             /**
+             * Memory Admitted Slots
+             * @description Sum over live validators that announced memory of `min(memory_admitted_slots, configured_slots)`: the most slots this fleet's hosts can run at the live cap, whatever `configured_slots` says.
+             * @default 0
+             */
+            memory_admitted_slots: number;
+            /**
              * Oldest Eligible Unleased Age Seconds
              * @description Queue age of the oldest of those submissions on the allocator's FIFO clock (arrival clamped to the era start). Null when none wait.
              */
@@ -44399,6 +50668,11 @@ export interface components {
             online_window_seconds: number;
             /** Relay */
             relay: components["schemas"]["RelayLaneSaturation"][];
+            /**
+             * Sandbox Memory Limit Mib
+             * @description The live per-harness memory cap `memory_admitted_slots` uses.
+             */
+            sandbox_memory_limit_mib?: number | null;
             /** Serviceable Slots */
             serviceable_slots: number;
             /**
@@ -44408,6 +50682,13 @@ export interface components {
             serviceable_validator_count: number;
             /** Unestimated Assignment Count */
             unestimated_assignment_count: number;
+            /**
+             * Unusable Slots By Reason
+             * @description Configured slots that cannot take a ticket, by reason, across every live validator. Claimed slots are never counted here.
+             */
+            unusable_slots_by_reason?: {
+                [key: string]: number;
+            };
             /** Validators */
             validators: components["schemas"]["ValidatorCapacityEntry"][];
             /** Validators Truncated */
@@ -44562,6 +50843,11 @@ export interface components {
              */
             leases?: components["schemas"]["HeldLease"][] | null;
             /**
+             * Sandbox Memory Limit Mib
+             * @description The live per-harness memory cap, so a validator sizes host memory admission to it before its first lease. A host that admits no slot gets no lease, and without this would never learn of a cap change. ``null`` means not answered: keep the cap last seen.
+             */
+            sandbox_memory_limit_mib?: number | null;
+            /**
              * Seen At
              * Format: date-time
              */
@@ -44572,6 +50858,8 @@ export interface components {
          * @description Process-local poll outcome tally; resets when Platform API restarts.
          */
         ValidatorRequestOutcomeSummary: {
+            /** @description The job allocator's dispatch fence: who holds it, hold times, and whose allocator_busy polls bounced off whose. */
+            allocator?: components["schemas"]["DispatchFenceSnapshot"] | null;
             /**
              * Observed At
              * Format: date-time
@@ -45346,6 +51634,19 @@ export interface components {
              */
             vector_digest: string;
         };
+        /** WindowSummary */
+        WindowSummary: {
+            /** Failed */
+            failed: number;
+            /** Missed */
+            missed: number;
+            /** Passed */
+            passed: number;
+            /** Scheduled */
+            scheduled: number;
+            /** Window Index */
+            window_index: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -45588,6 +51889,41 @@ export interface operations {
             };
         };
     };
+    get_agent_harness_memory_api_v1_admin_agents__agent_id__harness_memory_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentHarnessMemory"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_lineage_source_diff_api_v1_admin_agents__agent_id__lineage_source_diff_get: {
         parameters: {
             query: {
@@ -45716,6 +52052,147 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceReleaseEvidence"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_airdrop_runs_api_v1_admin_airdrops_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                idempotency_key?: string | null;
+                asset?: ("alpha" | "ditto_credits") | null;
+                mode?: ("rehearsal" | "live") | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AirdropRunList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execute_airdrop_api_v1_admin_airdrops_execute_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AirdropExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AirdropExecuteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_airdrop_api_v1_admin_airdrops_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AirdropPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AirdropPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_airdrop_run_api_v1_admin_airdrops__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AirdropRunReport"];
                 };
             };
             /** @description Validation Error */
@@ -49067,6 +55544,7 @@ export interface operations {
                 include?: "current_comparison" | null;
                 generation?: "active" | "rollout" | "history" | "all";
                 review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score") | null;
+                order?: "oldest" | "public_reference_first";
             };
             header?: {
                 authorization?: string | null;
@@ -49448,6 +55926,276 @@ export interface operations {
             };
         };
     };
+    get_settings_api_v1_admin_edge_lane_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminEdgeLaneSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_edge_lane_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminEdgeLaneSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeLaneSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ledger_api_v1_admin_edge_ledger_get: {
+        parameters: {
+            query?: {
+                window_index?: number | null;
+                node_id?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeLedgerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nodes_api_v1_admin_edge_nodes_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeNodesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    objects_api_v1_admin_edge_objects_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeObjectsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_api_v1_admin_edge_objects_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EdgeObjectIngestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeObjectIngestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_api_v1_admin_edge_objects__digest__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                digest: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EdgeObjectRevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeObjectRevokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    overview_api_v1_admin_edge_overview_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeLaneOverview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_settings_api_v1_admin_efficiency_bonus_settings_get: {
         parameters: {
             query?: never;
@@ -49813,11 +56561,122 @@ export interface operations {
             };
         };
     };
+    admin_republish_dueling_season_commitment_api_v1_admin_generator_competition_dueling_seasons__season_id__republish_commitment_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                season_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminDuelingCommitmentRepublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSeasonView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     admin_dueling_slices_api_v1_admin_generator_competition_dueling_slices_get: {
         parameters: {
             query?: {
                 season_id?: string | null;
                 status?: ("pending" | "leased" | "ready" | "failed") | null;
+                limit?: number;
+                offset?: number;
+                preparation_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDuelingSlicesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_retry_dueling_slice_api_v1_admin_generator_competition_dueling_slices__preparation_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                preparation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminDuelingSliceRetryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSliceView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_generator_source_releases_api_v1_admin_generator_competition_dueling_source_releases_get: {
+        parameters: {
+            query?: {
+                status?: ("waiting_close" | "waiting_reveal" | "embargoed" | "due" | "withheld" | "released") | null;
+                submission_id?: string | null;
                 limit?: number;
                 offset?: number;
             };
@@ -49835,7 +56694,76 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AdminDuelingSlicesResponse"];
+                    "application/json": components["schemas"]["AdminGeneratorSourceReleasesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_frontier_audits_api_v1_admin_generator_competition_frontier_audits_get: {
+        parameters: {
+            query?: {
+                include_ruled?: boolean;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierAuditListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_list_prescreens_api_v1_admin_generator_competition_prescreens_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorPrescreenListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -50166,6 +57094,187 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GeneratorRoundDatasetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_round_frontier_api_v1_admin_generator_competition_rounds__round_index__frontier_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_frontier_audit_detail_api_v1_admin_generator_competition_rounds__round_index__frontier_audits__column_id__get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+                column_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierAuditDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_rule_frontier_audit_api_v1_admin_generator_competition_rounds__round_index__frontier_audits__column_id__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+                column_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorFrontierAuditRuling"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_rerun_frontier_api_v1_admin_generator_competition_rounds__round_index__frontier_rerun_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorFrontierRerunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_settle_frontier_api_v1_admin_generator_competition_rounds__round_index__frontier_settle_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorFrontierSettleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierView"];
                 };
             };
             /** @description Validation Error */
@@ -50600,6 +57709,120 @@ export interface operations {
             };
         };
     };
+    admin_generator_source_file_api_v1_admin_generator_competition_submissions__submission_id__source_file_get: {
+        parameters: {
+            query: {
+                path: string;
+                start_line?: number;
+                end_line?: number;
+            };
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSourceExcerpt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_generator_source_files_api_v1_admin_generator_competition_submissions__submission_id__source_files_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSourceListing"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_generator_source_search_api_v1_admin_generator_competition_submissions__submission_id__source_search_get: {
+        parameters: {
+            query: {
+                pattern: string;
+                mode?: "regex" | "literal";
+                ignore_case?: boolean;
+                path_glob?: string | null;
+                context?: number;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSourceSearchResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     github_revocation_preflight_api_v1_admin_github_links__link_id__get: {
         parameters: {
             query?: never;
@@ -50730,6 +57953,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_harness_memory_api_v1_admin_harness_memory_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HarnessMemoryList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -51316,6 +58573,314 @@ export interface operations {
             };
         };
     };
+    admin_run_detail_api_v1_admin_model_context_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextRunDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scorer_status_api_v1_admin_model_context_scorer_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextScorerStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rotate_api_v1_admin_model_context_seasons_rotate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminRotateSeasonRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextSeasonView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_api_v1_admin_model_context_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_model_context_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminModelContextSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_list_submissions_api_v1_admin_model_context_submissions_get: {
+        parameters: {
+            query?: {
+                hotkey?: string | null;
+                status?: ("screening" | "queued" | "scored" | "rejected" | "superseded") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextSubmissionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_submission_detail_api_v1_admin_model_context_submissions__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_submission_by_operator_api_v1_admin_model_context_submissions__submission_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminModelContextSubmissionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rescore_submission_api_v1_admin_model_context_submissions__submission_id__rescore_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminModelContextSubmissionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_operator_diagnostic_api_v1_admin_operator_diagnostic__agent_id__get: {
         parameters: {
             query?: never;
@@ -51618,6 +59183,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueuePolicySettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_readmissions_api_v1_admin_readmissions_get: {
+        parameters: {
+            query?: {
+                bench_version?: number | null;
+                miner_coldkey?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminReadmissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_registration_freshness_api_v1_admin_registration_freshness_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistrationFreshnessView"];
                 };
             };
             /** @description Validation Error */
@@ -52582,19 +60214,15 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScheduleScreenerPolicyActivationRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description screening source review is retired (owner decision 2026-11-07): new review-policy activations, review clocks and scored-policy rescreens are no longer scheduled; build and safety checks are the whole screen */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScreenerPolicyActivationView"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -52617,19 +60245,15 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AdvanceScoredPolicyRescreenRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description screening source review is retired (owner decision 2026-11-07): new review-policy activations, review clocks and scored-policy rescreens are no longer scheduled; build and safety checks are the whole screen */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScoredPolicyRescreenView"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -52718,19 +60342,15 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScheduleV13ReviewClockRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description screening source review is retired (owner decision 2026-11-07): new review-policy activations, review clocks and scored-policy rescreens are no longer scheduled; build and safety checks are the whole screen */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["V13ReviewClockSchedule"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -53333,6 +60953,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminQuarantineItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    amend_quarantine_reject_reason_api_v1_admin_screening_quarantines__quarantine_id__amend_reason_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                quarantine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminQuarantineReasonAmendRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminQuarantineReasonAmendResponse"];
                 };
             };
             /** @description Validation Error */
@@ -55977,6 +63635,40 @@ export interface operations {
             };
         };
     };
+    get_upload_payment_proof_api_v1_admin_upload_payments__block_hash___extrinsic_index__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                block_hash: string;
+                extrinsic_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadPaymentProofView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_official_controls_api_v1_admin_v13_official_controls_get: {
         parameters: {
             query?: {
@@ -57740,6 +65432,312 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    acknowledge_api_v1_edge_ack_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Held
+                     * @default []
+                     */
+                    held?: string[];
+                    /**
+                     * Released
+                     * @default []
+                     */
+                    released?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AckResponse"];
+                };
+            };
+        };
+    };
+    answer_api_v1_edge_challenges__challenge_id__post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path: {
+                challenge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Data B64 */
+                    data_b64?: string | null;
+                    /**
+                     * Outcome
+                     * @enum {string}
+                     */
+                    outcome: "proof" | "bytes" | "refused";
+                    /** Proof Hex */
+                    proof_hex?: string | null;
+                    /** Refusal */
+                    refusal?: ("revoked" | "not_held" | "busy") | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnswerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enroll_api_v1_edge_nodes_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * ClientInfo
+                     * @description Which node implementation is talking. A label, never a scoring input.
+                     */
+                    client: {
+                        /** Name */
+                        name: string;
+                        /** Version */
+                        version: string;
+                    };
+                    hotkey_binding?: {
+                        /** Hotkey Ss58 */
+                        hotkey_ss58: string;
+                        /** Issued At */
+                        issued_at: number;
+                        /** Signature Hex */
+                        signature_hex: string;
+                    } | null;
+                    /**
+                     * NodePlatform
+                     * @description What the node says about its machine.
+                     *
+                     *     Self-reported, so it is shown to operators and never scored: a root-owned
+                     *     box can report anything about itself.
+                     */
+                    platform?: {
+                        /**
+                         * Arch
+                         * @default
+                         */
+                        arch?: string;
+                        /** Memory Gb */
+                        memory_gb?: number | null;
+                        /**
+                         * Model
+                         * @default
+                         */
+                        model?: string;
+                        /**
+                         * Os
+                         * @default
+                         */
+                        os?: string;
+                    };
+                    /**
+                     * Protocol
+                     * @constant
+                     */
+                    protocol: "edge/v1";
+                    /** Public Key Hex */
+                    public_key_hex: string;
+                    /** Quota Bytes */
+                    quota_bytes: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollResponse"];
+                };
+            };
+        };
+    };
+    node_status_api_v1_edge_nodes_me_get: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeStatusResponse"];
+                };
+            };
+        };
+    };
+    leave_api_v1_edge_nodes_me_leave_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Reason
+                     * @default
+                     */
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    fill_api_v1_edge_objects__digest__get: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path: {
+                digest: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The object's bytes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    poll_api_v1_edge_poll_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Free Bytes */
+                    free_bytes: number;
+                    /**
+                     * Protocol
+                     * @constant
+                     */
+                    protocol: "edge/v1";
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PollResponse"];
                 };
             };
         };
@@ -59618,6 +67616,329 @@ export interface operations {
             };
         };
     };
+    post_fault_api_v1_model_context_scorer_fault_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelContextFaultRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextFaultAck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reference_work_api_v1_model_context_scorer_reference_work_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextReferenceWork"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_results_api_v1_model_context_scorer_results_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelContextResultRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextResultResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lease_work_api_v1_model_context_scorer_work_get: {
+        parameters: {
+            query: {
+                scorer_id: string;
+                scorer_version?: string | null;
+                gpu_sku?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextWorkItem"];
+                };
+            };
+            /** @description Nothing to score. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_api_v1_model_context_board_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextBoardResponse"];
+                };
+            };
+        };
+    };
+    seasons_api_v1_model_context_seasons_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextSeasonListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_submissions_api_v1_model_context_submissions_get: {
+        parameters: {
+            query: {
+                hotkey: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextSubmissionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_api_v1_model_context_submissions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelContextSubmissionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextSubmissionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_submission_api_v1_model_context_submissions__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextSubmissionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_terms_api_v1_model_context_upload_terms_get: {
+        parameters: {
+            query?: {
+                hotkey?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextUploadTerms"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_claims_api_v1_name_claims_get: {
         parameters: {
             query?: never;
@@ -60426,6 +68747,168 @@ export interface operations {
             };
         };
     };
+    public_generator_source_api_v1_public_dueling_generator_sources__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicGeneratorSource"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_generator_source_archive_api_v1_public_dueling_generator_sources__submission_id__archive_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The exact pinned archive (``source_sha256``). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/gzip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_dueling_seasons_api_v1_public_dueling_seasons_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                before_index?: number | null;
+                before_bench_version?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicDuelingSeasonList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_dueling_season_api_v1_public_dueling_seasons__season_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                season_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicDuelingSeason"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_dueling_slices_api_v1_public_dueling_seasons__season_id__slices_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                /** @description Decimal run seed (an int64; sent as text so it is exact) */
+                run_seed?: string | null;
+            };
+            header?: never;
+            path: {
+                season_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicDuelingSlicePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     efficiency_snapshot_api_v1_public_efficiency_snapshots__snapshot_id__get: {
         parameters: {
             query?: never;
@@ -61057,6 +69540,72 @@ export interface operations {
             };
         };
     };
+    check_api_v1_readmission_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReadmissionCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadmissionCheckResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    commit_api_v1_readmission_commit_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReadmissionCommitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadmissionCommitResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     agent_by_hotkey_api_v1_retrieval_agent_by_hotkey_get: {
         parameters: {
             query: {
@@ -61150,6 +69699,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GeneratorLedgerResponse"];
+                };
+            };
+            /** @description Missing/invalid validator auth. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale or replayed ledger request proof. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Chain unavailable, or nonce store unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_context_ledger_api_v1_scoring_model_context_ledger_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+                "x-validator-ledger-nonce"?: string | null;
+                "x-validator-ledger-requested-at"?: string | null;
+                "x-validator-ledger-signature"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextLedgerResponse"];
                 };
             };
             /** @description Missing/invalid validator auth. */
@@ -62206,7 +70810,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ConversationClaimRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -62850,6 +71458,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                policy_only?: boolean;
             };
             header?: {
                 "x-screener-hotkey"?: string | null;
@@ -63709,6 +72318,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmitTranscriptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_dueling_season_commitment_job_api_v1_validator_dueling_season_commitment_job_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DuelingSeasonCommitmentJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSeasonCommitmentJobResponse"];
+                };
+            };
+            /** @description No season commitment needs this validator. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    report_dueling_season_commitment_api_v1_validator_dueling_season_commitment_report_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DuelingSeasonCommitmentReportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSeasonCommitmentReportResponse"];
                 };
             };
             /** @description Validation Error */

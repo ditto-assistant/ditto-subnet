@@ -51,6 +51,7 @@ from ditto.validator.update_control import (
 )
 from ditto.validator.worker import (
     PlatformGeneratorLedgerSource,
+    PlatformModelContextLedgerSource,
     PlatformRouterLedgerSource,
     ValidatorWorker,
 )
@@ -194,6 +195,16 @@ async def _amain() -> int:
                     if config.generator_ledger_read_enabled
                     else None
                 )
+                # model_context (CPM) track: SHADOW at 0 bps (contract
+                # docs/research/cpm/competition-v1.md section 7). Reading folds
+                # and logs the ledger; it changes no chain output.
+                model_context_ledger_source = (
+                    PlatformModelContextLedgerSource(
+                        read=platform.get_model_context_ledger
+                    )
+                    if config.model_context_ledger_read_enabled
+                    else None
+                )
                 worker = ValidatorWorker(
                     config=config,
                     platform=platform,
@@ -208,6 +219,7 @@ async def _amain() -> int:
                     ),
                     router_ledger_source=router_ledger_source,
                     generator_ledger_source=generator_ledger_source,
+                    model_context_ledger_source=model_context_ledger_source,
                 )
                 async with AsyncExitStack() as coding_resources:
                     coding_worker = await _create_coding_shadow_worker(

@@ -53,6 +53,7 @@ from ditto.db.queries.queue_order import (
     owner_live_lease_agent_ids,
     queue_candidate_predicate,
     queue_order_terms,
+    queue_score_season_scope,
     quorum_capable_validator_hotkeys,
     resolve_fifo_start_at,
     resolve_owner_linkage,
@@ -202,16 +203,25 @@ def scoring_retry_ticket() -> ColumnElement[bool]:
     )
 
 
-def release_generator_round_dataset_pin(ticket: ValidatorTicket) -> None:
-    """Drop a generator round's dataset pin before a scoring lane reuses a row.
+# Lanes that pin a dataset of their own on the shared (agent, version,
+# validator) row instead of the validator-identity seed a scoring lease uses.
+_FOREIGN_DATASET_PIN_PURPOSES = frozenset(
+    {TicketPurpose.GENERATOR_ROUND, TicketPurpose.CONTINUAL_RETEST}
+)
 
-    The round lease pins the round's own dataset on the shared row. A scoring
-    lease re-derives its seed from the agent's dataset block and this
-    validator's identity at job time, so clearing the pin restores exactly the
-    one a prior scoring lease held. Without this, the scoring job is refused
-    because its seed does not match the validator identity. No-op otherwise.
+
+def release_foreign_dataset_pin(ticket: ValidatorTicket) -> None:
+    """Drop another lane's dataset pin before a scoring lane reuses a row.
+
+    A generator round pins the round's dataset, and a continual retest pins
+    its shared wave seed, on the same row a canonical score uses (the retest
+    row closes ``scored`` still holding that seed). A scoring lease re-derives
+    its seed from the agent's dataset block and this validator's identity at
+    job time, so clearing the pin restores exactly the one the prior scoring
+    lease held. Without this, the job is refused on every poll because its
+    seed does not match the validator identity. No-op for any other purpose.
     """
-    if ticket.purpose != TicketPurpose.GENERATOR_ROUND:
+    if ticket.purpose not in _FOREIGN_DATASET_PIN_PURPOSES:
         return
     ticket.seed = None
     ticket.dataset_sha256 = None
@@ -758,6 +768,9 @@ async def issue_ticket(
         provisional_contender_floor=provisional_contender_floor,
         completion_first=completion_first,
         validator_hotkey=validator_hotkey,
+        score_season_scope=await queue_score_season_scope(
+            session, bench_version=bench_version
+        ),
     )
     # Lock one candidate Agent row before counting its tickets. The recount is a
     # separate statement after the lock is acquired, so under Postgres READ
@@ -1088,7 +1101,7 @@ async def issue_ticket(
         else:
             # ``attempt_count`` already counts only scoring leases, so it
             # continues from its true value below.
-            release_generator_round_dataset_pin(ticket)
+            release_foreign_dataset_pin(ticket)
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1
@@ -1493,15 +1506,24 @@ async def get_open_ticket(
 ) -> ValidatorTicket | None:
     """Return the validator's live ticket matching the signed lease.
 
-    ``bench_version=None`` is reserved for signed heartbeat progress, where the
-    exact lease deadline identifies work across benchmark versions. The
-    one-issued-ticket-per-validator index keeps that cross-version lookup
-    unambiguous.
+    ``bench_version=None`` is the cross-version lookup used by signed heartbeat
+    progress and ``fail_job``, which name a lease only by agent and deadline.
+    Nothing in the schema makes that unique: ``(agent, bench_version,
+    validator)`` is the primary key and
+    ``validator_tickets_one_issued_per_validator_slot_idx`` is unique on
+    ``(validator_hotkey, slot_id)``, so one validator can hold issued rows at
+    two versions on two slots (an unswept overdue lease beside a fresh one, or
+    any pair that predates the issuer-side refusal). The signed deadline is
+    therefore part of the SQL predicate, not a check on whichever row the
+    database happened to return first, and a lookup that still matches more
+    than one row resolves to nothing rather than to an arbitrary lease.
     """
     statement = select(ValidatorTicket).where(
         ValidatorTicket.agent_id == agent_id,
         ValidatorTicket.validator_hotkey == validator_hotkey,
         ValidatorTicket.status == TicketStatus.ISSUED,
+        ValidatorTicket.deadline == _as_utc(deadline).astimezone(UTC),
+        ValidatorTicket.deadline > _as_utc(now).astimezone(UTC),
     )
     if bench_version is not None:
         statement = statement.where(ValidatorTicket.bench_version == bench_version)
@@ -1509,14 +1531,10 @@ async def get_open_ticket(
         statement = statement.where(ValidatorTicket.slot_id == slot_id)
     if for_update:
         statement = statement.with_for_update()
-    ticket = await session.scalar(statement)
-    if (
-        ticket is None
-        or _as_utc(ticket.deadline) <= now
-        or _as_utc(ticket.deadline) != _as_utc(deadline)
-    ):
+    matches = (await session.scalars(statement.limit(2))).all()
+    if len(matches) != 1:
         return None
-    return ticket
+    return matches[0]
 
 
 async def get_live_slot_ticket(

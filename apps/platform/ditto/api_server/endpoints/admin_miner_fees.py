@@ -11,9 +11,11 @@ from sqlalchemy import case, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.admin_miner_fees import AdminMinerFeeSummary, MinerFeeDay
+from ditto.api_models.admin_readmissions import MinerFeeReadmissionLane
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.db.models import EvaluationPayment
+from ditto.db.queries.readmission import readmission_fee_totals
 from ditto.db.queries.submission_deposit_address import (
     effective_submission_deposit_address,
 )
@@ -74,7 +76,17 @@ async def get_miner_fee_summary(
     payment_address = await effective_submission_deposit_address(
         session, default_address=request.app.state.config.upload_payment_address
     )
+    lane = await readmission_fee_totals(session)
     return AdminMinerFeeSummary(
+        readmission=MinerFeeReadmissionLane(
+            admitted=lane.admitted,
+            admitted_amount_rao=lane.admitted_amount_rao,
+            credit_funded=lane.credit_funded,
+            credited=lane.credited,
+            credited_amount_rao=lane.credited_amount_rao,
+            upload_readmissions=lane.upload_readmissions,
+            upload_readmission_amount_rao=lane.upload_readmission_amount_rao,
+        ),
         generated_at=generated_at,
         payment_address=payment_address,
         paid_submissions=paid_submissions,

@@ -98,12 +98,19 @@ from ditto.api_server.koth import (
     koth_entries_from_ledger,
     project_koth,
 )
+from ditto.api_server.ledger_pin import (
+    crown_family_root,
+    pin_row_champion_hotkey,
+)
 from ditto.api_server.storage.errors import (
     ObjectDownloadFailedError,
     ObjectNotFoundError,
 )
 from ditto.db.models import Agent, AgentStatus, AthReview, AthReviewAction, Score
 from ditto.db.queries.ledger_epochs import latest_pin
+from ditto.db.queries.terminal_quarantine_reconciliation import (
+    TERMINAL_QUARANTINE_AGENT_STATUSES,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -227,6 +234,7 @@ class BoardSnapshot:
     app_state: Any
     anchor_owner_root: str | None
     anchor_agent_id: UUID | None
+    anchor_hotkey: str | None
     pin_context: str
     excluded_agent_ids: frozenset[UUID]
     restored_agent_ids: frozenset[UUID]
@@ -253,6 +261,7 @@ class BoardSnapshot:
         app_state: Any,
         anchor_owner_root: str | None,
         anchor_agent_id: UUID | None,
+        anchor_hotkey: str | None,
         pin_context: str,
         excluded_agent_ids: frozenset[UUID],
         restored_agent_ids: frozenset[UUID],
@@ -273,6 +282,7 @@ class BoardSnapshot:
             app_state=app_state,
             anchor_owner_root=anchor_owner_root,
             anchor_agent_id=anchor_agent_id,
+            anchor_hotkey=anchor_hotkey,
             pin_context=pin_context,
             excluded_agent_ids=excluded_agent_ids,
             restored_agent_ids=restored_agent_ids,
@@ -384,6 +394,7 @@ async def read_board_snapshot_for_state(
         read_at=read_at,
         anchor_owner_root=pin.champion_owner_root if pin else None,
         anchor_agent_id=pin.champion_agent_id if pin else None,
+        anchor_hotkey=pin_row_champion_hotkey(pin) if pin else None,
         pin_context=(
             f"{pin.epoch_index}:{pin.ledger_digest}:{pin.champion_owner_root}:{pin.champion_agent_id}"
             if pin
@@ -402,6 +413,7 @@ async def _project_board(
     read_at: datetime,
     anchor_owner_root: str | None,
     anchor_agent_id: UUID | None,
+    anchor_hotkey: str | None,
     pin_context: str,
     excluded_agent_ids: frozenset[UUID],
     restored_agent_ids: frozenset[UUID],
@@ -420,11 +432,22 @@ async def _project_board(
     incumbent = None
     provisional = None
     if snapshot.crown_mode == "incumbent":
+        # Resolved per hypothetical membership, exactly as ``build_pin_draft``
+        # will resolve it for the membership the ruling leaves behind.
+        family = crown_family_root(
+            stored_root=anchor_owner_root,
+            champion_agent_id=anchor_agent_id,
+            champion_hotkey=anchor_hotkey,
+            members=(
+                (entry.agent_id, entry.miner_hotkey, owner_roots.get(entry.agent_id))
+                for entry in (*snapshot.entries, *(snapshot.withheld_entries or ()))
+            ),
+        )
 
         def matches(entry: Any) -> bool:
             return (
-                owner_roots.get(entry.agent_id) == anchor_owner_root
-                if anchor_owner_root is not None
+                owner_roots.get(entry.agent_id) == family
+                if family is not None
                 else anchor_agent_id is not None and entry.agent_id == anchor_agent_id
             )
 
@@ -455,6 +478,7 @@ async def _project_board(
         app_state=app_state,
         anchor_owner_root=anchor_owner_root,
         anchor_agent_id=anchor_agent_id,
+        anchor_hotkey=anchor_hotkey,
         pin_context=pin_context,
         excluded_agent_ids=excluded_agent_ids,
         restored_agent_ids=restored_agent_ids,
@@ -464,6 +488,10 @@ async def _project_board(
 def _ready_message(steps: list[AthRulingStep], *, reconsidering: bool) -> str:
     if steps == ["attest"]:
         return "will clear without holding (the agent stays on the board)"
+    if steps == ["close_terminal"]:
+        return (
+            "will close the stranded review as reject; the terminal agent is unchanged"
+        )
     if reconsidering and steps == ["open", "clear"]:
         return "will reopen the rejected review then clear it to its pre-reject status"
     if reconsidering:
@@ -479,7 +507,7 @@ async def _crown_effect(
     action: str,
 ) -> tuple[bool, BoardSnapshot]:
     """Rebuild hypothetical membership before owner collapse and wave folding."""
-    if action == "attest":
+    if action in {"attest", "close_terminal"}:
         return False, board
     removing = action in {"open", "reject"}
     after = await _project_board(
@@ -489,6 +517,7 @@ async def _crown_effect(
         read_at=board.read_at,
         anchor_owner_root=board.anchor_owner_root,
         anchor_agent_id=board.anchor_agent_id,
+        anchor_hotkey=board.anchor_hotkey,
         pin_context=board.pin_context,
         excluded_agent_ids=(
             board.excluded_agent_ids | {agent.agent_id}
@@ -627,7 +656,26 @@ async def _preview_ruling(
             conflict_reason="score count changed",
             message="score count changed since the ruling was prepared",
         )
-    if ruling.action == "reject" and not ruling.evidence_references:
+    # A pending review behind an agent that is already rejected or banned is
+    # terminal history, not queue work (SN-434). Only a reject agrees with
+    # that state; it closes the review and leaves the agent as it is.
+    stranded_terminal = (
+        review is not None
+        and review.status == "pending"
+        and agent.status in TERMINAL_QUARANTINE_AGENT_STATUSES
+    )
+    terminal_closed = (
+        review is not None
+        and review.status == "resolved"
+        and "terminal_close" in (review.algorithm_provenance or {})
+        and agent.status in TERMINAL_QUARANTINE_AGENT_STATUSES
+    )
+    if (
+        ruling.action == "reject"
+        and not ruling.evidence_references
+        and not stranded_terminal
+        and not terminal_closed
+    ):
         return _blocked(
             **base,
             ok=False,
@@ -667,7 +715,12 @@ async def _preview_ruling(
     # open_review reopens exactly that review (``reconsidering_rejection``),
     # retaining the status recorded before the reject so a clear restores it.
     # Any other path into BANNED has no review to reconsider and stays refused.
-    reconsidering = resolved_as == "reject" and agent.status == AgentStatus.BANNED
+    reconsidering = (
+        resolved_as == "reject"
+        and agent.status == AgentStatus.BANNED
+        and review is not None
+        and "terminal_close" not in (review.algorithm_provenance or {})
+    )
     steps: list[AthRulingStep]
     if ruling.action == "open":
         if held:
@@ -711,6 +764,11 @@ async def _preview_ruling(
             reason = (
                 "agent is held but its review is not pending"
                 if agent.status == AgentStatus.ATH_PENDING_REVIEW
+                else (
+                    f"agent is {agent.status.value}, not held; a reject ruling"
+                    " closes this stranded review"
+                )
+                if stranded_terminal
                 else f"agent is {agent.status.value}, not held"
             )
             return _blocked(
@@ -723,6 +781,17 @@ async def _preview_ruling(
     else:  # reject
         if held:
             steps = ["reject"]
+        elif stranded_terminal:
+            steps = ["close_terminal"]
+        elif terminal_closed:
+            return _blocked(
+                **base,
+                ok=True,
+                disposition="already_applied",
+                message=(
+                    f"stranded review already closed; agent is {agent.status.value}"
+                ),
+            )
         elif scored_or_live or agent.status == AgentStatus.EVALUATING:
             # Below quorum is accepted too: rejecting a proven violation then
             # expires its live validator tickets instead of paying for the
@@ -746,7 +815,9 @@ async def _preview_ruling(
                 ),
                 message="neither open nor resolve would be accepted",
             )
-    projected_action = "attest" if steps == ["attest"] else ruling.action
+    projected_action = (
+        steps[0] if steps in (["attest"], ["close_terminal"]) else ruling.action
+    )
     if ruling.action == "clear" and review is not None and steps != ["attest"]:
         latest_reopen = await session.scalar(
             select(AthReviewAction)
@@ -980,15 +1051,119 @@ async def _annotate_batch_audit(
             action.evidence = {**action.evidence, "batch_ruling": annotation}
 
 
+async def close_terminal_review(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    expected_sha256: str,
+    expected_score_count: int,
+    reason: str,
+    actor: str,
+) -> bool:
+    """Close a pending ATH review stranded behind a terminal agent (SN-434).
+
+    ``resolve_copy_review`` answers 409 once ``agents.status`` has left
+    ``ath_pending_review``, so a review whose agent was rejected or banned by
+    another path stayed pending forever and could not be closed. Under the
+    agent and review row locks this re-checks the previewed state and resolves
+    the review as ``reject`` -- the only resolution that agrees with a terminal
+    agent -- appending one ``reject`` action. The agent row, its scores and
+    the board are untouched; the original hold evidence is retained.
+    """
+    agent = await session.scalar(
+        select(Agent)
+        .where(Agent.agent_id == agent_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    review = await session.scalar(
+        select(AthReview)
+        .where(AthReview.agent_id == agent_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if review is None:
+        raise HTTPException(status_code=409, detail="review is not pending")
+    if agent.status not in TERMINAL_QUARANTINE_AGENT_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"agent is {agent.status.value}, not terminal",
+        )
+    if agent.sha256 != expected_sha256:
+        raise HTTPException(status_code=409, detail="artifact sha256 changed")
+    score_count = int(
+        await session.scalar(
+            select(func.count()).select_from(Score).where(Score.agent_id == agent_id)
+        )
+        or 0
+    )
+    if score_count != expected_score_count:
+        raise HTTPException(status_code=409, detail="score count changed")
+    if review.status != "pending":
+        if (
+            review.status == "resolved"
+            and review.resolution == "reject"
+            and "terminal_close" in (review.algorithm_provenance or {})
+        ):
+            return False
+        raise HTTPException(status_code=409, detail="review is not pending")
+    now = datetime.now(UTC)
+    # A JSON null decodes to None; the column itself is NOT NULL.
+    provenance = review.algorithm_provenance or {}
+    evidence = {
+        "terminal_close": True,
+        "agent_status": agent.status.value,
+        "artifact_sha256": agent.sha256,
+        "score_count": score_count,
+        "review_kind": provenance.get("review_kind"),
+    }
+    review.status = "resolved"
+    review.resolution = "reject"
+    review.resolution_reason = reason
+    review.resolved_by = actor
+    review.resolved_at = now
+    review.algorithm_provenance = {
+        **provenance,
+        "terminal_close": evidence,
+    }
+    session.add(
+        AthReviewAction(
+            action_id=uuid4(),
+            review_id=review.review_id,
+            action="reject",
+            reason=reason,
+            actor=actor,
+            evidence=evidence,
+            created_at=now,
+        )
+    )
+    # The execute loop has already ended the preview's autobegin, but commit
+    # rather than begin() so this writer does not depend on that.
+    await session.commit()
+    return True
+
+
 async def _apply_step(
     session: AsyncSession,
     *,
     ruling: AdminAthRuling,
     step: AthRulingStep,
     actor: str,
-) -> None:
+) -> bool:
     """Apply one step through the review writers, then end their autobegin."""
-    if step == "attest":
+    already_applied = False
+    if step == "close_terminal":
+        already_applied = not await close_terminal_review(
+            session,
+            agent_id=ruling.agent_id,
+            expected_sha256=ruling.expected_sha256,
+            expected_score_count=ruling.expected_score_count,
+            reason=ruling.reason,
+            actor=actor,
+        )
+    elif step == "attest":
         await attest_review(
             ruling.agent_id,
             AdminCopyReviewOpenRequest(
@@ -1023,6 +1198,7 @@ async def _apply_step(
     # Every writer reads coldkeys after its own transaction commits, which
     # autobegins another; end it before the next begin().
     await session.rollback()
+    return already_applied
 
 
 async def _annotate_applied(
@@ -1290,10 +1466,13 @@ async def execute_ath_rulings_batch(
             continue
 
         steps_applied: list[AthRulingStep] = []
+        concurrently_applied = False
         try:
             for step in preview.steps:
                 write_attempted = True
-                await _apply_step(session, ruling=ruling, step=step, actor=actor)
+                if await _apply_step(session, ruling=ruling, step=step, actor=actor):
+                    concurrently_applied = True
+                    break
                 steps_applied.append(step)
         except HTTPException as exc:
             await session.rollback()
@@ -1331,6 +1510,16 @@ async def execute_ath_rulings_batch(
                         "error while applying ruling; write outcome unknown, "
                         "inspect current state before retry"
                     ),
+                )
+            )
+            continue
+
+        if concurrently_applied:
+            results.append(
+                AdminAthRulingExecuteItem(
+                    **base,
+                    status="already_applied",
+                    message="stranded review was already closed",
                 )
             )
             continue

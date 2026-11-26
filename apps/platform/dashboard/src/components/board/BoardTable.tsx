@@ -71,6 +71,7 @@ import {
   RetestSeedChip,
   RolloutChip,
   RouterShadowChip,
+  SeasonExpiryChip,
   TokenPenaltyChip,
   V9ConfirmationChip,
 } from "./chips";
@@ -420,6 +421,7 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
           <EfficiencyBonusChip entry={props.entry} />
           <QualityGateChip entry={props.entry} />
           <RewardEligibilityChip entry={props.entry} />
+          <SeasonExpiryChip entry={props.entry} />
           <TokenPenaltyChip entry={props.entry} />
         </div>
       </div>

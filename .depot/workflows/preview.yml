@@ -125,3 +125,5 @@ jobs:
       - name: Prove the trusted dashboard preview boundary
         run: node --test apps/platform/dashboard/preview/cloudflare-pages-worker.test.mjs
 
+      - name: Prove the synthetic OAuth fixture boundary
+        run: node --test preview/cloud/oauth-fixture.test.cjs

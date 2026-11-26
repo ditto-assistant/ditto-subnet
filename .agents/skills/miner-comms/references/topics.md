@@ -49,9 +49,12 @@ Quorum is **three validators** on the submission's own dataset seed. That
 is not the "N seeds" badge.
 
 The badge is **confirmation-lane depth**: champion-anchored shared seeds
-from the top-five rescore lane. Baseline is three, then one new seed per
-round, cap **32** (`TOP5_MAX_CONFIRMATION_SEEDS`). Minimum credible sample
-is 8. **13 is not a cap** — it is current depth.
+from the top-five rescore lane. The lane targets at least 8 seeds and stops
+at the work cap of **10** (`TOP5_MAX_CONFIRMATION_SEEDS` in Platform's
+`koth.py`; it was 15 until November 2026). The official score folds at most
+those 10 most-shared seeds, so a raw depth above 10 recorded under the old cap
+is audit history, not extra weight. `get_continual_retest_diagnostic` reports
+`confirmation_seed_cap` and the live `confirmation_seed_target`.
 
 A new champion starts a new seed family, so the crown often shows 1 seed
 while a tail that already sat in the set shows a larger count. That is the

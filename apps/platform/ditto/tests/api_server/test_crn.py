@@ -10,12 +10,15 @@ from ditto.api_server.crn import (
     elastic_confirmation_seed_ceiling,
     fold_seed_bound,
 )
+from ditto.api_server.koth import TOP5_MAX_CONFIRMATION_SEEDS
 
 
 def test_active_confirmation_seed_set_caps_legacy_history_by_coverage() -> None:
     legacy = uuid4()
     current_a = uuid4()
     current_b = uuid4()
+    # A full 15-seed window recorded under the former cap: the current work cap
+    # keeps only its first TOP5_MAX_CONFIRMATION_SEEDS by coverage, then seed.
     shared = range(17, 32)
 
     active = active_confirmation_seed_set(
@@ -26,7 +29,8 @@ def test_active_confirmation_seed_set_caps_legacy_history_by_coverage() -> None:
         }
     )
 
-    assert active == tuple(shared)
+    assert TOP5_MAX_CONFIRMATION_SEEDS == 10
+    assert active == tuple(range(17, 17 + TOP5_MAX_CONFIRMATION_SEEDS))
 
 
 def test_elastic_confirmation_seed_ceiling_is_bounded_by_variance() -> None:
@@ -35,7 +39,9 @@ def test_elastic_confirmation_seed_ceiling_is_bounded_by_variance() -> None:
 
     assert elastic_confirmation_seed_ceiling({}) == 8
     assert elastic_confirmation_seed_ceiling({first: dict.fromkeys(range(8), 0.9)}) == 8
-    assert elastic_confirmation_seed_ceiling({first: {0: 0.49, 1: 0.51}}) == 11
+    assert elastic_confirmation_seed_ceiling({first: {0: 0.491, 1: 0.509}}) == 9
+    # Variance asking for 11 seeds stops at the work cap.
+    assert elastic_confirmation_seed_ceiling({first: {0: 0.49, 1: 0.51}}) == 10
     assert (
         elastic_confirmation_seed_ceiling(
             {
@@ -43,7 +49,7 @@ def test_elastic_confirmation_seed_ceiling_is_bounded_by_variance() -> None:
                 second: dict.fromkeys(range(8), 0.85),
             }
         )
-        == 15
+        == TOP5_MAX_CONFIRMATION_SEEDS
     )
 
 

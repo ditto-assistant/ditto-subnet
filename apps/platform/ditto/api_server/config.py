@@ -100,6 +100,10 @@ class ScreenerAuthConfig:
     node_token_ttl_seconds: int = 6 * 60 * 60
     """Lifetime of a rotating per-node bearer token."""
 
+    node_reauth_max_dormancy_seconds: int = 30 * 24 * 60 * 60
+    """How long an on-demand node may sleep past its bearer expiry and still
+    rotate with that bearer plus a fresh hotkey signature; ``0`` disables it."""
+
     controller_lease_seconds: int = 180
     """Fencing lease renewed by the single normal capacity writer."""
 
@@ -353,7 +357,11 @@ class ApiServerConfig:
             openrouter_api_key=None,
             perplexity_api_key=None,
             upstream_url="https://openrouter.ai/api/v1/chat/completions",
-            allowed_models=("qwen/qwen3-32b", "openai/gpt-oss-20b"),
+            allowed_models=(
+                "qwen/qwen3-32b",
+                "openai/gpt-oss-20b",
+                "z-ai/glm-5.3-flash",
+            ),
             provider="nebius",
             routing_mode="aggregate_throughput",
             request_budget=DEFAULT_CHAT_REQUEST_BUDGET,
@@ -396,6 +404,11 @@ class ApiServerConfig:
     generator_scorer_token: str | None = None
     """Bearer token the trusted generator-competition scorer presents to lease
     packs and post panel results. Unset disables the scorer endpoints (503)."""
+
+    model_context_scorer_token: str | None = None
+    """Bearer token the trusted CPM (model_context) scorer presents to lease
+    runs and post results (``DITTO_MODEL_CONTEXT_SCORER_TOKEN``). Unset
+    disables the scorer endpoints (503). Never logged."""
 
     ditto_link: DittoLinkConfig = field(
         default_factory=lambda: DittoLinkConfig(
@@ -460,13 +473,14 @@ class ApiServerConfig:
         default_factory=SourceReviewQueueSloConfig
     )
     """Observability-only overdue thresholds for the ordinary source-review
-    queue-age SLO (ditto-subnet#2042). Both thresholds default unset."""
+    queue-age SLO (ditto-subnet#2042). The env parser ships defaults (SN-499)."""
 
     ath_review_queue_slo: AthReviewQueueSloConfig = field(
         default_factory=AthReviewQueueSloConfig
     )
     """Observability-only overdue thresholds for the ATH-hold and copy-review
-    queue-age SLO (ditto-subnet#2042, slice 2). Every threshold defaults unset."""
+    queue-age SLO (ditto-subnet#2042, slice 2). The env parser ships per-class
+    defaults (SN-499)."""
 
     source_emission_confirmation_enabled: bool = True
     """Allow verified payout attribution to arm the embargo; collection stays on."""
@@ -548,9 +562,15 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         screener_controller_lease_seconds = int(
             os.environ.get("SCREENER_CONTROLLER_LEASE_SECONDS", "180")
         )
+        screener_node_reauth_max_dormancy_seconds = int(
+            os.environ.get(
+                "SCREENER_NODE_REAUTH_MAX_DORMANCY_SECONDS", str(30 * 24 * 60 * 60)
+            )
+        )
     except ValueError as error:
         raise ApiServerConfigError(
-            "screener bootstrap, node token, and controller lease TTLs must be integers"
+            "screener bootstrap, node token, controller lease, and node reauth "
+            "durations must be integers"
         ) from error
     try:
         screener_capacity_event_retention_days = int(
@@ -610,7 +630,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
                 model.strip()
                 for model in os.environ.get(
                     "DITTO_INFERENCE_ALLOWED_MODELS",
-                    "qwen/qwen3-32b,openai/gpt-oss-20b",
+                    "qwen/qwen3-32b,openai/gpt-oss-20b,z-ai/glm-5.3-flash",
                 ).split(",")
                 if model.strip()
             ),
@@ -876,6 +896,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             controller_api_token=screener_controller_api_token,
             bootstrap_ttl_seconds=screener_bootstrap_ttl_seconds,
             node_token_ttl_seconds=screener_node_token_ttl_seconds,
+            node_reauth_max_dormancy_seconds=screener_node_reauth_max_dormancy_seconds,
             controller_lease_seconds=screener_controller_lease_seconds,
             capacity_event_retention_days=screener_capacity_event_retention_days,
         ),
@@ -888,6 +909,9 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         inference_proxy=inference_proxy,
         admin_api_token=os.environ.get("DITTO_ADMIN_API_TOKEN") or None,
         generator_scorer_token=os.environ.get("DITTO_GENERATOR_SCORER_TOKEN") or None,
+        model_context_scorer_token=(
+            os.environ.get("DITTO_MODEL_CONTEXT_SCORER_TOKEN") or None
+        ),
         ditto_link=parse_ditto_link_config_from_env(),
         github_link=parse_github_link_config_from_env(),
         dashboard_enabled=dashboard_enabled,
@@ -1049,6 +1073,10 @@ def check_config(config: ApiServerConfig) -> None:
         raise ApiServerConfigError(
             "SCREENER_NODE_TOKEN_TTL_SECONDS must be between 900 and 86400"
         )
+    if not 0 <= auth.node_reauth_max_dormancy_seconds <= 90 * 24 * 60 * 60:
+        raise ApiServerConfigError(
+            "SCREENER_NODE_REAUTH_MAX_DORMANCY_SECONDS must be between 0 and 7776000"
+        )
     if not 60 <= auth.controller_lease_seconds <= 900:
         raise ApiServerConfigError(
             "SCREENER_CONTROLLER_LEASE_SECONDS must be between 60 and 900"
@@ -1063,6 +1091,13 @@ def check_config(config: ApiServerConfig) -> None:
     ):
         raise ApiServerConfigError(
             "DITTO_GENERATOR_SCORER_TOKEN must be at least 32 characters"
+        )
+    if (
+        config.model_context_scorer_token is not None
+        and len(config.model_context_scorer_token) < 32
+    ):
+        raise ApiServerConfigError(
+            "DITTO_MODEL_CONTEXT_SCORER_TOKEN must be at least 32 characters"
         )
     names = config.validator_names
     if (names.url is None) != (names.api_key is None):
@@ -1292,10 +1327,8 @@ def check_config(config: ApiServerConfig) -> None:
         or inference.embedding_response_body_bytes > 16 << 20
     ):
         raise ApiServerConfigError("embedding proxy limit exceeds its safety bound")
-    if not 1 <= inference.timeout_seconds <= 120:
-        raise ApiServerConfigError(
-            "inference timeout must be between 1 and 120 seconds"
-        )
+    if not 1 <= inference.timeout_seconds <= 95:
+        raise ApiServerConfigError("inference timeout must be between 1 and 95 seconds")
     efficiency = config.efficiency_bonus
     if efficiency.fold_enabled and not efficiency.enabled:
         raise ApiServerConfigError(

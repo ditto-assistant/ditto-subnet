@@ -1,0 +1,21 @@
+#!/bin/bash
+# First-boot only (rendered by Terraform). Debian's official AMIs do not ship
+# the SSM agent, and this host has no SSH ingress, so the agent is the only
+# way in. Install one exact release and refuse any other bytes.
+set -euo pipefail
+
+version='${ssm_agent_version}'
+sha256='${ssm_agent_sha256}'
+url="https://s3.${region}.amazonaws.com/amazon-ssm-${region}/$${version}/debian_amd64/amazon-ssm-agent.deb"
+
+if ! command -v curl >/dev/null; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates
+fi
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 5 -o "$workdir/amazon-ssm-agent.deb" "$url"
+echo "$sha256  $workdir/amazon-ssm-agent.deb" | sha256sum --check --strict
+dpkg -i "$workdir/amazon-ssm-agent.deb"
+systemctl enable --now amazon-ssm-agent

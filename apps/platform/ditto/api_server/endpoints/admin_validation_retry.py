@@ -67,6 +67,12 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.miner_logs import ticket_log_is_stale
 from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
+from ditto.api_server.submission_status import (
+    closed_era_blocking_reason,
+    era_change,
+    era_change_blocking_reason,
+    holds_live_lease,
+)
 from ditto.db.models import (
     Agent,
     BenchmarkRolloutMember,
@@ -88,13 +94,17 @@ from ditto.db.queries.audit import (
     append_audit_entry,
     get_latest_score_retest_event,
 )
-from ditto.db.queries.benchmark_admission import admitted_agent_ids
+from ditto.db.queries.benchmark_admission import (
+    admission_rollout_for_active_version,
+    admitted_agent_ids,
+)
 from ditto.db.queries.benchmark_rollout import (
     MIN_SCOREABLE_BENCH_VERSION,
     active_bench_version,
     heartbeat_supports_version,
     open_rollout,
 )
+from ditto.db.queries.dueling_season_window import dueling_season_window
 from ditto.db.queries.lease_liveness import (
     ACTION_OPERATOR_EVICTED,
     expire_issued_tickets,
@@ -104,6 +114,7 @@ from ditto.db.queries.queue_removal import (
     is_in_force,
     load_queue_removal,
     load_reinstatement,
+    removed_agent_ids,
 )
 from ditto.db.queries.retry_budget import (
     MAX_AGENT_INFRA_RETRY_GRANTS,
@@ -123,6 +134,7 @@ from ditto.db.queries.retry_state import (
     recovery_gate,
     reinstatement_gate,
     resolve_bench_version,
+    rollout_quorum_scores,
     withdrawal_gate,
     work_available_validator_hotkeys,
 )
@@ -135,8 +147,12 @@ from ditto.db.queries.score_retests import (
     score_retest_queue_positions,
 )
 from ditto.db.queries.scores import SCORING_QUORUM
+from ditto.db.queries.terminal_failure import (
+    terminal_failure_code,
+    ticket_snapshot_wire,
+)
 from ditto.db.queries.tickets import (
-    release_generator_round_dataset_pin,
+    release_foreign_dataset_pin,
     scoring_retry_ticket,
     ticket_attempt_cap,
 )
@@ -171,22 +187,7 @@ def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
-def _ticket_wire(ticket: ValidatorTicket) -> dict[str, object]:
-    return {
-        "validator_hotkey": ticket.validator_hotkey,
-        "status": ticket.status.value,
-        "issued_at": _aware(ticket.issued_at).isoformat(timespec="microseconds"),
-        "deadline": _aware(ticket.deadline).isoformat(timespec="microseconds"),
-        "bench_version": ticket.bench_version,
-        "attempt_count": ticket.attempt_count,
-        "manual_retry_grants": ticket.manual_retry_grants,
-        "infra_retry_grants": ticket.infra_retry_grants,
-        "retry_after": (
-            _aware(ticket.retry_after).isoformat(timespec="microseconds")
-            if ticket.retry_after is not None
-            else None
-        ),
-    }
+_ticket_wire = ticket_snapshot_wire
 
 
 def _snapshot(
@@ -356,6 +357,7 @@ def _withdrawal_item(
         expected_snapshot=row.expected_snapshot,
         score_count=row.score_count,
         evicted_validator_hotkeys=row.evicted_validator_hotkeys,
+        terminal_failure_code=row.terminal_failure_code,
         created_at=row.created_at,
         reinstated_at=row.reinstated_at,
     )
@@ -510,6 +512,18 @@ async def _load(
         )
     )
     scores = [score for score in all_scores if score.bench_version == bench_version]
+    if agent.status in (
+        AgentStatus.SCORED,
+        AgentStatus.LIVE,
+    ) and await is_open_rollout_qualification(
+        session, agent_id=agent_id, bench_version=bench_version
+    ):
+        # The same season-scoped quorum the rollout barrier counts, for the
+        # same settled members ``classify_agent_retry_states`` scopes.
+        window = await dueling_season_window(session, bench_version)
+        scores = rollout_quorum_scores(
+            scores, comparable=window.comparable if window is not None else None
+        )
     tickets = [
         ticket for ticket in all_tickets if ticket.bench_version == bench_version
     ]
@@ -652,6 +666,24 @@ async def list_validation_retries(
         bench_version=active_version,
         agent_ids=list(classified),
     )
+    # Name the era refusal the way the miner's ``era_changed`` row does, so
+    # Backroom and the dashboard read the same label (SN-462, SN-485). Both
+    # reads are skipped when every classified row is admitted.
+    refused_ids = [
+        agent_id
+        for agent_id, retry in classified.items()
+        if agent_id not in admitted_to_active and retry.bench_version <= active_version
+    ]
+    exclusion_rollout = (
+        await admission_rollout_for_active_version(
+            session, bench_version=active_version
+        )
+        if refused_ids
+        else None
+    )
+    withdrawn_from_active = await removed_agent_ids(
+        session, agent_ids=refused_ids, bench_version=active_version
+    )
 
     submissions: list[AdminStuckSubmission] = []
     counts: dict[RetryState, int] = {}
@@ -678,6 +710,59 @@ async def list_validation_retries(
         provider_outage, provider_blocked = _provider_outage_view(
             circuit=circuit, scores=retry.scores, tickets=retry.tickets, now=now
         )
+        # Newer desired-version rollout work is scored by that rollout, not
+        # the active queue, so it is never "not admitted" here. A row an
+        # operator withdrew keeps its withdrawal as the reason, as on the
+        # miner's ``not_queued`` row.
+        # A live active-era lease keeps the miner's waiting label while it
+        # drains (``closed_submission_statuses``), so the operator row agrees.
+        refused_by_era = (
+            agent_id not in admitted_to_active
+            and agent_id not in withdrawn_from_active
+            and retry.bench_version <= active_version
+            and not holds_live_lease(
+                retry.tickets, bench_version=active_version, now=now
+            )
+        )
+        exclusion = (
+            era_change(
+                bench_version=active_version,
+                rollout=exclusion_rollout,
+                previous_era_scored=False,
+            )
+            if refused_by_era
+            else None
+        )
+        blocking_reason = (
+            PROVIDER_OUTAGE_RETRY_BLOCKING_REASON
+            if retry.recovery_allowed and provider_blocked
+            else retry.blocking_reason
+        )
+        if exclusion is not None:
+            blocking_reason = era_change_blocking_reason(exclusion)
+        if retry.bench_version < active_version:
+            # No validator is issued work for a closed era, so "retry queued"
+            # or "not enough expired tickets" describes something that will
+            # never happen. Say that first, then where the row stands now.
+            if exclusion is not None:
+                standing = era_change_blocking_reason(exclusion)
+            elif agent_id in admitted_to_active:
+                standing = (
+                    f"the submission is admitted to v{active_version} and is "
+                    "scored there"
+                )
+            else:
+                standing = (
+                    f"the submission is withdrawn from the v{active_version} "
+                    "validator queue"
+                )
+            blocking_reason = (
+                closed_era_blocking_reason(
+                    era_version=retry.bench_version, active_version=active_version
+                )
+                + "; "
+                + standing
+            )
         submissions.append(
             AdminStuckSubmission(
                 agent_id=agent.agent_id,
@@ -690,10 +775,11 @@ async def list_validation_retries(
                 retry_state=retry.state,
                 automatic_retry_available=retry.automatic_retry_available,
                 recovery_allowed=retry.recovery_allowed and not provider_blocked,
-                blocking_reason=(
-                    PROVIDER_OUTAGE_RETRY_BLOCKING_REASON
-                    if retry.recovery_allowed and provider_blocked
-                    else retry.blocking_reason
+                blocking_reason=blocking_reason,
+                era_change=exclusion,
+                serves_active_bench=(
+                    agent_id in admitted_to_active
+                    and retry.bench_version >= active_version
                 ),
                 recommended_action=recommended_retry_action(
                     scores=retry.scores,
@@ -1071,6 +1157,10 @@ async def withdraw_failed_validation_from_queue(
             expected_snapshot=current_snapshot,
             score_count=len(scores),
             ticket_snapshot=[_ticket_wire(ticket) for ticket in tickets],
+            # Same evidence the automatic close-out reads, so an operator
+            # withdrawal of a terminal artifact reports ``scoring_failed``
+            # publicly instead of a neutral ``not_queued``.
+            terminal_failure_code=terminal_failure_code(scores=scores, tickets=tickets),
             created_at=datetime.now(UTC),
         )
         session.add(withdrawal)
@@ -2364,7 +2454,7 @@ async def replace_validator_score_after_infrastructure_failure(
         assert target is not None and ticket is not None
         now = datetime.now(UTC)
         deadline = now + replacement_ttl
-        release_generator_round_dataset_pin(ticket)
+        release_foreign_dataset_pin(ticket)
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1

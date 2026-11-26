@@ -42,6 +42,12 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"v13RetiredTools":        poolcanary.Internal,
 			"v16DescriptionRewrites": poolcanary.Keyed,    // keyed by the v15 description it rewrites
 			"V16LinkStatePhrases":    poolcanary.Internal, // contract-test denylist, never served
+			// v18 production catalog: the bulk menu comes from the pinned
+			// snapshot; these are its sampling filter and paraphrase banks. No
+			// scored case expects a snapshot tool.
+			"catalogSizes":            poolcanary.Internal, // per-contract menu size, never rendered
+			"v18LinkedToolkitAliases": poolcanary.Keyed,    // keyed by v16 linkable app
+			"v18Synonyms":             "meaning-preserving paraphrase swaps for the non-answer snapshot menu",
 		},
 	})
 }

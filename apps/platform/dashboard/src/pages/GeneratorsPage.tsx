@@ -86,6 +86,8 @@ const ROUND_STATUS: Record<GeneratorRoundStatus, readonly [string, string]> = {
   running: ["Running", "progress"],
   scoring: ["Scoring", "progress"],
   scored: ["Scored", "good"],
+  // Nothing changed since the last scored round, so it was not rerun.
+  skipped: ["Unchanged", ""],
   void: ["Void", "warn"],
 };
 
@@ -514,6 +516,8 @@ function RoundDetail(props: {
   };
   const columns = () => [...(props.detail?.columns ?? [])].sort((a, b) => b.score - a.score);
   const grading = () => hasGradingVersions(props.detail?.columns ?? []);
+  // Shown once any column has frontier cases (none before frontier scoring).
+  const frontier = () => (props.detail?.columns ?? []).some((c) => (c.frontier ?? 0) > 0);
   return (
     <section class="gen-section" aria-labelledby="gen-round-title">
       <div class="gen-section-title">
@@ -523,8 +527,12 @@ function RoundDetail(props: {
         <Show when={props.detail}>
           {(detail) => (
             <span>
-              Scored {relTime(detail().summary.scored_at)} · {detail().summary.panel_size} panel
-              agents
+              {detail().summary.status === "skipped"
+                ? "Unchanged since round " +
+                  (detail().summary.carried_from_round ?? "?") +
+                  ", not rerun"
+                : "Scored " + relTime(detail().summary.scored_at)}{" "}
+              · {detail().summary.panel_size} panel agents
               <Show when={cases() !== null}> · {cases()} cases per generator</Show>
               <Show when={props.pinned}>
                 {" · "}
@@ -570,6 +578,15 @@ function RoundDetail(props: {
                 <th scope="col" class="num hide-sm">
                   Unsolved
                 </th>
+                <Show when={frontier()}>
+                  <th
+                    scope="col"
+                    class="num hide-sm"
+                    title="Cases too few agent owners solved that the frontier oracle answered and no sampled audit of the column ruled out"
+                  >
+                    Frontier
+                  </th>
+                </Show>
                 <th scope="col" class="num hide-sm">
                   Duplicate
                 </th>
@@ -607,6 +624,9 @@ function RoundDetail(props: {
                       <td class="num">{column.discriminating}</td>
                       <td class="num hide-sm">{column.trivial}</td>
                       <td class="num hide-sm">{column.unsolved}</td>
+                      <Show when={frontier()}>
+                        <td class="num hide-sm">{column.frontier ?? 0}</td>
+                      </Show>
                       <td class="num hide-sm">{column.duplicate}</td>
                       <Show when={grading()}>
                         <td class="hide-sm">

@@ -271,7 +271,7 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"{policy_version} is not implemented by this build "
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
-    if policy_version == 13:
+    if policy_version in {13, 14}:
         return "adjudicator-v22-policy-v13"
     return f"adjudicator-v4-policy-v{policy_version}"
 
@@ -710,9 +710,10 @@ def _system_prompt(policy_version: int) -> str:
             f"{_SYSTEM_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"
             f"{_POLICY_V12_PROMPT_TAIL}"
         )
-    if policy_version == 13:
+    if policy_version in {13, 14}:
         # W3 permits summarized context in these specific legacy clauses;
         # I4's advisory/authority and finalized-field boundaries still apply.
+        # v14 adds zero-call CLEAR to the oracle module; court doctrine unchanged.
         return (
             (
                 f"{_POLICY_V13_BASE_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"

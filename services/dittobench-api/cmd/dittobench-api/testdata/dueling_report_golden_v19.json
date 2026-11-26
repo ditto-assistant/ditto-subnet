@@ -1,0 +1,73 @@
+{
+  "details": {
+    "season_id": "0b6f1c1e-6a52-4d8e-9a57-3f0c2d1e4b5a",
+    "season_index": 26119,
+    "slice_sha256": "3b1f4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70819",
+    "owner_key": "coldkey:owner-c2",
+    "datagen_raw": 0.7123456789,
+    "datagen_gate": 0.96,
+    "column_weight": 0.15,
+    "datagen_qualifier": 0.890432098625,
+    "columns": [
+      {
+        "column_id": "c0",
+        "owner_key": "coldkey:owner-c0",
+        "submission_id": "sub-c0",
+        "grading_bench_version": 15,
+        "n": 35,
+        "sum": 30,
+        "sum_sq": 29.5,
+        "substituted": false
+      },
+      {
+        "column_id": "c1",
+        "owner_key": "coldkey:owner-c1",
+        "submission_id": "sub-c1",
+        "grading_bench_version": 15,
+        "n": 34,
+        "sum": 21.5,
+        "sum_sq": 18.25,
+        "substituted": false
+      },
+      {
+        "column_id": "c2",
+        "owner_key": "coldkey:owner-c2",
+        "submission_id": "sub-c2",
+        "grading_bench_version": 16,
+        "n": 35,
+        "sum": 35,
+        "sum_sq": 35,
+        "substituted": false
+      },
+      {
+        "column_id": "c3",
+        "owner_key": "",
+        "submission_id": "default",
+        "grading_bench_version": 15,
+        "n": 35,
+        "sum": 10,
+        "sum_sq": 7,
+        "substituted": true
+      },
+      {
+        "column_id": "c4",
+        "owner_key": "",
+        "submission_id": "default",
+        "grading_bench_version": 15,
+        "n": 0,
+        "sum": 0,
+        "sum_sq": 0,
+        "substituted": false
+      }
+    ],
+    "composite_stderr": 0.014585392803779063
+  },
+  "self_composite": 0.47119083764898995,
+  "pair_composite": 0.4526246216861117,
+  "pair_mask": [
+    "coldkey:owner-c2",
+    "coldkey:owner-c0"
+  ],
+  "datagen_stderr": 0.0173,
+  "composite_stderr": 0.014585392803779063
+}

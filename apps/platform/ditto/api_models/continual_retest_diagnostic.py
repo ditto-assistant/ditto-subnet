@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from ditto.api_models.continual_retest_settings import WaveMembership
+from ditto.api_models.public import PublicSeasonRetest
 
 
 class RetestFamilyMember(BaseModel):
@@ -95,6 +96,17 @@ class RetestClaimability(BaseModel):
     """The provider-outage gate admits no new lease right now (open circuit
     cooling down, or its one half-open probe already claimed). The lane then
     issues nothing on any route and the decision is ``provider_outage``."""
+    retest_mode: Literal["continual", "season_duel"] = "continual"
+    """The lane's retest mode (``docs/title-duels.md``)."""
+    season_duel_seed_count: int | None = None
+    """Shared seeds in the current season's duel, or null when season duels do
+    not govern this version (``continual`` mode, or below the dueling floor)."""
+    season_duel_anchor_champion_id: UUID | None = None
+    """The champion the season's duel family is anchored on: the one that
+    opened the season, which a mid-season crown change does not move."""
+    season_duel_held_seed_count: int | None = None
+    """Duel seeds this agent already ran this season (a count; seeds stay
+    private). Equal to ``season_duel_seed_count`` once its duel is complete."""
     wave_cadence_tempos: int = 0
     """Tempo-aligned wave pacing in force (0: historical pacing)."""
     wave_seeds_per_window: int | None = None
@@ -193,16 +205,48 @@ class AdminContinualRetestDiagnostic(BaseModel):
         "same_owner_challenger",
         "owner_suppressed",
         "outside_cohort",
+        "expired_dueling_season",
         "not_current_finalized_ledger",
     ]
+    """``expired_dueling_season``: a scored bench v16+ agent whose accepted
+    quorum is entirely or partly from seasons that left the two-season window
+    (``score_dueling_season_ids`` vs ``window_dueling_season_ids``). The
+    expiry is deliberate cost control; only scores taken in the window count
+    again (``season_retest`` says whether a free re-test is queued and why
+    not). ``not_current_finalized_ledger`` is any other absence."""
     ledger_eligible: bool = False
     """Whether this generation is in the current finalized eligible ledger."""
+    score_dueling_season_ids: list[UUID] = []
+    """Bench v16+: distinct seasons this agent's accepted scores were taken in."""
+    window_dueling_season_ids: list[UUID] = []
+    """Bench v16+: the live window, current season first, then the previous."""
+    in_window_score_count: int | None = None
+    """Bench v16+: accepted scores inside the live window (``None`` below)."""
+    last_valid_composite: float | None = None
+    """``expired_dueling_season`` only: the expired quorum's stored median."""
+    season_retest: PublicSeasonRetest | None = None
+    """``expired_dueling_season`` only: whether a free platform re-test on the
+    open season is queued (season catch-up or an ATH clear) and, if not, the
+    recorded reason -- the same label the public board and agent summary show."""
+    in_current_pin: bool | None = None
+    """Whether the epoch pin validators fold now lists this agent; ``None`` in
+    live mode or before the first pin. A pinned agent keeps its emissions and
+    its labelled board row until the next pin, which is built from the window."""
     canonical_sample_count: int = 0
     completed_wave_depth: int = 0
     official_sample_count: int = 0
     """Observations behind the official continual composite (quorum + waves)."""
     raw_confirmation_depth: int = 0
     """Distinct accepted shared seeds, including any not yet fold-eligible."""
+    confirmation_seed_floor: int = 0
+    """Shared seeds the lane gathers before variance may stop it (minimum)."""
+    confirmation_seed_cap: int = 0
+    """The continual-retest work cap: the most shared seeds the lane ever
+    targets and the size of the active window the official composite folds."""
+    confirmation_seed_target: int | None = None
+    """The variance-sized seed target the lane is planning toward right now,
+    between floor and cap, from the raw emission set's recorded composites;
+    ``None`` when there is no current emission set."""
     composite_stderr: float | None = None
     aggregate_mode: Literal["disabled", "fleet_ready", "enabled"] = "fleet_ready"
     wave_membership: WaveMembership = "participants"
@@ -218,8 +262,13 @@ class AdminContinualRetestDiagnostic(BaseModel):
         "efficiency_tiebreak",
         "newest_generation",
         "agent_id_tiebreak",
+        "superseded_rerun",
         "none",
     ] = "none"
+    """Which owner-family key term chose the representative over this row.
+
+    ``superseded_rerun``: a newer finalized run of this exact artifact
+    represents the content, whatever either run scored (SN-485)."""
     cohort_cutoff: RetestCutoffComparison = RetestCutoffComparison()
     emission_cutoff: RetestCutoffComparison = RetestCutoffComparison()
     claim: RetestClaimability | None = None

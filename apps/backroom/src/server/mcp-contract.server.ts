@@ -65,12 +65,20 @@ export const WRITE_TOOL_NAMES = new Set([
   'tick_generator_rounds',
   'void_generator_round',
   'rotate_dueling_season',
+  'republish_dueling_season_commitment',
+  'retry_dueling_slice_preparation',
   'close_generator_round',
   'republish_generator_round_commitment',
   'release_generator_round_lease',
+  'rule_generator_frontier_audit',
+  'settle_generator_round_frontier',
+  'rerun_generator_round_frontier',
   'register_default_generator',
   'create_default_generator_upload',
-  'advance_scored_policy_rescreen',
+  'set_model_context_settings',
+  'rescore_model_context_submission',
+  'reject_model_context_submission',
+  'rotate_model_context_season',
   'record_treasury_settings',
   'record_treasury_runtime',
   'record_treasury_receipt',
@@ -78,6 +86,10 @@ export const WRITE_TOOL_NAMES = new Set([
   // functions already require a write-level session.
   'preview_treasury_manual_transfer',
   'queue_treasury_manual_transfer',
+  // Airdrop preview resolves recipients and execute records and settles a
+  // run (rehearsal-only today, SN-490); both act for a write-level operator.
+  'preview_airdrop',
+  'execute_airdrop',
   'preview_treasury_funding_reconciliation',
   'record_treasury_funding_reconciliation',
   'schedule_l2_report_canary',
@@ -98,6 +110,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'retry_trusted_image_build',
   'expire_running_screening',
   'reject_screening_submission',
+  'amend_screening_reject_reason',
   'open_ath_review',
   'resolve_ath_review',
   'create_ath_rulings_upload',
@@ -126,8 +139,6 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_queue_policy_settings',
   'apply_screener_review_settings',
   'rotate_screener_policy_manifest',
-  'schedule_screener_policy_activation',
-  'schedule_v13_review_clock',
   'restore_scored_screening_snapshot',
   'set_validator_slot_settings',
   'set_validator_issuance_pause',
@@ -177,6 +188,9 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   // A closed round's dataset is every column's generated cases: private
   // benchmark content, gated like other private artifacts.
   ['get_generator_round_dataset', BACKROOM_ARTIFACT_SCOPE],
+  // A frontier audit serves sampled cases, gold answers and the user's
+  // visible memory from a scored round's private dataset.
+  ['get_generator_frontier_audit', BACKROOM_ARTIFACT_SCOPE],
   ['get_v13_official_control_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_failure_diagnostic', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_verification_readiness', BACKROOM_ARTIFACT_SCOPE],
@@ -193,6 +207,11 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   // A search returns the matching source lines themselves, so it discloses
   // exactly what an excerpt read does and gates identically.
   ['search_screening_source', BACKROOM_ARTIFACT_SCOPE],
+  // Generator source is miner-submitted code too, read through the same
+  // bounded inspector, so its manifest, excerpts and search gate the same.
+  ['list_generator_source_files', BACKROOM_ARTIFACT_SCOPE],
+  ['read_generator_source_file', BACKROOM_ARTIFACT_SCOPE],
+  ['search_generator_source', BACKROOM_ARTIFACT_SCOPE],
   // Copy-review diffs render miner source from two submissions side by side,
   // so they gate on the same dedicated artifact scope.
   ['get_copy_review_source_diff', BACKROOM_ARTIFACT_SCOPE],

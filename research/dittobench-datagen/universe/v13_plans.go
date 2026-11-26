@@ -51,6 +51,10 @@ type WorldPlanSelection struct {
 	// v13..v15 value) asks every arc, byte for byte as before. Bench v16 uses it
 	// to keep the full-scale world inside a 125-case memory table.
 	StoryArcLimit int
+	// StoryDropFirst lists story oracle kinds an arc drops, in order, before
+	// the pure-money rotation trims it to StoryPerArc. Nil (every contract
+	// through v17) leaves the selection byte for byte as before.
+	StoryDropFirst []string
 }
 
 // WorldPlanCounts reports how many plans each slot of a WorldPlanSelection
@@ -128,6 +132,12 @@ func (w World) SelectQuestionPlans(sel WorldPlanSelection) ([]QuestionPlan, Worl
 		plans := storyByArc[arc]
 		if sel.StoryPerArc > len(plans) {
 			return nil, WorldPlanCounts{}, fmt.Errorf("story arc %d offers %d validated oracles, need %d", arc, len(plans), sel.StoryPerArc)
+		}
+		for _, kind := range sel.StoryDropFirst {
+			if len(plans) <= sel.StoryPerArc {
+				break
+			}
+			plans = withoutOracle(plans, kind)
 		}
 		// Drop pure-money oracles in arc rotation until the arc fits its slot.
 		// The rotation starts at the arc index so the dropped oracle differs

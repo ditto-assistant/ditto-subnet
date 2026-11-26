@@ -18,6 +18,10 @@ WITH classified AS (
       JOIN generator_rounds r ON r.round_index=a.round_index
       WHERE r.bench_version=g.bench_version AND a.agent_id=g.agent_id AND a.validator_hotkey=g.validator_hotkey
         AND a.ticket_deadline=g.ticket_deadline) THEN 'round_attempt'
+    WHEN EXISTS (SELECT 1 FROM generator_prescreen_attempts a
+      JOIN generator_prescreens p ON p.prescreen_index=a.prescreen_index
+      WHERE p.bench_version=g.bench_version AND a.agent_id=g.agent_id AND a.validator_hotkey=g.validator_hotkey
+        AND a.ticket_deadline=g.ticket_deadline) THEN 'prescreen_attempt'
     WHEN EXISTS (SELECT 1 FROM benchmark_canaries c
       WHERE c.agent_id=g.agent_id AND c.validator_hotkey=g.validator_hotkey
         AND c.bench_version=g.bench_version AND c.deadline=g.ticket_deadline) THEN 'canary_lease'
@@ -44,6 +48,7 @@ WITH classified AS (
  SELECT *,
    CASE classification_basis
     WHEN 'round_attempt' THEN 'generator_round'
+    WHEN 'prescreen_attempt' THEN 'generator_prescreen'
     WHEN 'canary_lease' THEN 'benchmark_canary'
     WHEN 'current_exact_lease' THEN current_purpose
     WHEN 'accepted_score_receipt' THEN 'accepted_canonical_score'

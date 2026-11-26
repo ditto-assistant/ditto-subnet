@@ -784,6 +784,96 @@ func TestHTTP400ProviderRejectionRemainsSingleShot(t *testing.T) {
 	}
 }
 
+// The OpenRouter envelope a v18 harness got for sending ~1,500 tool
+// definitions to gpt-oss-20b (2026-11-11, DITTO-2564), trimmed of request ids.
+const contextLengthExceededBody = `{"error":{"message":"Provider returned error","code":400,"metadata":{"raw":"{\"message\":\"The model returned the following errors: ErrorEvent { error: APIError { type: \\\"BadRequestError\\\", code: Some(400), message: \\\"Input length (145769) exceeds model's maximum context length (131072).\\\", param: None } }\"}","provider_name":"Amazon Bedrock","is_byok":false,"previous_errors":[{"code":400,"message":"Provider returned error","provider_name":"Groq","raw":"{\"error\":{\"message\":\"'tools' : maximum number of items is 128\",\"type\":\"invalid_request_error\"}}\n"}]}},"user_id":"org_test"}`
+
+func TestContextLengthExceededIsSingleShotAndPublic413(t *testing.T) {
+	var calls int
+	var slept time.Duration
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(contextLengthExceededBody))
+	}))
+	defer upstream.Close()
+
+	completed, exhausted := completeChatWithRecovery(
+		context.Background(), upstream.Client(), aggregateChatConfig(upstream.URL),
+		map[string]any{"model": "openai/gpt-oss-20b", "messages": []any{}},
+		"openai/gpt-oss-20b", "openrouter", "", nil, nil,
+		func(_ context.Context, delay time.Duration) { slept += delay },
+	)
+	if completed != nil || exhausted == nil {
+		t.Fatalf("result=%v exhausted=%v", completed, exhausted)
+	}
+	if calls != 1 || exhausted.upstreamAttempts != 1 || slept != 0 {
+		t.Fatalf("calls/attempts/sleep=%d/%d/%s", calls, exhausted.upstreamAttempts, slept)
+	}
+	if exhausted.terminalErrorCode != providerContextLengthExceededCode {
+		t.Fatalf("terminal code=%q", exhausted.terminalErrorCode)
+	}
+	if exhausted.routeObservable || exhausted.timedOut {
+		t.Fatalf("an oversized request must not mark the route: %+v", exhausted)
+	}
+	failure := chatProviderFailure(exhausted)
+	if failure.status != http.StatusRequestEntityTooLarge ||
+		failure.message != "request exceeds the model's maximum context length" || len(failure.headers) != 0 {
+		t.Fatalf("public failure=%+v", failure)
+	}
+}
+
+func TestContextLengthExceededRequiresExactProviderRejection(t *testing.T) {
+	decode := func(body string) map[string]any {
+		var response map[string]any
+		decoder := json.NewDecoder(strings.NewReader(body))
+		decoder.UseNumber()
+		if err := decoder.Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	if !providerContextLengthExceeded(http.StatusBadRequest, decode(contextLengthExceededBody)) {
+		t.Fatal("production envelope not recognized")
+	}
+	if !providerContextLengthExceeded(http.StatusBadRequest, decode(
+		`{"error":{"code":400,"message":"This endpoint's maximum context length is 131072 tokens. However, you requested about 145769 tokens."}}`,
+	)) {
+		t.Fatal("OpenRouter's own context-window message not recognized")
+	}
+	if !providerContextLengthExceeded(http.StatusBadRequest, decode(
+		`{"error":{"code":400,"message":"This model's maximum context length is 32768 tokens. However, you requested 38000 tokens (33000 in the messages, 5000 in the completion)."}}`,
+	)) {
+		t.Fatal("a split count whose input alone exceeds the limit was not recognized")
+	}
+	for _, message := range []string{
+		"This endpoint's maximum context length is 32768 tokens. However, you requested about 38000 tokens (33000 in the messages, 5000 in the output).",
+		"This endpoint's maximum context length is 131072 tokens. However, you requested about 160000 tokens (100000 of text input, 40000 of tool input, 20000 in the output).",
+	} {
+		body, _ := json.Marshal(map[string]any{"error": map[string]any{"code": 400, "message": message}})
+		if !providerContextLengthExceeded(http.StatusBadRequest, decode(string(body))) {
+			t.Fatalf("input-over-limit split not recognized: %s", message)
+		}
+	}
+	for name, testCase := range map[string]struct {
+		status int
+		body   string
+	}{
+		"other 400":            {400, `{"error":{"code":400,"message":"Provider returned error","metadata":{"raw":"'tools' : maximum number of items is 128"}}}`},
+		"completion overflow":  {400, `{"error":{"code":400,"message":"This model's maximum context length is 8192 tokens. However, you requested 20000 tokens (2000 in the messages, 18000 in the completion)."}}`},
+		"openrouter output":    {400, `{"error":{"code":400,"message":"This endpoint's maximum context length is 131072 tokens. However, you requested about 140000 tokens (120000 of text input, 20000 in the output)."}}`},
+		"200 non-400 envelope": {200, `{"error":{"code":502,"message":"maximum context length"}}`},
+		"outer status not 400": {502, contextLengthExceededBody},
+		"inner code not 400":   {400, `{"error":{"code":502,"message":"maximum context length"}}`},
+		"code not a number":    {400, `{"error":{"code":"400","message":"maximum context length"}}`},
+		"no error object":      {400, `{"message":"maximum context length"}`},
+	} {
+		if providerContextLengthExceeded(testCase.status, decode(testCase.body)) {
+			t.Fatalf("%s was classified as a context overflow", name)
+		}
+	}
+}
+
 func TestStructuredOutputProviderErrorRequiresStrictSchema(t *testing.T) {
 	var response map[string]any
 	decoder := json.NewDecoder(strings.NewReader(structuredOutputFailureBody))

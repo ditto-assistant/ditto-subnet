@@ -145,152 +145,6 @@ DEFAULT_SIMILARITY_CONTAINMENT_THRESHOLD = 0.95
 ROLLOUT_LOCKED_FIELDS = ("lane_cycle_size", "fresh_submission_slots")
 
 
-class DeferredSourceReviewSettings(BaseModel):
-    """Hot-swappable post-score deep-review admission and anomaly policy.
-
-    This board decides *where* the expensive source review runs -- before
-    scoring (automatic, by a screener), after it (as an operator-adjudicated
-    hold), or, in ``bypass``, nowhere at all. Three of the four modes review
-    every submission somewhere; ``bypass`` is the one that does not, and it is
-    the only way to send admitted submissions straight to validator scoring.
-
-    SCOPE -- source integrity only
-    ==============================
-
-    Nothing on this board touches **copy/plagiarism** enforcement. Copy holds
-    (``review_kind: "copy"``) are opened from the duplicate-signal decision at
-    score finalization, which never reads this board, runs *before* the deferred
-    path, and wins outright: a copy hold moves the agent to
-    ``ATH_PENDING_REVIEW``, and the deferred path only acts on agents still in
-    ``SCORED``/``LIVE``. Setting ``mode="off"`` or ``mode="bypass"`` disables the
-    deferred source-integrity branch and **leaves plagiarism detection fully
-    armed**. The same is true of the transform/overfit audit, which has its own
-    switch. "No source review" never means "no copy detection".
-    """
-
-    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
-
-    mode: Literal["off", "observe", "enforce", "bypass"] = "off"
-    """Where the expensive source review runs, and whether it can hold.
-
-    ====================================================================
-    mode        pre-score deep screen   post-score qualification   holds
-    ====================================================================
-    ``off``     every submission        never computed             none
-    ``observe`` every submission        computed, recorded only    none
-    ``enforce`` build-only admission    computed                   opens
-    ``bypass``  build-only admission    never computed             none
-    ====================================================================
-
-    Read that table before assuming ``off`` is the light one: ``off`` is the
-    *heaviest* mode (a full deep screen on every submission) and ``bypass`` is
-    the lightest (no source review anywhere).
-
-    ``off`` -- the legacy full pre-score review. Every fresh submission gets the
-        complete deep screen *before* it is scoreable, so no deferred hold is
-        ever opened and no post-score qualification is computed. This is the
-        heaviest mode for the screener fleet: the deep review runs on every
-        submission rather than on the handful that qualify.
-
-    ``observe`` -- pre-score review is the same full deep screen as ``off``, but
-        post-score qualification is still computed and written to the append-only
-        score audit (``audit_kind: "deferred_source_review"``, ``enforced:
-        false``). Nothing is held and the agent proceeds to ``SCORED``. This is
-        the mode to pick when turning enforcement off, because it keeps the
-        record of which submissions *would* have been held -- rank, composite,
-        and the MAD thresholds -- so returning to ``enforce`` later leaves no gap
-        in the evidence.
-
-    ``enforce`` -- mechanical-first admission. A fresh submission gets only a
-        cheap build-only screen up front (marked
-        ``deferred-mechanical-admission``) and is scored immediately; the deep
-        review is deferred and runs only for submissions that qualify by
-        top-five rank or by exceeding the robust anomaly thresholds. Qualifying
-        opens a pending ``deferred_source_review`` hold, moves the agent to
-        ``ATH_PENDING_REVIEW``, and excludes it from the emission-eligible
-        ledger until the review completes.
-
-    ``bypass`` -- **no source review at all.** Admission is the same cheap
-        build-only screen as ``enforce`` (the screened image still has to be
-        built, verified and hashed before anything can score it), and no
-        post-score qualification is computed, so no deferred hold can ever
-        open. An admitted submission goes straight to validator scoring. This
-        is the lightest mode and the only one that runs neither half of the
-        source review. It does **not** disable copy/plagiarism enforcement --
-        see the scope note on the class.
-
-    Flipping back to ``enforce`` later re-qualifies everything that was
-    mechanically admitted while ``bypass`` was set: those rows still carry the
-    immutable ``deferred-mechanical-admission`` marker and have no terminal deep
-    review, so the next canonical ledger mutation reconsiders them. Nothing is
-    lost by turning it off, only deferred.
-
-    OPEN HOLDS ALWAYS DRAIN, IN EVERY MODE
-    ======================================
-
-    Leaving ``enforce`` stops *new* holds. It deliberately does **not** stop the
-    machinery that clears the ones already open: a pending deferred hold is
-    resolved by a screener re-claiming the agent's ``ATH_PENDING_REVIEW`` row
-    for its deep pass, and that re-claim (``deferred_ath_eligible`` in
-    ``ditto.db.queries.screening``) is independent of this field.
-
-    That independence is load-bearing rather than incidental. The re-claim used
-    to be gated on ``mode == "enforce"``, which meant any flip away from
-    ``enforce`` froze every hold that happened to be open at that instant: those
-    agents stayed out of the emission-eligible ledger with no screener willing
-    to pick them up again, releasable only one at a time by hand. A control
-    whose whole purpose is to reduce review load must not be able to strand
-    miners as a side effect, so the gate was removed instead of being inherited
-    by ``bypass``. The bounded, finite work of draining an already-open queue is
-    the price of that, and it ends.
-
-    Holds are still never auto-cleared: a bulk clearance would write an
-    unreasoned resolution onto each agent's public audit record. They drain the
-    normal way -- a deep pass with a real verdict, or an explicit
-    ``resolve_ath_review``.
-    """
-
-    integrity_double_check_mode: Literal["off", "observe", "enforce"] = "off"
-    """Second, stronger deep review for every top-five entrant.
-
-    ``mode`` above only reaches submissions that skipped the deep screen at
-    admission. A submission that passed the full pre-score screen can still
-    reach the top five on the strength of something that screen missed, and
-    winner-take-all makes that the costliest miss on the board. This control
-    closes the gap: ``eval -> top five -> integrity double-check -> clear or
-    reject``, independent of ``mode``.
-
-    ``off`` -- nothing is computed.
-
-    ``observe`` -- each canonical ledger mutation appends a score-audit record
-        (``audit_kind: "integrity_double_check"``, ``enforced: false``) for
-        every top-five row that would be held. Nothing is held.
-
-    ``enforce`` -- a top-five row with no prior double-check opens the same
-        pending ``deferred_source_review`` hold the deferred path uses, marked
-        ``integrity_double_check`` in its provenance. A screener re-claims it
-        for one deep pass bound to the latest reviewer revision in scope
-        ``integrity-double-check`` (the stronger L2/L3 models), and a
-        mechanically admitted top-five row's deferred pass binds that posture
-        too. A clean pass restores the agent; anything else stays an operator
-        hold, or rejects through the adjudicator when that posture enforces
-        it. Platform refuses ``enforce`` until that scope holds an ``enforce``
-        revision with L3 and the ``l1_l2`` manifest.
-
-    Each agent is double-checked at most once; operator clears are never
-    reopened. Rows already held for a post-score deep review keep their rank
-    slot, so holds cannot cascade down the board while reviews run. Like
-    ``mode``, this never touches copy/plagiarism enforcement, and open holds
-    drain in every setting.
-    """
-
-    min_cohort_size: Annotated[int, Field(ge=5, le=100)] = 8
-    composite_mad_multiplier: Annotated[float, Field(ge=1.0, le=20.0)] = 6.0
-    axis_mad_multiplier: Annotated[float, Field(ge=1.0, le=20.0)] = 6.0
-    min_composite_delta: Annotated[float, Field(ge=0.0, le=1.0)] = 0.10
-    min_axis_delta: Annotated[float, Field(ge=0.0, le=1.0)] = 0.15
-
-
 def _as_slot_tuple(value: object) -> object:
     """Accept a JSON array for a field that is stored as an immutable tuple.
 
@@ -543,6 +397,11 @@ class QueuePolicySettings(BaseModel):
 
     Each revision stores the whole policy (not a diff), so a frozen snapshot is
     always reconstructable and a read never merges partial revisions.
+
+    Revisions written before source review was retired (2026-11-07) also carry
+    a ``deferred_source_review`` block. Nothing read it after that retirement,
+    so it is no longer a field: ``extra="ignore"`` drops it when an old
+    revision is read, and a write that still sends it stores nothing for it.
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
@@ -638,18 +497,6 @@ class QueuePolicySettings(BaseModel):
 
     prev_gen_carryover: PrevGenCarryoverSettings = PrevGenCarryoverSettings()
     """Adoption policy for stranded previous-generation submissions."""
-
-    deferred_source_review: DeferredSourceReviewSettings = (
-        DeferredSourceReviewSettings()
-    )
-    """Mechanical-first admission and post-score deep-review policy.
-
-    Top-five qualification is a fixed integrity invariant in ``enforce`` mode;
-    operators can tune only the robust anomaly trigger or roll the whole feature
-    between off, observe, and enforce. ``integrity_double_check_mode``
-    separately extends the top-five review, on a stronger reviewer posture, to
-    submissions that already passed the full pre-score screen.
-    """
 
     lineage_reference_mode: LineageReferenceMode = "same_owner_version"
     """Which already-screened artifact a screening attempt may be diffed against.
@@ -842,15 +689,6 @@ class AdminQueuePolicySettingsRequest(BaseModel):
         if similarity_missing:
             raise ValueError(
                 f"similarity_budget is stored whole too; missing {similarity_missing}"
-            )
-        deferred_missing = sorted(
-            set(DeferredSourceReviewSettings.model_fields)
-            - self.settings.deferred_source_review.model_fields_set
-        )
-        if deferred_missing:
-            raise ValueError(
-                "deferred_source_review is stored whole too; missing "
-                f"{deferred_missing}"
             )
         return self
 

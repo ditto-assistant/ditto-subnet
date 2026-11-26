@@ -379,6 +379,76 @@ def test_rootless_executor_is_separate_from_worker_and_denies_private_egress() -
     assert "$SCREENER_ROOT/docker/daemon.json" not in updater
 
 
+def _run_egress_guard(tmp_path: Path) -> list[str]:
+    command_dir = tmp_path / "bin"
+    command_dir.mkdir()
+    log = tmp_path / "iptables.log"
+    iptables = command_dir / "iptables"
+    iptables.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1\" == '-D' ]]; then exit 1; fi\n"
+        'printf \'%s\\n\' "$*" >> "$IPTABLES_LOG"\n'
+    )
+    iptables.chmod(0o755)
+    identity = command_dir / "id"
+    identity.write_text("#!/usr/bin/env bash\nprintf '4242\\n'\n")
+    identity.chmod(0o755)
+    result = subprocess.run(
+        ["bash", str(ROOT / "deploy" / "executor-egress-guard.sh")],
+        capture_output=True,
+        check=False,
+        env=os.environ
+        | {
+            "IPTABLES_LOG": str(log),
+            "PATH": f"{command_dir}:{os.environ['PATH']}",
+        },
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return log.read_text().splitlines()
+
+
+def test_egress_guard_allows_only_gce_and_aws_resolver_dns_on_link_local(
+    tmp_path: Path,
+) -> None:
+    """GCE resolves on 169.254.169.254:53, the AWS VPC resolver on .253:53.
+
+    Instance metadata (169.254.169.254:80) and every other link-local or
+    private destination stays rejected for the rootless builder.
+    """
+    commands = _run_egress_guard(tmp_path)
+    appended = [line for line in commands if line.startswith("-A DITTO-EXEC-EGRESS-")]
+    accepts = [line for line in appended if line.endswith("-j ACCEPT")]
+    rules = [line.split(" ", 2)[2] for line in appended]
+
+    assert sorted(rule for rule in rules if rule.endswith("-j ACCEPT")) == sorted(
+        f"-p {protocol} -d {resolver}/32 --dport 53 -j ACCEPT"
+        for resolver in ("169.254.169.254", "169.254.169.253")
+        for protocol in ("udp", "tcp")
+    )
+    assert len(accepts) == 4
+    reject_link_local = rules.index("-d 169.254.0.0/16 -j REJECT")
+    assert (
+        max(index for index, rule in enumerate(rules) if rule.endswith("-j ACCEPT"))
+        < reject_link_local
+    )
+    for cidr in (
+        "10.0.0.0/8",
+        "100.64.0.0/10",
+        "127.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+    ):
+        assert f"-d {cidr} -j REJECT" in rules
+    # Only port 53 is ever accepted; metadata HTTP falls through to REJECT.
+    assert not any("--dport 80" in rule for rule in rules)
+    assert commands[-1].startswith("-E DITTO-EXEC-EGRESS-")
+    assert any(
+        line.startswith("-I OUTPUT 1 -m owner --uid-owner 4242 -j DITTO-EXEC-EGRESS-")
+        for line in commands
+    )
+
+
 def test_rootless_executor_disables_single_file_log_compression() -> None:
     daemon_config = json.loads((ROOT / "deploy" / "rootless-daemon.json").read_text())
 

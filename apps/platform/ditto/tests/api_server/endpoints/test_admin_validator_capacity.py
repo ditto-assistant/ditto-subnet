@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.public import PublicValidatorHeartbeat
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
@@ -178,23 +179,28 @@ def _heartbeat(
     configured_slots: int = 8,
     admission: str = "accepting",
     active: list[dict[str, Any]] | None = None,
+    healthy: list[str] | None = None,
+    memory_total_mib: int | None = None,
 ) -> ValidatorHeartbeat:
     active = active or []
+    if healthy is None:
+        healthy = (
+            [f"slot-{index}" for index in range(configured_slots)]
+            if admission == "accepting"
+            else []
+        )
     return ValidatorHeartbeat(
         validator_hotkey=hotkey,
         software_version="0.36.0",
-        protocol_version=16,
+        # Host specs ride only v32+ heartbeats.
+        protocol_version=32 if memory_total_mib is not None else 16,
         code_digest="ab" * 32,
         state="running_benchmark" if active else "idle",
         active_agent_id=None,
         first_seen_at=seen_at - timedelta(days=1),
         benchmark_capacity={
             "configured_slots": configured_slots,
-            "healthy_slots": (
-                [f"slot-{index}" for index in range(configured_slots)]
-                if admission == "accepting"
-                else []
-            ),
+            "healthy_slots": healthy,
             "admission": admission,
             "active": active,
         },
@@ -205,6 +211,17 @@ def _heartbeat(
         reported_at=seen_at,
         seen_at=seen_at,
         signature="ab" * 64,
+        host_specs=(
+            {
+                "cpu_count": 8,
+                "cpu_physical_cores": 4,
+                "memory_total_mib": memory_total_mib,
+                "disk_total_gib": 200,
+                "architecture": "x86_64",
+            }
+            if memory_total_mib is not None
+            else None
+        ),
     )
 
 
@@ -300,6 +317,37 @@ class TestCapacitySummary:
         assert body["serviceable_slots"] == 4
         assert body["claimed_slots"] == 2
         assert body["active_assignment_count"] == 2
+
+        # Every configured slot is labelled: two leased, two more funded under
+        # the cap of four, and the rest refused by the platform cap.
+        states = {
+            slot["slot_id"]: (slot["state"], slot["reason"])
+            for slot in rows[_SERVING]["slots"]
+        }
+        assert states == {
+            "slot-0": ("claimed", None),
+            "slot-1": ("claimed", None),
+            "slot-2": ("free", None),
+            "slot-3": ("free", None),
+            **{
+                f"slot-{index}": ("unusable", "platform_slot_cap")
+                for index in range(4, 8)
+            },
+        }
+        assert rows[_SERVING]["unusable_slots"] == 4
+        assert rows[_SERVING]["memory_admitted_slots"] is None
+        assert {slot["reason"] for slot in rows[_OBSOLETE]["slots"]} == {
+            "bench_software_obsolete"
+        }
+        assert {slot["reason"] for slot in rows[_DRAINING]["slots"]} == {
+            "admission_draining"
+        }
+        assert body["configured_slots"] == 18
+        assert body["unusable_slots_by_reason"] == {
+            "admission_draining": 8,
+            "bench_software_obsolete": 2,
+            "platform_slot_cap": 4,
+        }
 
         by_slot = {item["slot_id"]: item for item in rows[_SERVING]["assignments"]}
         # 30 checks in the 60 minutes from issue to heartbeat: 0.5/min, so the
@@ -457,3 +505,196 @@ class TestPrepareStageStalls:
             assert [
                 item["stalled"] for item in summary.json()["active_benchmarks"]
             ] == [expected]
+
+
+class TestSlotBreakdown:
+    async def test_slots_past_host_memory_admission_name_that_reason(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The live incident's shape: eight configured, memory admits two."""
+        _install(app, session_maker, monkeypatch)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            # Default live cap is 6144 MiB: (15987 - 1024) // 6144 == 2.
+            session.add(
+                _heartbeat(
+                    _SERVING,
+                    seen_at=now - timedelta(seconds=30),
+                    healthy=["slot-0", "slot-1"],
+                    memory_total_mib=15987,
+                )
+            )
+            # A slot the validator dropped below its memory admission is the
+            # validator's own call, not memory.
+            session.add(
+                _heartbeat(
+                    _DRAINING,
+                    seen_at=now - timedelta(seconds=30),
+                    configured_slots=4,
+                    healthy=["slot-0"],
+                    memory_total_mib=64085,
+                )
+            )
+
+        response = await client.get(_URL, headers=_HEADERS)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        rows = {row["validator_hotkey"]: row for row in body["validators"]}
+        assert body["sandbox_memory_limit_mib"] == 6144
+        assert rows[_SERVING]["memory_admitted_slots"] == 2
+        assert [
+            (slot["slot_id"], slot["state"], slot["reason"])
+            for slot in rows[_SERVING]["slots"]
+        ] == [
+            ("slot-0", "free", None),
+            ("slot-1", "free", None),
+            *(
+                (f"slot-{index}", "unusable", "host_memory_admission")
+                for index in range(2, 8)
+            ),
+        ]
+        assert rows[_DRAINING]["memory_admitted_slots"] == 10
+        assert [slot["reason"] for slot in rows[_DRAINING]["slots"]] == [
+            None,
+            "validator_unhealthy",
+            "validator_unhealthy",
+            "validator_unhealthy",
+        ]
+        assert body["unusable_slots_by_reason"] == {
+            "host_memory_admission": 6,
+            "validator_unhealthy": 3,
+        }
+        # The fix path: 8 x 6144 + the 1024 MiB reserve.
+        assert rows[_SERVING]["memory_required_mib"] == 50176
+        assert rows[_SERVING]["memory_note"] == (
+            "host memory admits 2 of 8 slots at the 6,144 MiB harness cap "
+            "(15,987 MiB host); needs at least 50,176 MiB for all 8"
+        )
+        assert rows[_DRAINING]["memory_note"] is None
+        # 2 on the small host, and the big host's 4 configured, not its 10.
+        assert body["memory_admitted_slots"] == 6
+
+    async def test_a_host_that_fits_no_harness_reads_critical_with_its_fix_path(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The 5Cg3DiRf shape: accepting and serving, yet no slot fits.
+
+        The public fleet view used to call it ``healthy``. It now reads
+        ``critical`` with the same reason and fix path operators see.
+        """
+        _install(app, session_maker, monkeypatch)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            # Below one 6144 MiB cap plus its 1024 MiB headroom.
+            session.add(
+                _heartbeat(
+                    _SERVING,
+                    seen_at=now - timedelta(seconds=30),
+                    healthy=[],
+                    memory_total_mib=6000,
+                )
+            )
+            session.add(
+                _heartbeat(
+                    _DRAINING,
+                    seen_at=now - timedelta(seconds=30),
+                    configured_slots=2,
+                    memory_total_mib=64085,
+                )
+            )
+
+        fleet = await client.get("/api/v1/public/validators")
+
+        assert fleet.status_code == 200, fleet.text
+        body = fleet.json()
+        assert body["sandbox_memory_limit_mib"] == 6144
+        rows = {row["validator_hotkey"]: row for row in body["validators"]}
+        small = rows[_SERVING]
+        note = (
+            "host memory admits no benchmark slot at the 6,144 MiB harness cap "
+            "(6,000 MiB host); needs at least 7,168 MiB for 1 slot and "
+            "50,176 MiB for all 8"
+        )
+        assert small["admission"] == "accepting"
+        assert small["memory_admitted_slots"] == 0
+        assert small["memory_note"] == note
+        assert small["health"] == "critical"
+        assert small["health_reasons"][0] == note
+        # A host whose memory covers every configured slot says nothing extra.
+        big = rows[_DRAINING]
+        assert big["memory_admitted_slots"] == 10
+        assert big["memory_required_mib"] == 13312
+        assert big["memory_note"] is None
+        assert note not in big["health_reasons"]
+
+        # The dashboard reads the fleet from the operations snapshot, so it
+        # must carry the same memory fields as /validators.
+        operations = await client.get("/api/v1/public/operations")
+        assert operations.status_code == 200, operations.text
+        snapshot = operations.json()["validators"]
+        assert snapshot["sandbox_memory_limit_mib"] == 6144
+        ops_rows = {row["validator_hotkey"]: row for row in snapshot["validators"]}
+        assert ops_rows[_SERVING]["memory_note"] == note
+        assert ops_rows[_SERVING]["health"] == "critical"
+
+
+def _validator_view(**fields: Any) -> PublicValidatorHeartbeat:
+    """Only the fields the slot breakdown reads; the rest are not needed."""
+    base: dict[str, Any] = {
+        "configured_slots": 4,
+        "healthy_slots": ["slot-0", "slot-1", "slot-2", "slot-3"],
+        "allowed_slots": 4,
+        "reserved_round_slots": 0,
+        "bench_serviceability": "serving",
+        "issuance_paused": False,
+        "admission": "accepting",
+        "host_specs": None,
+    }
+    base.update(fields)
+    return PublicValidatorHeartbeat.model_construct(**base)
+
+
+class TestSlotBreakdownRules:
+    async def test_round_reserve_takes_the_highest_funded_slots(self) -> None:
+        slots = admin_validator_capacity._slot_breakdown(
+            _validator_view(reserved_round_slots=1, allowed_slots=3),
+            claimed={"slot-0"},
+            memory_admitted=None,
+        )
+        assert [(slot.state, slot.reason) for slot in slots] == [
+            ("claimed", None),
+            ("free", None),
+            ("reserved_round", None),
+            ("unusable", "platform_slot_cap"),
+        ]
+
+    async def test_paused_issuance_labels_every_unclaimed_slot(self) -> None:
+        slots = admin_validator_capacity._slot_breakdown(
+            _validator_view(issuance_paused=True, allowed_slots=0),
+            claimed={"slot-2"},
+            memory_admitted=4,
+        )
+        assert [(slot.state, slot.reason) for slot in slots] == [
+            ("unusable", "issuance_paused"),
+            ("unusable", "issuance_paused"),
+            ("claimed", None),
+            ("unusable", "issuance_paused"),
+        ]
+
+    async def test_slot_ids_sort_numerically(self) -> None:
+        slots = admin_validator_capacity._slot_breakdown(
+            _validator_view(configured_slots=8, healthy_slots=[], allowed_slots=8),
+            claimed=set(),
+            memory_admitted=0,
+        )
+        assert [slot.slot_id for slot in slots] == [f"slot-{i}" for i in range(8)]
+        assert {slot.reason for slot in slots} == {"host_memory_admission"}

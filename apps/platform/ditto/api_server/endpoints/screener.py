@@ -284,6 +284,8 @@ from ditto_screening_protocol.reason_codes import (
     L2_RUNTIME_EVIDENCE_UNAVAILABLE,
     SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
     SOURCE_REVIEW_CONFIRMED_VIOLATION,
+    STATIC_MALICIOUS_SOURCE,
+    TOOL_CATALOG_CONTEXT_OVERFLOW,
     WORKER_CLAIM_NOT_STARTED,
 )
 
@@ -292,6 +294,13 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+# Public text for a legacy mechanical-admission pass. Source review is retired
+# (owner decision, 2026-11-07): build and safety checks are the whole screen,
+# so nothing is deferred and no later review can hold the submission.
+MECHANICAL_ADMISSION_PUBLIC_REASON = (
+    "Build and safety checks passed; admitted for scoring"
+)
 
 router = APIRouter(prefix="/screener", tags=["screener"])
 
@@ -840,6 +849,11 @@ async def require_screener_controller(
 ControllerDep = Annotated[None, Depends(require_screener_controller)]
 _CONTROLLER_HEARTBEAT_READY_SECONDS = 180
 _NODE_TOKEN_ROTATION_GRACE_SECONDS = 120
+# On-demand providers power their node off between bursts, often for longer
+# than one bearer lifetime. Their expired bearer still proves possession of
+# node.json, so with a fresh hotkey signature it may rotate within the
+# configured dormancy bound. Always-on providers keep the strict expiry.
+_ON_DEMAND_NODE_PROVIDERS = frozenset({"aws"})
 _TRUSTED_BUILD_LEASE_TTL = timedelta(minutes=45)
 _SUBMISSION_BUILD_LEASE_TTL = timedelta(minutes=50)
 _SUBMISSION_BUILD_JOB_TTL = timedelta(minutes=45)
@@ -883,7 +897,7 @@ def _trusted_build_view(row: TrustedImageBuild) -> TrustedImageBuildView:
         dockerfile_path=row.dockerfile_path,
         destination=row.destination,
         status=cast(TrustedImageBuildStatus, row.status),
-        provider=cast(Literal["targon", "gcp", "hetzner"] | None, row.provider),
+        provider=cast(Literal["targon", "gcp", "hetzner", "aws"] | None, row.provider),
         provider_resource_id=row.provider_resource_id,
         image_digest=row.image_digest,
         error_code=row.error_code,
@@ -1182,7 +1196,11 @@ async def refresh_screener_node(
     session: SessionDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> ScreenerNodeCredentialResponse:
-    """Rotate a node bearer while it still owns valid signed authority."""
+    """Rotate a node bearer while it still owns valid signed authority.
+
+    An on-demand (AWS) node may also rotate an expired bearer after a bounded
+    dormancy; every other node must rotate before expiry or re-enroll.
+    """
     prefix = "Bearer "
     if authorization is None or not authorization.startswith(prefix):
         raise ScreenerAuthError("missing screener bearer token")
@@ -1226,20 +1244,57 @@ async def refresh_screener_node(
             and secrets.compare_digest(node.previous_token_hash, presented_hash)
         )
         same_request = node.last_refresh_id == payload.refresh_id
-        if node.status == "revoked" or not (
-            current_matches or (same_request and previous_matches)
-        ):
-            raise ScreenerAuthError("invalid screener node authority")
         prior_expiry = node.token_expires_at
         if prior_expiry.tzinfo is None:
             prior_expiry = prior_expiry.replace(tzinfo=UTC)
-        if now >= prior_expiry:
-            raise ScreenerAuthError("screener bearer token has expired")
+        dormant = now >= prior_expiry
+        if dormant:
+            # A woken on-demand node presents the bearer it held when it
+            # stopped. That is the current one, or, when the stop interrupted a
+            # rotation whose response was lost, the previous one for the same
+            # request even though its short overlap grace has lapsed.
+            max_dormancy = timedelta(
+                seconds=request.app.state.config.screener_auth.node_reauth_max_dormancy_seconds
+            )
+            previous_held = bool(
+                same_request
+                and node.previous_token_hash is not None
+                and secrets.compare_digest(node.previous_token_hash, presented_hash)
+            )
+            if (
+                node.provider not in _ON_DEMAND_NODE_PROVIDERS
+                or node.status not in ("active", "draining")
+                or not (current_matches or previous_held)
+                # Zero disables dormant rotation, even at the expiry instant.
+                or max_dormancy <= timedelta(0)
+                or now - prior_expiry > max_dormancy
+            ):
+                raise ScreenerAuthError("screener bearer token has expired")
+        elif node.status == "revoked" or not (
+            current_matches or (same_request and previous_matches)
+        ):
+            raise ScreenerAuthError("invalid screener node authority")
         derived_hash = hashlib.sha256(api_token.encode()).hexdigest()
         if same_request:
             if not secrets.compare_digest(node.token_hash, derived_hash):
                 raise ScreenerAuthError("refresh request identity is inconsistent")
-            expires_at = node.token_expires_at
+            if dormant:
+                # The derived bearer is retry-stable; only its lifetime renews.
+                node.token_expires_at = expires_at
+                if current_matches:
+                    # The node already holds the rotated bearer: retire the old.
+                    node.previous_token_hash = None
+                    node.previous_token_expires_at = None
+                else:
+                    # It woke with the old bearer. Keep that one usable for this
+                    # same request, as an ordinary rotation does, so a lost
+                    # response can be retried instead of forcing re-enrollment.
+                    node.previous_token_expires_at = now + timedelta(
+                        seconds=_NODE_TOKEN_ROTATION_GRACE_SECONDS
+                    )
+                node.rotated_at = now
+            else:
+                expires_at = node.token_expires_at
         else:
             # Keep the prior bearer usable only for an identical request. This
             # closes the response-loss window without granting general overlap.
@@ -2533,16 +2588,21 @@ async def _resolve_effective_review_settings(
         scopes.append(enrolled_node_id)
     scopes = [scope for scope in scopes if not is_l2_report_canary_scope(scope)]
     scopes.append("*")
-    rows = list(
-        await session.scalars(
+    # Only each scope's newest revision is used. Workers resolve this on every
+    # claim, so read one row per scope rather than the whole append-only
+    # history (192 KB a call on prod in 2026-11).
+    latest_by_scope: dict[str, ScreenerReviewSettingsRevision] = {
+        revision.scope: revision
+        for revision in await session.scalars(
             select(ScreenerReviewSettingsRevision)
             .where(ScreenerReviewSettingsRevision.scope.in_(scopes))
-            .order_by(ScreenerReviewSettingsRevision.revision.desc())
+            .distinct(ScreenerReviewSettingsRevision.scope)
+            .order_by(
+                ScreenerReviewSettingsRevision.scope,
+                ScreenerReviewSettingsRevision.revision.desc(),
+            )
         )
-    )
-    latest_by_scope: dict[str, ScreenerReviewSettingsRevision] = {}
-    for revision in rows:
-        latest_by_scope.setdefault(revision.scope, revision)
+    }
     row: ScreenerReviewSettingsRevision | None = None
     for scope in scopes:
         scoped_revision = latest_by_scope.get(scope)
@@ -3723,11 +3783,22 @@ async def queue(
     screener_hotkey: ScreenerDep,
     session: SessionDep,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    policy_only: Annotated[bool, Query()] = False,
 ) -> ScreenerQueueResponse:
-    """List completion-lane contenders, then least-scored pending agents."""
+    """List completion-lane contenders, then least-scored pending agents.
+
+    ``policy_only=true`` answers just ``required_policy_version`` with no items.
+    Workers read the policy before every claim, and running the full priority
+    query (with its per-agent score aggregates) only to discard the rows was a
+    standing load on the API at a two-second poll interval.
+    """
     response.headers["Cache-Control"] = "no-store"
     screener_policy = await _required_policy(session)
     required_policy = screener_policy.required_policy_version
+    if policy_only:
+        return ScreenerQueueResponse(
+            items=[], count=0, required_policy_version=required_policy
+        )
     rolling_qualified = exists(
         select(BenchmarkRolloutMember.agent_id)
         .join(BenchmarkRollout)
@@ -3969,7 +4040,9 @@ async def claim(
     screener_hotkey: ScreenerDep,
     session: SessionDep,
     policy_version: Annotated[int, Query(ge=1)],
-    canary_policy_version: Annotated[
+    # Accepted for wire compatibility with workers that still send it. Policy
+    # canaries and scored-policy rescreens are retired, so it selects nothing.
+    canary_policy_version: Annotated[  # noqa: ARG001
         int | None, Query(ge=1, le=SCREENING_POLICY_VERSION)
     ] = None,
     limit: Annotated[int, Query(ge=1, le=20)] = 1,
@@ -4078,7 +4151,6 @@ async def claim(
                     return _empty_claim(
                         response, reason=empty_reason, required_policy=required_policy
                     )
-                queue_settings = await resolve_queue_policy_settings(session)
                 binding = await resolve_claim_binding()
                 claimed = await claim_screening_attempts(
                     session,
@@ -4087,15 +4159,8 @@ async def claim(
                     ttl=lease_ttl,
                     limit=limit,
                     netuid=expected_netuid(),
-                    deferred_review_mode=queue_settings.deferred_source_review.mode,
-                    integrity_double_check_mode=(
-                        queue_settings.deferred_source_review.integrity_double_check_mode
-                    ),
                     review_settings_binding=binding,
-                    review_settings_enrolled_node_id=node_id,
-                    canary_policy_version=canary_policy_version,
                     claim_lock_held=True,
-                    lineage_reference_mode=queue_settings.lineage_reference_mode,
                 )
                 bound = await _bind_claim_runtime_leases(session, claimed)
         else:
@@ -4115,7 +4180,6 @@ async def claim(
                     return _empty_claim(
                         response, reason=empty_reason, required_policy=required_policy
                     )
-                queue_settings = await resolve_queue_policy_settings(session)
                 binding = await resolve_claim_binding()
                 claimed = await claim_screening_attempts(
                     session,
@@ -4124,14 +4188,7 @@ async def claim(
                     ttl=lease_ttl,
                     limit=limit,
                     netuid=expected_netuid(),
-                    deferred_review_mode=queue_settings.deferred_source_review.mode,
-                    integrity_double_check_mode=(
-                        queue_settings.deferred_source_review.integrity_double_check_mode
-                    ),
                     review_settings_binding=binding,
-                    review_settings_enrolled_node_id=node_id,
-                    canary_policy_version=canary_policy_version,
-                    lineage_reference_mode=queue_settings.lineage_reference_mode,
                 )
                 bound = await _bind_claim_runtime_leases(session, claimed)
     except _ScorerCohortUnavailableError:
@@ -5067,6 +5124,65 @@ _SEED_PROBE_PUBLIC_REASONS: Final[dict[str, str]] = {
 }
 
 
+# Tool-catalog probe rejections. From bench v18 a scored case offers up to
+# the contract's maximum tool catalog; a harness that copies all of it into
+# each model request overflows the scoring model's context window on every
+# such case (DITTO-2564). The guidance names the limit, not the probe payload.
+_TOOL_CATALOG_PROBE_PUBLIC_REASONS: Final[dict[str, str]] = {
+    TOOL_CATALOG_CONTEXT_OVERFLOW: (
+        "Given a full-size benchmark tool catalog, the application sent a model "
+        "request longer than the scoring model's 131,072-token context window. "
+        "Scored cases can offer thousands of tools; send the model only the "
+        "tools a turn needs (search or defer the rest) instead of the whole "
+        "catalog."
+    ),
+}
+
+
+_STATIC_CATEGORY_RE = re.compile(r"[a-z][a-z0-9_]{0,47}")
+_STATIC_LOCATION_RE = re.compile(
+    r"[A-Za-z0-9_.][A-Za-z0-9_./ -]{0,159}(?::[0-9]{1,10})?"
+)
+
+
+def _static_malicious_source_public_reason(detail: str) -> str:
+    """Public text for a static safety reject, with only well-formed locations.
+
+    The worker detail is ``static safety check matched categories=[a, b]
+    locations=[path:line, ...]; ...`` (``static_malicious_source_detail`` in
+    the screener). Paths come from the miner's own archive and the check runs
+    before any build, so they can carry no build secret. Still, only a strict
+    ``path:line`` shape and lowercase category slugs pass through, and no
+    other worker text is echoed.
+    """
+    match = re.match(
+        # A truncated detail keeps its complete tokens; the per-token checks
+        # below drop a partial final location.
+        r"static safety check matched categories=\[([^\]]{0,400})\] "
+        r"locations=\[([^\]]{0,1400})(?:\]|$)",
+        detail.strip(),
+    )
+    categories: list[str] = []
+    locations: list[str] = []
+    if match is not None:
+        categories = [
+            item.strip()
+            for item in match.group(1).split(",")
+            if _STATIC_CATEGORY_RE.fullmatch(item.strip())
+        ][:8]
+        locations = [
+            item.strip()
+            for item in match.group(2).split(",")
+            if _STATIC_LOCATION_RE.fullmatch(item.strip()) and ".." not in item
+        ][:8]
+    reason = "Static safety check found malicious-source patterns before execution"
+    if categories:
+        reason += f" ({', '.join(categories)})"
+    if locations:
+        reason += f" at {', '.join(locations)}"
+    return reason + ". Remove the flagged code or make it unreachable, then resubmit."
+
+
 def _public_screening_reason(detail: str, reason_code: str | None = None) -> str:
     """Map untrusted screener detail to a stable, public-safe failure category.
 
@@ -5076,8 +5192,12 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
     """
     if reason_code is not None and reason_code in _SEED_PROBE_PUBLIC_REASONS:
         return _SEED_PROBE_PUBLIC_REASONS[reason_code]
+    if reason_code is not None and reason_code in _TOOL_CATALOG_PROBE_PUBLIC_REASONS:
+        return _TOOL_CATALOG_PROBE_PUBLIC_REASONS[reason_code]
     if reason_code == "exact-cross-miner-duplicate":
         return "Artifact is an exact duplicate of another miner submission"
+    if reason_code == STATIC_MALICIOUS_SOURCE:
+        return _static_malicious_source_public_reason(detail)
     if reason_code == "container-harness-contract":
         match = _CONTAINER_CONTRACT_DIAGNOSTIC_RE.match(detail.strip())
         if match is not None:
@@ -5832,6 +5952,11 @@ async def submit_result(
         ):
             raise ScreenerAuthError("completion receipt signature did not verify")
 
+    # Every attempt is build-only once source review is retired; the legacy
+    # deferred marker only distinguishes the signed execution mode below.
+    mechanical_attempt = bool(
+        reported_attempt is not None and reported_attempt.build_only
+    )
     deferred_mechanical_admission = bool(
         reported_attempt is not None
         and reported_attempt.build_only
@@ -5916,9 +6041,8 @@ async def submit_result(
     elif outcome_value == "pass_inconclusive":
         target = AgentStatus.EVALUATING
         public_reason = (
-            "Mechanical admission passed; deep source review deferred until score "
-            "qualification"
-            if deferred_mechanical_admission
+            MECHANICAL_ADMISSION_PUBLIC_REASON
+            if mechanical_attempt
             else "Bounded source review exhausted; admitted for scoring"
         )
     elif (
@@ -6587,8 +6711,8 @@ async def submit_result(
                             if late_deferred_result
                             else "Evidence retained on the score-qualified ATH review"
                             if deferred_attempt_lifecycle
-                            else "Deep source review deferred until score qualification"
-                            if deferred_mechanical_admission
+                            else MECHANICAL_ADMISSION_PUBLIC_REASON
+                            if mechanical_attempt
                             else (
                                 "Source-review evidence retained on an admitted "
                                 "submission"

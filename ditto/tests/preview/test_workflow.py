@@ -170,7 +170,28 @@ def test_stack_preview_controller_is_dispatch_only_and_caps_slots() -> None:
     backroom_config = (ROOT / "preview/cloud/backroom.wrangler.jsonc").read_text()
     backroom_entrypoint = (ROOT / "preview/cloud/backroom-entrypoint.sh").read_text()
     assert "backroom: {condition: service_healthy}" in compose
-    assert "AbortSignal.timeout(5000)" in compose
+    assert "--max-time, '5', --cacert, /run/preview-backroom-cert/cert.pem" in compose
+    assert "https://backroom:3000/" in compose
+    services = yaml.safe_load(compose)["services"]
+    assert (
+        "preview-oauth-socket:/run/preview-oauth:ro" in services["gateway"]["volumes"]
+    )
+    assert (
+        "preview-oauth-socket:/run/preview-oauth"
+        in services["oauth-fixture"]["volumes"]
+    )
+    assert (
+        "preview-backroom-cert:/run/preview-backroom-cert:ro"
+        in services["gateway"]["volumes"]
+    )
+    assert [
+        name
+        for name, service in services.items()
+        if any(
+            volume.startswith("preview-backroom-key:")
+            for volume in service.get("volumes", [])
+        )
+    ] == ["backroom"]
     assert "docker compose -f preview/cloud/compose.yml logs" in runtime
     assert '"main": "./dist/server/index.js"' in backroom_config
     assert '"directory": "./dist/client"' in backroom_config
@@ -250,7 +271,7 @@ def test_preview_base_bake_is_scheduled_credential_empty_and_prunes() -> None:
     assert "sn118-preview: bake complete" in guest
     assert "sn118-preview: startup failed" in guest
     # Warm the pulled images and the built layers, and start nothing.
-    assert "compose pull --quiet postgres minio minio-init gateway" in guest
+    assert "compose pull --quiet postgres gateway" in guest
     assert "compose build" in guest
     assert "compose up" not in guest
     # startup.sh reaches this only through the bake metadata key.

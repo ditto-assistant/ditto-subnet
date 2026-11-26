@@ -13,6 +13,7 @@
 | Local OpenAPI generation | `apps/backroom/scripts/platform-contract/generate.sh` |
 | Shadow coding revocation adapter | `services/dittobench-api/internal/codinggrantrevoke/`, `services/dittobench-api/docs/coding-private-runtime-adapters-shadow.md` |
 | Owner representative and continual retest admission diagnosis | `apps/platform/ditto/api_server/endpoints/admin_leaderboard.py` (`continual-retest-diagnostic`), `endpoints/validator.py` (`_current_retest_cohort`), Backroom MCP `get_continual_retest_diagnostic`, `apps/backroom/docs/mcp.md` |
+| Airdrop runs (SN-490): dry-run preview, idempotent execute, per-run caps, rehearsal-only executors | `apps/platform/ditto/api_server/airdrop.py`, `endpoints/admin_airdrops.py`, Backroom MCP `preview_airdrop` / `execute_airdrop`, `apps/backroom/docs/mcp.md` |
 | Affected-component graph | `release/components.toml` |
 | Production DB and Targon logs (read-only) | `.agents/skills/gcloud-ditto-readonly/` |
 

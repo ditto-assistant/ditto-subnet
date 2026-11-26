@@ -27,7 +27,9 @@ applied to an existing version. It ships as a new one.
 | 13 (pre-activation) | `2027-05-01` | Deterministic typed worlds and compositional enterprise records; model-authored private wording deferred to V14. A published 250-case memory mix with money capped at ≤12% target / 15% hard, typed claim grading in the requested unit, and relay-evidenced tool gates (catalog-present, provenance, causal, twin/pair, cost) that ship in shadow/observe. Same seed and generator revision reproduce the dataset. Activation follows exact-candidate qualification and canary evidence. |
 | 14 | `2027-06-01` | Action-scoped declarative over-call scoring, rendered-reply grading, supersession chains, point-in-time, relative-sequence, process-step and role families. Activated 2026-10-28. |
 | 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
-| 16 (staged) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. Generatable and vector-pinned, not yet in the supported set. |
+| 16 (shadow, pre-activation) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. The composite carries the enforced priced inference cost factor (`details.priced_cost`: whole-run tokens at locked public rates, $1.00 per 350-case reference, floor 0.6; [PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). Supported and advertised (`dueling-slice-v1`); not active. Rollout: [benchmark-v16-rollout.md](../../../docs/benchmark-v16-rollout.md). |
+| 17 | `2027-09-01` | The v16 dueling datagen half with the answer-pool fix (`answerPoolFixBenchVersion`), scored with priced-cost-v2 (whole-run tokens at locked public rates, $0.50 per 350-case reference, floor 0.3). Active on 2026-11-07 (Backroom leaderboard `active_bench_version`). Known vector `68df415cf0b8b92525f1011b6c1a92bf9fc5d65bae96e76b3fcaa1787c166c48` (`TestV17KnownVector`). |
+| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17, plus a per-run cost budget ($1.00 per 350 cases; unrun cases score 0); the one token lever is a per-seed production catalog of 1,400-2,000 real tools (pinned snapshot). Known vector `85ffc23800d9b874a7f9af6b45dc0706cba800bac5746b7e2e504350b6b466fb` (`TestV18KnownVector`). |
 
 ## Answer-pool collision audit
 
@@ -1357,7 +1359,7 @@ epoch `2027-07-01T00:00:00Z`. Every v2–v14 generation and grading vector
 remains unchanged. Supporting v15 does not change Platform's active version;
 see [the rollout plan](../../../docs/benchmark-v15-rollout.md).
 
-## Bench v16 dueling contract, datagen half (staged)
+## Bench v16 dueling contract, datagen half
 
 V16 is the dueling contract ([dueling-bench.md](dueling-bench.md)): a
 canonical run is a 175-case datagen half generated here plus five generator
@@ -1367,16 +1369,16 @@ composite. This module ships only the datagen half. It inherits v15 exactly
 `answerPoolFixBenchVersion` moves to 17) except for the profile and the
 connector changes below. Every lever is gated on `bench_version >= 16`.
 
-**Staged, not supported.** `protocol.BenchVersionV16` lives in
-`protocol/staged.go`: it has its own epoch (`2027-08-01`) and rotate seed and
-generates through `GenerateDataset`, but it is outside
-`supportedBenchVersions`, so `SupportedBenchVersion`,
-`NewestSupportedBenchVersion`, the scorer's advertised window and efficiency
-readiness all stay at 15, matching the shared ceiling in
-`ditto/tests/contract/bench_versions.json`. Offline tools (`cmd/generate`,
-`cmd/mixaudit`, `cmd/parserprobe`, `cmd/toolprobe`) accept staged versions.
-The cross-layer PR that raises the shared ceiling moves the constant and epoch
-into `epoch.go` and the supported list; generation bytes do not change.
+**Supported, not active.** `protocol.BenchVersionV16` was first staged in
+`protocol/staged.go` (generatable with its own epoch `2027-08-01` and rotate
+seed, outside `supportedBenchVersions`) so the datagen half could land and be
+vector-pinned before the rest of the stack. The cross-layer flip moved the
+constant and epoch into `epoch.go` and the supported list, raised the shared
+ceiling in `ditto/tests/contract/bench_versions.json` to 16, and made the
+scorer advertise 16 with `dueling-slice-v1`; generation bytes did not change.
+Pack policy 16 (`challenge.GradingBenchVersionV16`) shipped with it and grades
+like 15. Supporting v16 does not change Platform's active version; see
+[the rollout plan](../../../docs/benchmark-v16-rollout.md).
 
 **Dueling profile** (`gen/v16_envelope.go`, `gen.ProfileForVersion(_, 16)`).
 
@@ -1469,7 +1471,9 @@ allowance), so v16 does not ban filters; the difficulty is in the cases.
 a harness that probes once and then claims the action succeeded scores the
 same as one that tells the user the app is not connected. Grading it needs a
 `>= 16` branch in the scorer's tool grader (a decline claim on the reply), so
-it is left for a later contract. Accepted by the operator for v16.0.
+it is left for a later contract. Accepted by the operator for v16.0. Bench v18
+reads the reply (`scorer.ApplyV18UnlinkedReply`, review posture first; see
+"Bench v18 accuracy contract").
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV16KnownVector` pins:
@@ -1478,6 +1482,391 @@ epoch `2027-08-01T00:00:00Z`. Every v2 to v15 vector is unchanged (v15 stays
 `33232bf35e829cbd08efc56777988d1e8784760487837aaa2f185c6f2077783d`).
 Contract tests: `gen/v16_contract_test.go`, `catalog/v16_test.go`,
 `datagen/v16_test.go`, `toolexec/v16_test.go`, `protocol/epoch_test.go`.
+
+## Bench v18 accuracy contract, datagen half
+
+On live v17 the cost factor did all the ranking: every agent scored 0.93-0.99
+on the datagen half. V18 changes only which first-party cases a run asks.
+Scoring is priced-cost-v2 unchanged. The only lever that adds tokens is the
+production-sized connector menu below; there are no extra decoy tools and the
+case half is still 50 + 125. Every lever is
+gated on `bench_version >= 18`, so v2..v17 regenerate byte-identically
+(`TestV17KnownVector`). V18 was staged in `protocol/staged.go` and promoted
+into the supported list by the cross-layer PR with the same epoch and seed
+domain, so its vector did not move. Supporting v18 does not activate it.
+
+**Evidence.** Per-category means over all 27 v17 production score rows
+(Platform `scores.details.per_case`, read 2026-11-07), all agents / top three
+agents (dan0l v43, Tessellate v6, DrPresident v35). 70 of 113 categories
+averaged at least 0.99. The levers below cite the categories they move.
+
+**Tool half (50 cases).**
+
+| Lever | v17 | v18 | Evidence |
+| --- | ---: | ---: | --- |
+| Tool encounters (`V18EncounterQuotaFor`, below) | 0 | 10 (two per archetype); full on 97 of 100 seeds, minimum 7 | 99% of v18 single-call cases needed two calls or fewer; real chat episodes median 3 |
+| Restraint groups (`v13RestraintCaseCountForVersion`) | 8 | 8 (medium, unchanged) | every v17 restraint family saturated; restraint now also lives inside encounters |
+| Discovery / unexpected (`v13QuotaForVersion`) | 3 / 2 | 3 / 2 (`V18DiscoveryCases`, `V18UnexpectedCases`) | saturated on v17; the slots go to encounters |
+| Decoy-correct | 5 | 2 (`V18DecoyCases`) | every `decoy_*_result_usage` family 1.000 |
+| Connector families | 11 (after the v13 passes) | 11 (installed first, never converted) | `connector_linked_result_usage` 0.909 |
+| World floor | 3 per family, 17 world-derived | 1 per family, 8 world-derived (`V18WorldMinimum`) | every world family 1.000 except contact research 0.981 |
+| Restraint may take ordinary result-usage singletons | no | yes (`v18RestraintMayTakeResultUsage`) | link_chain, multi_web, web_recovery, web_result 0.988-1.000 |
+| Residual weights (`toolCategoryWeightV18`) | v7 | entity_lookup_chain 2 -> 8; link_chain, web_recovery, stale_context_web -> 2 | entity_lookup_chain 0.889 / 0.667 |
+
+**Memory half (125 cases, `gen/v18_envelope.go`).**
+
+| Slot | v17 | v18 | Evidence |
+| --- | ---: | ---: | --- |
+| Story | 36 (6 arcs x 6) | 35 (7 arcs x 5; lesson-claims, status-current, order, x-owner-email dropped first while an arc is over its slot) | lesson-claims 1.000, status-current 0.985; status-disagree 0.879 |
+| Ordinary world | 20 | 19 | 12 answerable twins and 6 staged corrections kept |
+| Business programs | 16 (1 family group, always owner-after-correction, + 12 enterprise) | 16 (holder-vs-actor + 2 groups drawn per seed from the other `universe.V18BusinessFamilies`, + 4 enterprise) | open program 0.973 / 1.000, enterprise 0.979 / 0.991; holder-vs-actor 0.906 on the top owners' v15 rows |
+| Personal programs | 4 | 8 (subscriptions-renewals + 1 drawn) | 0.946 / 0.917; subscriptions-renewals 0.850 (v17), 0.891 (v15) |
+| Abstention | 12 (2/2/1/1/3/3) | 12 (pure 2, near miss 1, stale-removed 2, cross-user 2, false premise 3, insufficient 2) | probes 0.821-0.946, every answerable twin >= 0.95 |
+| Point-in-time | 6 (3 of 6 pairs) | 8 (4 of 6) | contact 0.946, trip leg 0.964 |
+| Isolation | 9 | 5 | 1.000 over 252 cases |
+| Record quantity, divergence, integrity | 4, 4, 14 | 4, 4, 14 | divergence and the canary are anti-gaming probes; integrity holds injection-envelope-free (0.821) |
+
+The v18 business families are the v14 ports of the generator-competition
+shapes that separated agents ([v14-generator-credits.md](v14-generator-credits.md)):
+unnamed reverts (supersession chains), 5-8 event relative sequences,
+dated status inside a non-final interval, step-state processes, holder versus
+actor custody (at most two hops), identity joins, and records that disagree.
+They shipped in v14, but the v16/v17 table rendered only group 0, so none of
+them reached a scored v16 or v17 run on the business side. Client-vs-vendor,
+whose records name the role label, is not drawn. Each group keeps its
+metamorphic variants (renderer, distractor and counterfactual) and its
+near-miss distractors.
+
+`go run ./cmd/mixaudit -bench-version 18 -seeds 40 -gate` passes 0/40 (means:
+money 0.062, money of computed answers 0.181, business 0.412, abstention
+0.096, twin 0.448, cascade 0.016). A third stale-removed pair would put the
+contacts sub-domain over its 20% cap on 4 of 40 seeds.
+
+**Tool encounters (`datagen/v18_encounter.go`).** Owner scope change,
+2026-11-07: the tool half was too easy because almost every case was one or
+two calls. Before this pass the v18 tool cases over 20 seeds expected 0 calls
+155 times, 1 call 648 times, 2 calls 191 times and 3 calls 6 times. Real
+sessions are longer (Platform prod, peyton@omniaura.ai, last 30 days):
+
+| Source | Calls per encounter, median | p75 | p90 | 3+ calls |
+| --- | ---: | ---: | ---: | ---: |
+| Ditto chat (calls within 90 s of each other) | 3 | 7 | 15 | 65% |
+| Router traffic (tool rounds per user turn) | 2 | 3 | 7 | 31% |
+
+An encounter is one request that needs several dependent calls against an
+argument-keyed mock world (`protocol.Encounter`): the page a search returns
+carries the figure, that page points at a correction, a workflow run returns a
+job that is still running on the first check, and memory says the billing
+contact changed. Each case is graded on the outcome (`grade.Encounter`):
+
+    score = answer credit x required-call coverage x 0.5^(forbidden calls)
+
+- *Answer.* The reply must carry every answer value. A value given beside one
+  of its hedges (the uncorrected total, last week's figure, the resolved
+  incident) earns nothing for that value.
+- *Required calls, any order.* A required call is a tool plus the values that
+  prove the dependency was followed (the correction URL, the current
+  contact's address, the figure in the post). Only calls observed at the mock
+  endpoint count; a self-reported call earns no coverage.
+- *Expected calls are neutral*, and so is any other served call: wandering is
+  priced by the cost factor and the run budget, not by the grader.
+- *Forbidden calls* are the ones with no business in the request (a write when
+  the user said change nothing, the archived workflow, the former contact, a
+  duplicate ticket). Each one halves the score.
+
+| Archetype | Tools | Required (unordered) | Forbidden | Answer |
+| --- | --- | --- | --- | --- |
+| `errata_chain` | search_web, read_links, run_code (expected) | search the vendor, read the pricing page, follow its correction notice | any linked-app write | yearly total at the corrected price (hedges: listed and forum prices) |
+| `reconcile_sources` | two linked apps' reads | read both records | any linked-app write ("don't change anything") | the later approved value and its approver |
+| `job_followthrough` | list_workflows (expected), run_workflow, list_agent_jobs, linked-app write | run, check the job until it completes, post this run's figure | running the archived twin | the figure (hedge: last week's) |
+| `memory_handoff` | memory (expected), linked-app read, gmail_send | read the balance; email the current contact with balance and invoice | emailing the former contact; any linked-app write | balance and the current contact |
+| `status_triage` | search_web, read_links, linked-app read and write | read the status page and the tracker; file the incident only if it is untracked | a duplicate when it is tracked; filing the resolved (or other region's) incident, judged by the incident the item title names first: an ID quoted after it or in another field is context | incident id (and the existing ref when tracked) |
+
+Every value is coined per seed and case, so the shapes are public but no
+answer is. Each archetype also branches into variants that need one judgment
+the plain path skips: a notice for another plan, a correction that is itself
+superseded, a later edit still awaiting approval, an automatic job retry, a
+credit note, another region's incident that is already tracked. Prompts and
+results are composed from interchangeable phrasings and shuffled lines.
+`TestV18EncountersDefeatAPlainPathScript` is the negative control. A
+template script is told the archetype, the tools and the search terms, but
+has no judgment step. Run against the real mock endpoint and grader over 40
+seeds, it scores 1.000 on the plain variants (207 cases) and 0.049 on the
+trap variants (189 cases), 0.546 overall. A harness that reads the results,
+or asks the decision lane (Jev) to choose among the candidates it extracted,
+passes both. Encounters use only product tools and the seed's linked apps; an
+unlinked app, a snapshot toolkit or a wording decoy is still refused inside an
+encounter. The slots come from families every v17 agent saturated: v18 keeps
+the medium restraint, discovery and unexpected quotas its 50-case half selects
+(instead of the full ones an earlier v18 draft used). Restraint is still
+tested inside encounters (`reconcile_sources` and a tracked `status_triage`
+forbid every write). `TestV18EncountersAreSolvableAndDiscriminate` checks, over
+24 seeds, that every required call targets a served tool on the seed's menu,
+that every value a call or answer needs is reachable from the prompt, a served
+result or the case's memory, and that the honest solution scores 1 while a
+dropped call, a hedge, a missing answer or a forbidden call each scores
+lower.
+
+The encounter cost is real: an honest solution makes 3 to 6 calls, against
+about 1.2 for the cases it replaces, and with a full v18 menu each call
+re-sends the menu. The priced-cost reference ($0.50 per run) and the run budget
+are unchanged; whether either should move for longer encounters is a cost-rule
+decision kept out of v18.
+
+**Production catalog (catalog/v18.go).** Owner scope change, 2026-11-07:
+v18 builds each seed's tool menu from a pinned snapshot of real toolkits (the
+production Composio mirror, 1,718 enabled toolkits and 77,953 tools on
+2026-11-07) plus Ditto's first-party tool catalog. This is the one lever in
+v18 that adds tokens; the cost rule is unchanged.
+
+- *Pinned, never live.* The snapshot
+  (`catalog/v18snapshot/catalog-2026-11-07.json.gz`, 1,717 enabled toolkits,
+  77,948 enabled non-deprecated tools and 128 first-party tools, read-only on
+  2026-11-07) is embedded in the module, and its SHA-256 must equal
+  `catalog.V18CatalogSnapshotSHA256`
+  (`2f38d1bf046ed60b53d11d54a0b8ab69c042d17eed3bd27d1e161e385fa06756`), so every
+  validator generates identical datasets. Changing it is a new bench version.
+- *Sampled per seed, whole toolkits.* The seed draws a target menu size in
+  the contract's range (`catalog.CatalogSizeForVersion`; v18: 1,400 to 2,000
+  tools) and adds whole toolkits in a seeded order, skipping any that would
+  pass the maximum, so the production skew (a few huge toolkits, many small
+  ones) carries through. First-party tools are always included. The bench
+  grows toward the production range (up to 5,000) one version at a time: a
+  later contract changes that one entry plus the pinned snapshot.
+- *Graded cases do not move.* Every graded case stays on the v16 surface the
+  datagen simulates. Snapshot tools are refused "not connected" by the mock,
+  perform nothing, and no case expects one. Toolkits whose capability a
+  product tool owns (email, calendar, web search, maps, weather, translation,
+  images, video, memory, reminders) are never sampled, so a snapshot tool is
+  never a defensible answer. A toolkit for an app the seed links is skipped on
+  that seed (`v18LinkedToolkitAliases` maps each linkable app to its
+  snapshot toolkits, e.g. `teams` to `microsoft_teams`), so a linked app never
+  shows "not connected" tools. A snapshot name that is also a simulated tool
+  (seven first-party names are the bench's own product tools) keeps its
+  simulated behaviour and appears once.
+- *Paraphrased per seed.* Descriptions get seeded meaning-preserving word
+  swaps and framing (`v18Paraphrase`), so a public catalog cannot simply be
+  memorized.
+- *Schemas.* The production mirror stores no input schemas for toolkit tools,
+  so each renders one optional free-form argument. Real Composio schemas are
+  larger, so token figures from this snapshot are a lower bound.
+
+Token scale (o200k, OpenAI tools JSON): the v17 menu is 235 tools and 16,210
+tokens. A synthetic production-skew menu of 1,517 tools measured 153,154
+tokens (101 per tool). At v18's 1,400 to 2,000 tools a whole menu is roughly
+100k to 200k tokens, at or above the locked model's 131,072-token context,
+and tool names alone are about 11k to 16k tokens per call. Harnesses that
+forward the whole menu are culled; ones that retrieve or defer tools are not.
+
+On v17 every agent but one already forwards a filtered set: across all 28
+v17 rows the median tools offered per completion was 31-34 (maximum 41) for
+nine agents, and 234 for the tenth. The scorer's catalog capture keeps up to
+8,192 tools per completion, so a harness that forwards everything is still
+captured completely.
+
+**Redistribution (owner decision, recorded 2026-11-09):** the owner approved
+publishing the pinned snapshot, which carries only the public Composio
+listing's toolkit names, tool names and descriptions (no input schemas), in
+the public bench, its dataset reveals and this repository.
+
+**Per-run cost budget (scorer, `run-budget-v1`).** A v18 canonical run stops
+admitting cases once its priced cost reaches $1.00 per 350 cases (the cost at
+which the priced-cost-v2 factor already sits on its 0.3 floor), and scores every
+unrun case 0 (`budget_exhausted`, `details.run_budget`; full rule in
+[PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). It is metered at
+the priced-cost rates over the whole run, datagen half and slice. Replayed on
+the 28 v17 production rows (per-case cost estimated from each case's
+completions and output tokens, slice cases sharing the remainder):
+
+| Agent (v17 rows) | Priced cost per run | Budget reached | Cutoff (of 350) |
+| --- | ---: | :---: | ---: |
+| DrPresident v35, dan0l v43, Tessellate v2/v6, DrPresident v34, dan0l v42 | $0.47-$0.95 | no | - |
+| crown-v210 v1, beast-d35 v1 | $1.29-$1.36 | yes | 272-280 |
+| nanodevs v14 | $1.55-$1.63 | yes | 224-234 |
+| logan v11 | $1.85-$1.91 | yes | 190-195 |
+
+Dispatch order puts every cutoff inside the generator slice, so those runs keep
+their datagen accuracy and lose most of their slice score. The three validators'
+cutoffs for one agent differ by at most 10 cases, so the median composite
+moves little across validators.
+
+**`conversational-chitchat` is a grading ceiling, not difficulty.** Its
+0.500 on all 84 v17 cases is the fixed chitchat credit (`gradingPolicy.chitchatCredit`,
+0.5 since v8). It lowers every agent's memory mean by the same 1.2 points and
+ranks nobody. V18 does not change grading.
+
+**Unlinked-connector reply (the v16.0 gap).** From v18 the scorer reads an
+unlinked probe's reply for a not-connected claim
+(`services/dittobench-api/internal/scorer/v18_unlinked_reply.go`). It ships in
+`review` (notes only); `DITTOBENCH_V18_UNLINKED_REPLY_POSTURE=penalize` halves
+a reply without the claim and `enforce` zeroes it. The operator moves it after
+reading the review notes against cleared top agents.
+
+**Not yet measured on v18.** No agent has run a v18 dataset. The per-family
+discrimination table (top-agent means on v18) and the `familygate` admission
+of the newly reachable business families need executed panel runs; until then
+the v14 families stay `pending-panel` in `universe.V14FamilyMix`.
+
+For seed `123456789`, full profile, public surface salt 0,
+`TestV18KnownVector` pins
+`85ffc23800d9b874a7f9af6b45dc0706cba800bac5746b7e2e504350b6b466fb`, with
+epoch `2027-10-01T00:00:00Z`. Contract tests: `gen/v18_contract_test.go`,
+`datagen/v18_test.go`, `services/dittobench-api/internal/scorer/v18_unlinked_reply_test.go`.
+
+## Bench v19 generalization contract (staged)
+
+Epic DITTO-2736. On v18 the public datagen memory half no longer ranks the top
+of the board: the top four agents score .955-.969 on it, a spread of .014. They
+reach that partly by keying routing regexes and prompt notes to this module's
+own question wording and data habits. Policy allows this (the I5 routed-guidance
+clarification of 2026-10-23), so v19 does not ban it. Instead, v19 makes it
+earn nothing.
+
+Each of these is gated on `bench_version >= 19`, so v2..v18 regenerate and
+re-score byte-identically:
+
+1. **Shortcut-breaker families** (DITTO-2737). The answer is wrong for a rule
+   built on a habit of this generator, and right for a general memory system.
+   The habits covered:
+   - trigger words in fact questions;
+   - late-recorded story changes;
+   - a company as the correct holder;
+   - near-twin people's names;
+   - next steps whose condition is part of the answer.
+2. **Seeded phrase grammar** (DITTO-2738). Question wording is composed per seed
+   from intent frames, synonym slots and clause order, not drawn from short
+   fixed lists.
+3. **Held-out weight** (DITTO-2739). The public datagen half's share of the
+   composite falls, and the generator columns' share rises: each counted column
+   weighs 0.15 (0.1 on 16..18), so five columns carry 75% and the datagen half
+   25%. A datagen qualifier `min(1, datagen_raw / 0.8)` scales the whole
+   composite, so the public bench cannot be skipped. `details.dueling` gains
+   `datagen_qualifier`. See [dueling-bench.md](dueling-bench.md) section 9,
+   including the tool-share tradeoff (about 12.5% of the composite) that must
+   be accepted before activation.
+
+V19 keeps v18's run size (`ProfileForVersion`). It is staged in
+`protocol/staged.go`, epoch `2027-11-01T00:00:00Z`, until the cross-layer PR
+supports it. Its known vector is pinned once the datagen half is final.
+
+### Shortcut-breaker families (DITTO-2737)
+
+Released v18 agent sources encode five habits of this generator as rules. Each
+rule is correct on v18 data and wrong on the matching v19 family:
+
+| Family (`QuestionType`) | Rule it breaks | v19 records | Correct answer | Rule's answer |
+| --- | --- | --- | --- | --- |
+| `v19-breaker-trigger-fact` | `LESSON_RE`: a question saying lesson, teach, learn, moral or "stuck with me" is answered with the user's saying | a fact note (a pet's dose, a service due date, who taught a skill, the days to appeal a ticket), then a note with the user's proverb, "that one stuck with me" | the fact | the proverb (a distractor) |
+| `v19-breaker-late-recorded` | `DATED_NOTE`: go by the date a record was saved, not the dates it names | a work account's value on day S; a note saved on day R saying it changed "in effect from" E, with S < E < R | the new value, for an as-of date between E and R | the old value (a distractor) |
+| `v19-breaker-company-holder` | `HOLDER_CHECK`: a company is never the holder | a work item handed to a person, then "Org took over the item from the person and keeps it until ..." | the company | the person (a distractor) |
+| `v19-breaker-near-twin` | a typo budget: any word within 1-3 edits is the same name | two people one or two edits apart (Dan/Dana, Lena/Lana), each with an allergy, a new city or a birthday; the asked twin's note comes first | the asked twin's fact | the later twin's fact (a distractor) |
+| `v19-breaker-conditional-next` | `TASK_CHECK`: drop any time or condition from the task of a "person ; task ; channel" answer | "Next step on the work thread: Person will task condition, by channel" | person; task with its condition; channel | the bare task, which misses the action claim |
+
+All five families come from `universe.GenerateV19Breakers`
+(`universe/v19_breakers.go`). Each case is its own thread in its own session,
+so v19 adds no state to the v15 world and v2..v18 regenerate byte-identically.
+The draws are seeded per case. People and pets come from the `humandata` name
+banks, and organisations and cities from `publicdata`. No breaker name repeats a
+world person's first name or nickname. A near twin is at least two edits from
+every other name in the run except its twin, and every other breaker name is at
+least three edits from all the rest. That is a rule about people. The
+story subject-alias guarantee (4 edits) is unchanged. Every graded value
+appears in the case's records and never in its question, and the trigger word,
+names and dates are protected from typo noise.
+
+**Grading is unchanged.** Each case carries typed claims for the shipped v13+
+claim grader. The conditional-next action claim's expected phrase includes the
+condition, so "contains the expected phrase" still applies. The full sentence
+passes in either clause order ("Ana will send the revised quote before Friday,
+by email"; "before Friday, send the revised quote"). A reply without the
+condition misses a critical claim and scores 0. `grade/` has no v19 branch.
+
+**Table.** The full table stays at 125 memory cases, and the tool half is
+unchanged (`gen/v19_envelope.go`, slot `shortcut-breakers`):
+
+| Slot | v18 | v19 |
+| --- | ---: | ---: |
+| Story | 35 (7 arcs x 5) | 25 (5 arcs x 5) |
+| Shortcut breakers | 0 | 10 (2 per family) |
+| Every other slot | unchanged | unchanged |
+
+The slots come from story, the most saturated slot in the v17 evidence (six
+oracles averaged 0.96-0.99 per arc). Four of the five families also target
+rules that agents learned from story arcs. Per-family v18 means were not
+read for this move; the top four v18 agents score .921-.988 on the memory half.
+Business programs could not give slots: they move in four-case groups, and
+four fewer business cases put every seed under the 0.40 business floor (0.384).
+The late-recorded, company-holder and conditional-next threads are work
+records, so the mix audit counts them as business. Trigger-fact and near-twin
+are personal, and none of them joins the contacts sub-domain.
+`go run ./cmd/mixaudit -bench-version 19 -seeds 40 -gate` passes on all 40
+seeds (business 0.420, personal 0.580). Medium and small ask no breakers.
+
+**Regression.** `TestV19ShortcutRulesLoseOnBreakerFamilies`
+(`gen/v19_breakers_test.go`) writes each rule as a small Go answerer over the
+case's records, beside an oracle reader, and grades both with `grade.Memory`.
+Over 40 seeds (80 cases per family) the oracle scores 1.000 on every family
+and each rule scores 0.000 on its own. `TestV19ConditionalNextGradesTheFullSentence`
+pins the contains-phrase behaviour, and `TestV19MixGate` pins the gate and the
+slot counts.
+
+### Seeded phrase grammar (DITTO-2738)
+
+Through v18 each memory question family takes its wording from a short fixed
+list, picked per seed: twelve task frames per story oracle, three body forms
+per business family, three per personal domain and abstention probe. At
+`bench_version >= 19`, `universe/v19_phrasing.go` composes the wording instead.
+Each family has:
+
+- several intent frames, in more than one clause order ("On March 3, which …"
+  / "Which … as of March 3?");
+- synonym classes for verbs, nouns and time phrases (`<now>`: now / currently /
+  these days / at the moment …);
+- an optional politeness or filler lead ("Quick question:", "Remind me,",
+  "Do you know");
+- an optional casual register (contractions, lower-case lead);
+- an optional answer-format closer.
+
+Every pick is a seeded hash draw keyed by (family, seed, question identity), so
+rendering is deterministic, independent per question, and never calls an LLM.
+Slot values (entity, alias, date, quantity, schema label) are filled verbatim
+after composition. The question never names a graded value, and the oracle,
+answer, accept sets, claims, distractors, grounding tokens and evidence are
+unchanged.
+
+Every family declares the meaning markers each rendering must carry and the
+terms it must not carry. For example, an as-of question always says "on
+<date>" or "as of <date>" and never "now", "after" or "since"; a "right before"
+sequence question never says "after". Each grounded-abstention probe and its
+answerable twin draw from the same frames (the near-miss probe adds its
+colleague clause), so the wording cannot tell the decline from the answer.
+
+Hooks: story oracles (`questions_v13.go`); business and v14 role, temporal,
+supersession and state-fold families (`v13Member.ask`); personal domains
+(`v13Member.askPersonal`); and the abstention probes with their answerable
+twins (`v13_absence.go`, `questions.go`). Below 19 every hook renders the v18
+list unchanged. Typos still come from the existing `textnoise` pass. Other
+generators can call `universe.V19Phrase(family, seed, identity, slots)`.
+
+Acceptance, measured over 24 v18 seeds and 24 disjoint v19 seeds
+(`universe/v19_phrasing_test.go`):
+
+| Measure | v18 | v19 |
+|---|---|---|
+| A copying miner's 3-word regex suite (terms that recur in a family's v18 wording and in at most two other families, slot values masked): share of the family's questions it matches | 31-100% (33 of 37 families at 100%) | 0-35% (ceiling 40%) |
+| The same suite, all story oracles pooled (the anchor wording) | 77.1% | 12.7% |
+| Verbatim routing terms quoted from a top v18 agent ("rule did i set", "owes the next", "has the ball", "as far as the records go", …) | present | 0 renderings |
+| Wordings per family | the fixed list: 12 story task frames, 3 body forms per program family | 288-400 distinct of 400 identities with fixed slot values (anchor tail: 113) |
+| Lexical-shortcut proof trips on twin and story wordings | 0.10% | 0.06% |
+| `cmd/parserprobe` GIH memory mean, 8 full seeds | 0.866 | 0.562 |
+| `cmd/parserprobe` story family identification | 0.986 | 0.000 |
+
+`TestV19PhrasingLeavesAnswersUnchanged` checks that a v19 world renders the
+same answers, claims, evidence and grounding as v18 for every story,
+abstention and program case. Each v19 story case still resolves through the
+generation-time oracle (`resolveWithEvidence`).
+`gen/TestV19DatasetRephrasesQuestionsNotAnswers` checks the same on full
+datasets. v2..v18 known vectors do not move.
 
 ## Bench v15 grading policy (shipped ahead of the generation contract)
 

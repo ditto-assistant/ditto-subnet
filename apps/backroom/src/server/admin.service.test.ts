@@ -2,6 +2,10 @@ import { fetchMinerGithubLink, fetchGithubContributor, fetchClaPolicy, updateCla
 import { contributorFixture, claStatusFixture, claControlFixture, claShadowRevisionFixture, claVersionFixture, githubRevocationFixture, revokedGithubFixture } from './contributor.test-fixtures'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  admitStrandedSubmissionInputSchema,
+  strandedAdmissionConfirmation,
+} from '../lib/benchmark-era-stranded.schemas'
+import {
   startBenchmarkRollout,
   expandBenchmarkRollout,
   supersedeBenchmarkRollout,
@@ -49,6 +53,7 @@ import {
   updateArtifactReleaseSettings,
   fetchSubmissionSettingsControl,
   fetchCompetitionSubmissionTerms,
+  fetchReadmissions,
   updateSubmissionSettings,
   fetchHotkeyBan,
   fetchHotkeyBans,
@@ -62,7 +67,6 @@ import {
   fetchQueuePolicySettings,
   setQueuePolicySettings,
   fetchScreenerPolicyActivation,
-  scheduleScreenerPolicyActivation,
   fetchValidatorSlotSettings,
   setValidatorSlotSettings,
   setValidatorIssuancePause,
@@ -1075,6 +1079,7 @@ describe('screening submission admin service', () => {
     await expect(fetchScreeningSubmission({ agentId })).resolves.toEqual({
       ...submission,
       miner_coldkey: null,
+      public_status: null,
       image_builds: [],
     })
     expect(fetchMock).toHaveBeenCalledWith(
@@ -1707,6 +1712,35 @@ describe('artifact release administration', () => {
     expect((await fetchArtifactReleaseControl()).release_gate).toBeUndefined()
   })
 
+  it('carries the collector stall signal and never invents one for an older Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const gate = {
+      version: 'completed-winner-emission-v2', automatic_confirmation_enabled: true,
+      collector_cursor_block: 9200000,
+      collector_blocked_reason: null,
+      pending_kings: 3, confirmed_kings: 1, rows: [], rows_limit: 25, rows_has_more: false,
+    }
+    const stalled = {
+      ...gate,
+      collector_cursor_advanced_at: '2026-11-24T10:00:00Z',
+      collector_stalled: true,
+      collector_stall_after_seconds: 3600,
+    }
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ ...control, release_gate: stalled }))
+      .mockResolvedValueOnce(Response.json({ ...control, release_gate: gate })))
+    // A stall with no blocked reason is still a stall.
+    expect((await fetchArtifactReleaseControl()).release_gate).toMatchObject({
+      collector_stalled: true,
+      collector_blocked_reason: null,
+      collector_cursor_advanced_at: '2026-11-24T10:00:00Z',
+    })
+    // Absent means unknown: it must not read as a current collector.
+    const older = (await fetchArtifactReleaseControl()).release_gate
+    expect(older).toBeDefined()
+    expect(older?.collector_stalled).toBeUndefined()
+  })
+
   it('writes CAS, reason, confirmation, and operator attribution before refreshing', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi
@@ -1855,8 +1889,9 @@ describe('submission cooldown administration', () => {
     // An older Platform omits the per-competition fields; reads default them.
     await expect(fetchSubmissionSettingsControl()).resolves.toEqual({
       ...control,
-      current: { ...control.current, competition_fees: {} },
+      current: { ...control.current, competition_fees: {}, readmission_announced_at: null },
       effective_competition_fees: null,
+      readmission: null,
     })
     await updateSubmissionSettings('operator@omniaura.ai', {
       expectedRevision: 1,
@@ -1884,6 +1919,150 @@ describe('submission cooldown administration', () => {
   })
 })
 
+describe('stranded admission category (SN-485)', () => {
+  it('accepts an omitted or null category and a known one', () => {
+    const agentId = '11111111-1111-4111-8111-111111111111'
+    const base = {
+      agentId,
+      expectedActiveVersion: 19,
+      expectedSha256: 'a'.repeat(64),
+      expectedPreviousScoreCount: 3,
+      reason: 'owner asked to readmit after the era change',
+      confirmation: strandedAdmissionConfirmation(agentId, 19),
+    }
+    expect(admitStrandedSubmissionInputSchema.parse(base).category).toBeUndefined()
+    expect(admitStrandedSubmissionInputSchema.parse({ ...base, category: null }).category).toBeNull()
+    expect(
+      admitStrandedSubmissionInputSchema.parse({ ...base, category: 'ditto_fault' }).category,
+    ).toBe('ditto_fault')
+    expect(() =>
+      admitStrandedSubmissionInputSchema.parse({ ...base, category: 'paid' }),
+    ).toThrow()
+  })
+})
+
+describe('list_readmissions (SN-485)', () => {
+  it('pages both lanes and parses the readmission read', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const payload = {
+      activation: {
+        active: true,
+        inactive_reasons: [],
+        announced_at: '2026-12-01T00:00:00Z',
+        effective_at: '2026-12-08T00:00:00Z',
+        active_bench_version: 19,
+        min_bench_version: 19,
+        notice_period_seconds: 604800,
+        fee_amount_rao: 75_000_000,
+        fee_source: 'upload_default',
+        settings_revision: 3,
+      },
+      cost_basis: {
+        bench_version: 19,
+        agents_sampled: 12,
+        runs_per_evaluation: 3,
+        median_run_cost_usd: 0.35,
+        median_agent_cost_usd: 1.05,
+        measured_at: '2026-12-09T00:00:00Z',
+        source: 'Platform inference ledger',
+      },
+      bench_version: null,
+      totals: { admitted: 1, admitted_amount_rao: 75_000_000 },
+      free_admissions_by_category: { ditto_fault: 2, paid: 1 },
+      paid: [
+        {
+          block_hash: '0x' + 'a'.repeat(64),
+          extrinsic_index: 3,
+          agent_id: '11111111-1111-4111-8111-111111111111',
+          agent_name: 'stranded',
+          miner_hotkey: '5Hot',
+          miner_coldkey: '5Cold',
+          bench_version: 19,
+          rollout_id: null,
+          outcome: 'admitted',
+          funding: 'fresh',
+          amount_rao: 75_000_000,
+          refusal_reason: null,
+          credit_audit: null,
+          credit_spent: null,
+          credit_expires_at: null,
+          recorded_at: '2026-12-09T00:00:00Z',
+          updated_at: '2026-12-09T00:00:00Z',
+        },
+      ],
+      uploads: [],
+      truncated: false,
+      generated_at: '2026-12-09T00:00:00Z',
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const read = await fetchReadmissions({ benchVersion: 19, offset: 100 })
+    expect(read.paid[0].outcome).toBe('admitted')
+    expect(read.totals.credited).toBe(0)
+    expect(read.cost_basis?.median_agent_cost_usd).toBe(1.05)
+    const url = String(fetchMock.mock.calls[0][0])
+    expect(url).toContain('/api/v1/admin/readmissions?')
+    expect(url).toContain('bench_version=19')
+    expect(url).toContain('limit=100')
+    expect(url).toContain('offset=100')
+  })
+})
+
+describe('readmission activation (SN-485)', () => {
+  it('reads the announcement and activation state without writing it', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const readmission = {
+      active: false,
+      inactive_reasons: ['notice_period'],
+      announced_at: '2026-12-01T00:00:00Z',
+      effective_at: '2026-12-08T00:00:00Z',
+      active_bench_version: 19,
+      min_bench_version: 19,
+      notice_period_seconds: 604800,
+      fee_amount_rao: 75_000_000,
+      fee_source: 'upload_default',
+      settings_revision: 3,
+    }
+    const current = {
+      revision: 3,
+      parent_revision: 2,
+      cooldown_seconds: 3600,
+      fee_amount_rao: 75_000_000,
+      competition_fees: {},
+      readmission_announced_at: '2026-12-01T00:00:00Z',
+      reason: 'record the readmission announcement',
+      actor: 'operator@omniaura.ai',
+      created_at: '2026-12-01T00:00:00Z',
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({ current, history: [], effective_competition_fees: [], readmission }),
+      )
+      .mockResolvedValueOnce(Response.json(current))
+      .mockResolvedValueOnce(
+        Response.json({ current, history: [], effective_competition_fees: [], readmission }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const control = await fetchSubmissionSettingsControl()
+    expect(control.readmission).toEqual(readmission)
+    expect(control.current.readmission_announced_at).toBe('2026-12-01T00:00:00Z')
+
+    // A cooldown write never names the announcement, so Platform carries it
+    // forward: Backroom cannot set or clear it.
+    await updateSubmissionSettings('operator@omniaura.ai', {
+      expectedRevision: 3,
+      cooldownSeconds: 3600,
+      feeAmountRao: 75_000_000,
+      reason: 'keep the cooldown as it is',
+      confirmation: 'SET SUBMISSION COOLDOWN 3600 SECONDS FEE 75000000 RAO',
+    })
+    const body = JSON.parse(String(fetchMock.mock.calls[1][1].body))
+    expect(body).not.toHaveProperty('readmission_announced_at')
+  })
+})
+
 describe('per-competition submission fees and terms', () => {
   const generatorFee = { fee_amount_rao: 500_000_000, fee_required: null }
   const priced = {
@@ -1893,11 +2072,13 @@ describe('per-competition submission fees and terms', () => {
       cooldown_seconds: 3600,
       fee_amount_rao: 200_000_000,
       competition_fees: { generator: generatorFee },
+      readmission_announced_at: null,
       reason: 'price the generator competition',
       actor: 'operator@omniaura.ai',
       created_at: '2026-10-26T12:00:00Z',
     },
     history: [],
+    readmission: null,
     effective_competition_fees: [
       {
         competition: 'memory',
@@ -2041,6 +2222,7 @@ describe('per-competition submission fees and terms', () => {
             settings_revision: 2,
           },
           terms_endpoint: '/api/v1/generator/upload-terms',
+          readmission: null,
         },
       ],
     }
@@ -2339,6 +2521,7 @@ describe('continual retest administration', () => {
     ledger_pin_mode: 'epoch' as const,
     crown_incumbent_mode: 'disabled' as const,
     crown_gate_mode: 'disabled' as const,
+    crown_duel_mode: 'disabled' as const,
     min_dethrone_confirmations: 3,
     champion_standing_rank: 3,
     wave_membership: 'participants',
@@ -2348,6 +2531,9 @@ describe('continual retest administration', () => {
     retest_cohort_max_size: 25,
     wave_cadence_tempos: 0,
     wave_seeds_per_window: 3,
+    retest_mode: 'continual' as const,
+    season_duel_seeds: 3,
+    season_duel_rotation_seeds: false,
   }
   const legacyEquivalent = {
     ...readDefaults,
@@ -2383,6 +2569,9 @@ describe('continual retest administration', () => {
       crown_gate_fleet_ready: false,
       crown_gate_active: false,
       crown_gate_required_protocol: 34,
+      crown_duel_fleet_ready: false,
+      crown_duel_active: false,
+      crown_duel_required_protocol: 35,
       ledger_pin: null,
       max_age_seconds: 5,
       open_rollout_desired_version: null,
@@ -2400,6 +2589,7 @@ describe('continual retest administration', () => {
     ledger_pin_mode: carried,
     crown_incumbent_mode: carried,
     crown_gate_mode: carried,
+    crown_duel_mode: carried,
     min_dethrone_confirmations: carried,
     champion_standing_rank: carried,
     retest_cohort_size: carried,
@@ -2409,6 +2599,9 @@ describe('continual retest administration', () => {
     retest_cohort_max_size: carried,
     wave_cadence_tempos: carried,
     wave_seeds_per_window: carried,
+    retest_mode: carried,
+    season_duel_seeds: carried,
+    season_duel_rotation_seeds: carried,
   })
   // The platform carries every field, so reads and writes both keep them.
   const supported = {
@@ -2426,6 +2619,7 @@ describe('continual retest administration', () => {
       ledger_pin_mode: 'epoch' as const,
       crown_incumbent_mode: 'disabled' as const,
       crown_gate_mode: 'disabled' as const,
+      crown_duel_mode: 'disabled' as const,
       min_dethrone_confirmations: 3,
       champion_standing_rank: 3,
       idle_retests_enabled: true,
@@ -2437,6 +2631,9 @@ describe('continual retest administration', () => {
       retest_cohort_max_size: 25,
       wave_cadence_tempos: 0,
       wave_seeds_per_window: 3,
+      retest_mode: 'continual' as const,
+      season_duel_seeds: 3,
+      season_duel_rotation_seeds: false,
     }
     const enabled = {
       ...control,
@@ -2633,15 +2830,6 @@ describe('queue policy administration', () => {
       jaccard_threshold: 0.9,
       containment_threshold: 0.95,
     },
-    deferred_source_review: {
-      mode: 'off',
-      integrity_double_check_mode: 'off',
-      min_cohort_size: 8,
-      composite_mad_multiplier: 6,
-      axis_mad_multiplier: 6,
-      min_composite_delta: 0.1,
-      min_axis_delta: 0.15,
-    },
     prev_gen_carryover: {
       enabled: false,
       max_agents: 10,
@@ -2773,6 +2961,136 @@ describe('queue policy administration', () => {
     ).rejects.toThrow(/expected 0, current 2.*get_queue_policy_settings/s)
   })
 
+  const validationRefusal = {
+    error_code: 3001,
+    message: 'request validation failed',
+    request_id: 'req-validation',
+  }
+  const legacyBlock = {
+    mode: 'off',
+    integrity_double_check_mode: 'off',
+    min_cohort_size: 8,
+    composite_mad_multiplier: 6,
+    axis_mad_multiplier: 6,
+    min_composite_delta: 0.1,
+    min_axis_delta: 0.15,
+  }
+
+  it('carries the live deferred_source_review block to a platform that still requires it', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    // A platform released before the retirement: it still returns the block
+    // and 422s a write without it. Release deploys Platform and Backroom in
+    // parallel, so this Backroom can meet that platform.
+    const legacyControl = {
+      ...control,
+      effective: {
+        ...control.effective,
+        revision: 16,
+        source: 'revision',
+        settings: { ...settings, deferred_source_review: legacyBlock },
+      },
+    }
+    const nextSettings = { ...settings, rescore_cohort_size: 8 }
+    const fetchMock = vi
+      .fn()
+      // The exact envelope that platform sends: field names stay in its logs.
+      .mockResolvedValueOnce(Response.json(validationRefusal, { status: 422 }))
+      .mockResolvedValueOnce(Response.json(legacyControl))
+      .mockResolvedValueOnce(Response.json({ revision: 17 }))
+      .mockResolvedValueOnce(Response.json(legacyControl))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await setQueuePolicySettings(
+      {
+        expectedRevision: 16,
+        settings: nextSettings,
+        reason: 'shrink the rescore cohort to eight',
+        confirmation: 'APPLY QUEUE POLICY SETTINGS',
+      },
+      'operator@omniaura.ai',
+    )
+
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    const bodyOf = (call: number) =>
+      JSON.parse(String((fetchMock.mock.calls[call] as [string, RequestInit])[1].body))
+    expect(bodyOf(0).settings).toEqual(nextSettings)
+    expect(bodyOf(2)).toEqual({
+      scope: '*',
+      expected_revision: 16,
+      settings: { ...nextSettings, deferred_source_review: legacyBlock },
+      reason: 'shrink the rescore cohort to eight',
+      actor: 'operator@omniaura.ai',
+      confirmation: 'APPLY QUEUE POLICY SETTINGS',
+    })
+  })
+
+  it('keeps a validation 422 from a retired platform as the refusal and never resends', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(validationRefusal, { status: 422 }))
+      // The retired platform no longer returns the block.
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      setQueuePolicySettings(
+        {
+          expectedRevision: 0,
+          settings,
+          reason: 'restore the shipped lane cycle after the wave',
+          confirmation: 'APPLY QUEUE POLICY SETTINGS',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow(/request validation failed.*get_queue_policy_settings/s)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect((fetchMock.mock.calls[1] as [string, RequestInit])[1].method).toBe('GET')
+  })
+
+  it('never retries an unrelated 422, even from a platform that still requires the block', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    // A route refusal carries its own detail and the HTTP-exception code, not
+    // the validation code, so it is a decision on this write, not a missing
+    // field the carryover could satisfy.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error_code: 3002,
+            message: "queue policy is subnet-global; scope must be '*'",
+            request_id: 'req-scope',
+          },
+          { status: 422 },
+        ),
+      )
+      .mockResolvedValue(
+        Response.json({
+          ...control,
+          effective: {
+            ...control.effective,
+            settings: { ...settings, deferred_source_review: legacyBlock },
+          },
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      setQueuePolicySettings(
+        {
+          expectedRevision: 0,
+          settings,
+          reason: 'restore the shipped lane cycle after the wave',
+          confirmation: 'APPLY QUEUE POLICY SETTINGS',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow(/scope must be '\*'.*get_queue_policy_settings/s)
+    // No carryover read and no second POST.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects an unsatisfiable lane policy before any admin call', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi.fn()
@@ -2847,171 +3165,6 @@ describe('screener policy activation', () => {
       revisions: [],
       fleet: null,
     })
-  })
-
-  it('schedules one activation with the exact platform contract', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const scheduled = {
-      ...view,
-      latest: revision(4),
-      revisions: [revision(4), revision(3), revision(2)],
-      fleet: null,
-    }
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json({ revision: 4 }))
-      .mockResolvedValueOnce(Response.json(scheduled))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(
-      scheduleScreenerPolicyActivation(
-        {
-          expectedRevision: 3,
-          targetPolicyVersion: 11,
-          activateAt: '2026-08-29T09:00:00-04:00',
-          rescreenScored: true,
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-        },
-        'operator@omniaura.ai',
-      ),
-    ).resolves.toEqual(scheduled)
-
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      'https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          expected_revision: 3,
-          target_policy_version: 11,
-          activate_at: '2026-08-29T09:00:00-04:00',
-          rescreen_scored: true,
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          actor: 'operator@omniaura.ai',
-          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-        }),
-      }),
-    )
-  })
-
-  it('defaults rescreenScored to true when the operator omits it', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json({ revision: 4 }))
-      .mockResolvedValueOnce(Response.json(view))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(
-      scheduleScreenerPolicyActivation(
-        {
-          expectedRevision: 3,
-          targetPolicyVersion: 11,
-          activateAt: '2026-08-29T09:00:00-04:00',
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-        },
-        'operator@omniaura.ai',
-      ),
-    ).resolves.toEqual(view)
-
-    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({
-      rescreen_scored: true,
-    })
-  })
-
-  it('rejects a timezone-naive activate_at before any admin call', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(
-      scheduleScreenerPolicyActivation(
-        {
-          expectedRevision: 3,
-          targetPolicyVersion: 11,
-          activateAt: '2026-08-29T09:00:00',
-          rescreenScored: true,
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-        },
-        'operator@omniaura.ai',
-      ),
-    ).rejects.toThrow()
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it('rejects the wrong confirmation phrase before any admin call', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(
-      scheduleScreenerPolicyActivation(
-        {
-          expectedRevision: 3,
-          targetPolicyVersion: 11,
-          activateAt: '2026-08-29T09:00:00-04:00',
-          rescreenScored: true,
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          confirmation: 'SCHEDULE SCREENER POLICY',
-        },
-        'operator@omniaura.ai',
-      ),
-    ).rejects.toThrow()
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it('surfaces the stale-revision 409 detail verbatim', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const detail =
-      'screener policy activation changed; refresh before scheduling (expected 3, current 4)'
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json({ detail }, { status: 409 }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(
-      scheduleScreenerPolicyActivation(
-        {
-          expectedRevision: 3,
-          targetPolicyVersion: 11,
-          activateAt: '2026-08-29T09:00:00-04:00',
-          rescreenScored: true,
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-        },
-        'operator@omniaura.ai',
-      ),
-    ).rejects.toThrow(detail)
-    // Nothing is re-read after a refusal, so the operator cannot mistake a
-    // fresh GET for a successful schedule.
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('surfaces the platform 422 refusal detail verbatim', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const detail = 'target_policy_version 12 is above builtin_policy_version 11'
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json({ detail }, { status: 422 }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(
-      scheduleScreenerPolicyActivation(
-        {
-          expectedRevision: 3,
-          targetPolicyVersion: 12,
-          activateAt: '2026-08-29T09:00:00-04:00',
-          rescreenScored: true,
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-        },
-        'operator@omniaura.ai',
-      ),
-    ).rejects.toThrow(detail)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -4249,6 +4402,9 @@ describe('production score reads', () => {
     completed_wave_depth: 0,
     official_sample_count: 3,
     raw_confirmation_depth: 1,
+    confirmation_seed_floor: 8,
+    confirmation_seed_cap: 10,
+    confirmation_seed_target: 9,
     composite_stderr: 0.01,
     aggregate_mode: 'fleet_ready',
     wave_membership: 'participants',
@@ -4291,6 +4447,10 @@ describe('production score reads', () => {
       void_rerun_claimable: false,
       provider_outage_active: false,
       provider_gate_closed: false,
+      retest_mode: 'continual' as const,
+      season_duel_seed_count: null,
+      season_duel_anchor_champion_id: null,
+      season_duel_held_seed_count: null,
       wave_cadence_tempos: 0,
       wave_seeds_per_window: null,
       wave_window_epoch: null,
@@ -4327,7 +4487,17 @@ describe('production score reads', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
-    expect(result).toEqual(retestDiagnosticPayload)
+    // A platform that predates the season-expiry fields still parses: they
+    // default to empty/null rather than failing the read.
+    expect(result).toEqual({
+      ...retestDiagnosticPayload,
+      score_dueling_season_ids: [],
+      window_dueling_season_ids: [],
+      in_window_score_count: null,
+      last_valid_composite: null,
+      season_retest: null,
+      in_current_pin: null,
+    })
     expect(result.raw_confirmation_seeds).toEqual(['9223372036854775001'])
     // Suppressed by its owner's deeper evidence while outscoring the cutoff it
     // sits behind: a structural exclusion, not a score it failed to reach.
@@ -4340,6 +4510,36 @@ describe('production score reads', () => {
       `https://platform-api.heyditto.ai/api/v1/admin/agents/${provisionalAgentId}/continual-retest-diagnostic`,
       expect.anything(),
     )
+  })
+
+  it('reads an expired dueling season as its own admission reason', async () => {
+    // SN-466: logan v15 after season 26103 opened. The quorum aged out of the
+    // two-season window by design; the read names the seasons on both sides.
+    const payload = {
+      ...retestDiagnosticPayload,
+      canonical_composite: null,
+      official_composite: null,
+      in_retest_cohort: false,
+      is_same_owner_challenger: false,
+      admission_reason: 'expired_dueling_season',
+      ledger_eligible: false,
+      score_dueling_season_ids: ['87a46084-1664-4dbe-bc56-6fb8d3f57200'],
+      window_dueling_season_ids: [
+        '428a8bc5-b002-4af4-91e4-964cb83128f4',
+        '5b1c5a3e-0d0e-4a52-9a0c-3d1b8f0c2a10',
+      ],
+      in_window_score_count: 0,
+      last_valid_composite: 0.960714,
+      in_current_pin: true,
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(payload)))
+
+    const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
+    expect(result.admission_reason).toBe('expired_dueling_season')
+    expect(result.score_dueling_season_ids).toEqual(['87a46084-1664-4dbe-bc56-6fb8d3f57200'])
+    expect(result.in_window_score_count).toBe(0)
+    expect(result.last_valid_composite).toBe(0.960714)
+    expect(result.in_current_pin).toBe(true)
   })
 
   it('reads void re-run debt on an agent outside the cohort', async () => {
@@ -5375,6 +5575,120 @@ describe('production score reads', () => {
       gate_posture: null,
       median_flagged_case_share: null,
     })
+  })
+
+  it('carries the bench v16 priced inference cost and folds its medians into history', async () => {
+    const pricedCost = (normalizedUsd: number, factorBps: number) => ({
+      contract_id: 'priced-cost-v1',
+      posture: 'enforce',
+      applied: true,
+      result: 'priced',
+      window: 'whole_run',
+      source: 'relay',
+      cases: 350,
+      prompt_tokens: 22_318_268,
+      completion_tokens: 1_690_233,
+      embedding_tokens: 294_000,
+      cost_nano_usd: Math.round(normalizedUsd * 1e9),
+      normalization_cases: 350,
+      normalized_cost_nano_usd: Math.round(normalizedUsd * 1e9),
+      reference_nano_usd: 1_000_000_000,
+      ratio_bps: Math.floor(normalizedUsd * 10_000),
+      floor_bps: 6000,
+      factor_bps: factorBps,
+      applied_factor_bps: factorBps,
+      cost_usd: normalizedUsd,
+      normalized_cost_usd: normalizedUsd,
+      rule_consistent: true,
+    })
+    const v16Scores = {
+      ...agentScores,
+      score_count: 9,
+      scores: [
+        ...agentScores.scores,
+        scoreRow({ validator_hotkey: '5ValA', composite: 0.61, bench_version: 16, seed: 999, run_id: 'run-a16', generated_at: '2026-11-13T00:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce', priced_cost: pricedCost(1.81699, 6733) }) }),
+        scoreRow({ validator_hotkey: '5ValB', composite: 0.62, bench_version: 16, seed: 999, run_id: 'run-b16', generated_at: '2026-11-13T01:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce', priced_cost: pricedCost(1.70001, 7200) }) }),
+        // A row that could not price its run carries no cost into the medians.
+        scoreRow({ validator_hotkey: '5ValC', composite: 0.9, bench_version: 16, seed: 999, run_id: 'run-c16', generated_at: '2026-11-13T02:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce', priced_cost: { ...pricedCost(0, 10_000), result: 'insufficient_evidence' } }) }),
+      ],
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(v16Scores)))
+
+    const history = await fetchAgentScoreHistory({ agentId: topAgentId })
+    const v16 = history.versions.find((version) => version.bench_version === 16)
+    expect(v16?.median_priced_cost_usd).toBeCloseTo((1.81699 + 1.70001) / 2, 10)
+    expect(v16?.median_priced_cost_factor_bps).toBe((6733 + 7200) / 2)
+    expect(history.versions.find((version) => version.bench_version === 7)).toMatchObject({
+      median_priced_cost_usd: null,
+      median_priced_cost_factor_bps: null,
+    })
+  })
+
+  it('carries the bench v16 dueling breakdown through get_agent_scores without owner keys', async () => {
+    const column = (id: string, extra: Record<string, unknown> = {}) => ({
+      column_id: id, grading_bench_version: 16, n: 35, sum: 28, mean: 0.8,
+      substituted: false, public_default: false, self_masked: false, contribution: 0.08,
+      ...extra,
+    })
+    const breakdown = {
+      formula: 'gate x ((1 - w x |U|) x datagen + w x sum col)',
+      season_id: '8f2b6a52-3b7f-4a55-9d0c-0d6c7d2a9e11',
+      season_index: 3,
+      datagen_raw: 0.9,
+      datagen_gate: 0.79832,
+      column_weight: 0.1,
+      counted_columns: 4,
+      datagen_share: 0.6,
+      generator_sum: 0.23,
+      pre_gate_composite: 0.77,
+      composite: 0.6147064,
+      composite_stderr: 0.0125,
+      priced_cost_applied_factor_bps: 9392,
+      priced_cost_factor_bps: 9392,
+      priced_cost_factor: 0.9392,
+      priced_cost_posture: 'enforce',
+      priced_cost_result: 'priced',
+      priced_cost_window: 'whole_run',
+      other_gate_factor: 0.85,
+      columns: [
+        column('c0', { public_default: true }),
+        // A field Platform never sends is stripped, never forwarded.
+        column('c1', { self_masked: true, contribution: 0, owner_key: '5SecretOwner' }),
+        column('c2'),
+        column('c3', { substituted: true }),
+        column('c4'),
+      ],
+    }
+    const v16Scores = {
+      ...agentScores,
+      score_count: 4,
+      scores: [
+        ...agentScores.scores,
+        scoreRow({ validator_hotkey: '5ValA', composite: 0.614706, bench_version: 16, seed: 999, run_id: 'run-a16', generated_at: '2026-11-13T00:00:00Z', dueling_breakdown: breakdown }),
+      ],
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(Response.json(leaderboard))
+        .mockResolvedValueOnce(Response.json(v16Scores)),
+    )
+
+    const detail = await fetchAgentScores({ agentId: topAgentId, benchVersion: 16 })
+    const [row] = detail.scores
+    expect(row?.dueling_breakdown).toMatchObject({
+      priced_cost_applied_factor_bps: 9392,
+      priced_cost_window: 'whole_run',
+      counted_columns: 4,
+    })
+    expect(row?.dueling_breakdown?.columns.map((c) => c.self_masked)).toEqual([
+      false, true, false, false, false,
+    ])
+    expect(JSON.stringify(detail)).not.toContain('5SecretOwner')
+    expect(JSON.stringify(detail)).not.toContain('owner_key')
+    // Pre-v16 rows carry no breakdown at all.
+    const v7 = detail.other_bench_versions.find((group) => group.bench_version === 7)
+    expect(v7?.scores.every((score) => score.dueling_breakdown === undefined)).toBe(true)
   })
 
   it('reports a mixed bench v13 gate posture as null instead of picking one', async () => {

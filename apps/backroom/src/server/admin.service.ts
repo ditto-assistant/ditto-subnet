@@ -231,10 +231,7 @@ import {
   v13ReplayPrivateReceiptSchema,
 } from '../lib/v13-private.schemas'
 
-import {
-  scheduleV13ReviewClockInputSchema,
-  v13ReviewClockScheduleSchema,
-} from '../lib/review-clock.schemas'
+import { v13ReviewClockScheduleSchema } from '../lib/review-clock.schemas'
 
 import {
   conversationAssessmentInputSchema,
@@ -346,6 +343,8 @@ import {
   expireRunningScreeningResponseSchema,
   rejectScreeningSubmissionInputSchema,
   rejectScreeningSubmissionResponseSchema,
+  amendQuarantineRejectReasonInputSchema,
+  amendQuarantineRejectReasonResponseSchema,
   screeningSubmissionFiltersSchema,
   releaseVerifiedV13CourtClearInputSchema,
   releaseVerifiedV13CourtClearResponseSchema,
@@ -483,6 +482,8 @@ import {
   athReviewQueueSloSchema,
   validatorCapacitySummarySchema,
   validatorRequestOutcomeSummarySchema,
+  harnessMemoryListSchema,
+  agentHarnessMemorySchema,
   outlierEscalationDryRunInputSchema,
   outlierEscalationDryRunSchema,
   outlierEscalationInputSchema,
@@ -500,10 +501,8 @@ import {
   setQueuePolicySettingsInputSchema,
   screenerPolicyActivationViewSchema,
   scoredPolicyRescreenViewSchema,
-  advanceScoredPolicyRescreenInputSchema,
   restoreScoredScreeningSnapshotInputSchema,
   restoreScoredScreeningSnapshotResponseSchema,
-  scheduleScreenerPolicyActivationInputSchema,
   VALIDATOR_SLOT_SETTINGS_SCOPE,
   validatorSlotSettingsControlSchema,
   validatorIssuanceConfirmation,
@@ -619,6 +618,7 @@ import {
   submissionTermsReadSchema,
   submissionTermsSchema,
 } from '../lib/submission-terms.schemas'
+import { adminReadmissionsSchema, listReadmissionsInputSchema } from '../lib/readmission.schemas'
 import {
   competitionImprovementMetricsInputSchema,
   competitionImprovementMetricsSchema,
@@ -1188,6 +1188,38 @@ export async function fetchDatabaseBackupStatus() {
   )
 }
 
+// Pylon ages its recent-neurons cache by write time, so only the snapshot's
+// block shows a refresh that read a lagging node (SN-463).
+export const registrationFreshnessSchema = z.object({
+  netuid: z.number().int(),
+  generated_at: z.string(),
+  snapshot_block: z.number().int().nonnegative(),
+  snapshot_observed_at: z.string(),
+  finalized_block: z.number().int().nullable(),
+  finalized_block_error: z.string().nullable(),
+  snapshot_lag_blocks: z.number().int().nullable(),
+  lag_reconcile_threshold_blocks: z.number().int(),
+  lag_check_interval_seconds: z.number().nullable(),
+  chain_registrations: z.object({
+    block: z.number().int().nonnegative(),
+    block_timestamp: z.string().nullable(),
+    provider: z.string(),
+    observed_at: z.string(),
+  }).nullable(),
+  serving_registrations_block: z.number().int(),
+  changes: z.array(z.object({
+    uid: z.number().int().nonnegative(),
+    pylon_hotkey: z.string().nullable(),
+    chain_hotkey: z.string().nullable(),
+  })),
+})
+
+export async function fetchRegistrationFreshness() {
+  return registrationFreshnessSchema.parse(
+    await platformAdminRequest('/api/v1/admin/registration-freshness'),
+  )
+}
+
 export async function fetchScreeningInfraRetries() {
   const payload = await platformAdminRequest('/api/v1/admin/screening-infra-retries')
   return screeningInfraRetryViewSchema.parse(payload)
@@ -1394,6 +1426,24 @@ export async function fetchCompetitionSubmissionTerms() {
 }
 
 const SUBMISSION_SETTINGS_PATH = '/api/v1/admin/submission-settings'
+
+/**
+ * Every SN-485 readmission: the paid lane (admitted, or credited when refused
+ * after payment) and uploads classified as readmissions, with totals, the
+ * active era's free admissions by category, activation and the cost basis.
+ */
+export async function fetchReadmissions(rawInput: unknown) {
+  const input = listReadmissionsInputSchema.parse(rawInput ?? {})
+  const params = new URLSearchParams()
+  if (input.benchVersion !== undefined) params.set('bench_version', String(input.benchVersion))
+  if (input.minerColdkey !== undefined) params.set('miner_coldkey', input.minerColdkey)
+  params.set('limit', String(input.limit))
+  params.set('offset', String(input.offset))
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/readmissions?${params.toString()}`,
+  )
+  return adminReadmissionsSchema.parse(payload)
+}
 
 export async function fetchSubmissionSettingsControl() {
   const payload = await platformAdminRequest(SUBMISSION_SETTINGS_PATH)
@@ -1985,21 +2035,73 @@ function queuePolicyRefusal(cause: unknown) {
   return new Error(`${cause.message}. ${recovery}`)
 }
 
+// A platform released before the deferred_source_review retirement still
+// requires that block on every write and still returns it on read, while this
+// Backroom no longer models it. Release deploys Platform and Backroom in
+// parallel, so for that window carry the live block over unchanged instead of
+// failing every write. Delete once every platform runs the retirement.
+//
+// Only Platform's request-validation refusal qualifies. That platform answers
+// a body missing the block with the generic validation envelope (422,
+// error_code 3001, "request validation failed"): field names stay in its logs,
+// so the detail cannot name the block. Validation depends on the body alone,
+// never on live state, so the retry, whose body differs only by the block,
+// can succeed only when the block was what failed; a route refusal such as a
+// wrong scope carries its own code and is never retried. The platform's own
+// GET then decides: a retired platform no longer returns the block, so this
+// returns null and the original refusal stands.
+const PLATFORM_REQUEST_VALIDATION_ERROR_CODE = 3001
+const legacyDeferredSourceReviewSchema = z.object({
+  effective: z.object({
+    settings: z.object({
+      deferred_source_review: z.record(z.string(), z.unknown()),
+    }),
+  }),
+})
+
+async function legacyDeferredSourceReviewBlock(cause: unknown) {
+  if (
+    !(cause instanceof PlatformAdminError) ||
+    cause.status !== 422 ||
+    cause.errorCode !== PLATFORM_REQUEST_VALIDATION_ERROR_CODE
+  ) {
+    return null
+  }
+  let payload: unknown
+  try {
+    payload = await platformAdminRequest(QUEUE_POLICY_SETTINGS_PATH)
+  } catch {
+    return null
+  }
+  const legacy = legacyDeferredSourceReviewSchema.safeParse(payload)
+  return legacy.success ? legacy.data.effective.settings.deferred_source_review : null
+}
+
 export async function setQueuePolicySettings(rawInput: unknown, actor: string) {
   const input = setQueuePolicySettingsInputSchema.parse(rawInput)
-  try {
-    await platformAdminRequest(QUEUE_POLICY_SETTINGS_PATH, {
+  const post = (settings: Record<string, unknown>) =>
+    platformAdminRequest(QUEUE_POLICY_SETTINGS_PATH, {
       method: 'POST',
       actor,
       body: {
         scope: input.scope,
         expected_revision: input.expectedRevision,
-        settings: input.settings,
+        settings,
         reason: input.reason,
         actor,
         confirmation: input.confirmation,
       },
     })
+  try {
+    try {
+      await post(input.settings)
+    } catch (cause) {
+      const legacyBlock = await legacyDeferredSourceReviewBlock(cause)
+      if (legacyBlock === null) throw cause
+      // Nothing was stored by the 422, and expected_revision still guards
+      // the retry against a concurrent write.
+      await post({ ...input.settings, deferred_source_review: legacyBlock })
+    }
   } catch (cause) {
     throw queuePolicyRefusal(cause) ?? cause
   }
@@ -2013,76 +2115,13 @@ export async function fetchV13ReviewClock() {
   return v13ReviewClockScheduleSchema.parse(await platformAdminRequest(V13_REVIEW_CLOCK_PATH))
 }
 
-export async function scheduleV13ReviewClock(rawInput: unknown, actor: string) {
-  const input = scheduleV13ReviewClockInputSchema.parse(rawInput)
-  await platformAdminRequest(V13_REVIEW_CLOCK_PATH, {
-    method: 'POST',
-    actor,
-    body: {
-      expected_revision: input.expectedRevision,
-      policy_version: 13,
-      policy_document_digest: input.policyDocumentDigest,
-      policy_manifest_digest: input.policyManifestDigest,
-      activate_at: input.activateAt,
-      window_seconds: input.windowSeconds,
-      reason: input.reason,
-      actor,
-      confirmation: input.confirmation,
-    },
-  })
-  return fetchV13ReviewClock()
-}
-
 export async function fetchScreenerPolicyActivation() {
   const payload = await platformAdminRequest(SCREENER_POLICY_ACTIVATION_PATH)
   return screenerPolicyActivationViewSchema.parse(payload)
 }
 
-export async function scheduleScreenerPolicyActivation(rawInput: unknown, actor: string) {
-  const input = scheduleScreenerPolicyActivationInputSchema.parse(rawInput)
-  await platformAdminRequest(SCREENER_POLICY_ACTIVATION_PATH, {
-    method: 'POST',
-    actor,
-    body: {
-      expected_revision: input.expectedRevision,
-      target_policy_version: input.targetPolicyVersion,
-      activate_at: input.activateAt,
-      rescreen_scored: input.rescreenScored,
-      ...(input.canaryOnly ? { canary_only: true } : {}),
-      reason: input.reason,
-      actor,
-      confirmation: input.confirmation,
-    },
-  })
-  return fetchScreenerPolicyActivation()
-}
-
 export async function fetchScoredPolicyRescreen() {
   const payload = await platformAdminRequest(`${SCREENER_POLICY_ACTIVATION_PATH}/scored-rescreen`)
-  return scoredPolicyRescreenViewSchema.parse(payload)
-}
-
-export async function advanceScoredPolicyRescreen(rawInput: unknown, actor: string) {
-  const input = advanceScoredPolicyRescreenInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `${SCREENER_POLICY_ACTIVATION_PATH}/advance-scored-rescreen`,
-    {
-      method: 'POST',
-      actor,
-      body: {
-        expected_activation_revision: input.expectedActivationRevision,
-        expected_agent_id: input.expectedAgentId,
-        retry_paused: input.retryPaused,
-        max_active_releases: input.maxActiveReleases,
-        ...(input.reviewSettingsRevision === null
-          ? {}
-          : { review_settings_revision: input.reviewSettingsRevision }),
-        reason: input.reason,
-        actor,
-        confirmation: input.confirmation,
-      },
-    },
-  )
   return scoredPolicyRescreenViewSchema.parse(payload)
 }
 
@@ -2644,6 +2683,31 @@ export async function fetchValidatorRequestOutcomes(validatorHotkey?: string) {
   return validatorRequestOutcomeSummarySchema.parse(payload)
 }
 
+const HARNESS_MEMORY_PATH = '/api/v1/admin/harness-memory'
+
+function harnessMemoryLimit(limit: number) {
+  return Math.min(200, Math.max(1, Math.trunc(limit)))
+}
+
+// SN-500 step 1: operator-only harness memory per agent version. Never
+// miner-facing; agents with no row were not measured, not light.
+export async function fetchHarnessMemoryList(limit = 50, offset = 0) {
+  const start = Math.min(100_000, Math.max(0, Math.trunc(offset)))
+  const payload = await platformAdminRequest(
+    `${HARNESS_MEMORY_PATH}?limit=${harnessMemoryLimit(limit)}&offset=${start}`,
+    { timeoutMs: 15_000, retries: 1 },
+  )
+  return harnessMemoryListSchema.parse(payload)
+}
+
+export async function fetchAgentHarnessMemory(agentId: string, limit = 50) {
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(agentId)}/harness-memory?limit=${harnessMemoryLimit(limit)}`,
+    { timeoutMs: 15_000, retries: 1 },
+  )
+  return agentHarnessMemorySchema.parse(payload)
+}
+
 export async function fetchLedgerEpochSnapshots(limit = 24) {
   const bounded = Math.min(100, Math.max(1, Math.trunc(limit)))
   const payload = await platformAdminRequest(`/api/v1/public/ledger-epochs?limit=${bounded}`, {
@@ -2771,21 +2835,129 @@ export async function previewScreeningQuarantineBatch(rawInput: unknown, actor: 
   return screeningQuarantineBatchPreviewResponseSchema.parse(payload)
 }
 
+// Platform applies a batch one decision at a time and prepares a release
+// dataset for each release, so a batch of up to 50 can outlast the generic
+// 20 s deadline while it keeps committing (#3042).
+const QUARANTINE_BATCH_TIMEOUT_MS = 60_000
+// A proxy can answer these after the batch reached Platform, while Platform is
+// still committing (502 bad gateway, 504 and Cloudflare 524 timeouts).
+const GATEWAY_LOST_ANSWER = new Set([502, 504, 524])
+
 export async function executeScreeningQuarantineBatch(rawInput: unknown, actor: string) {
   const input = screeningQuarantineBatchExecuteInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    '/api/v1/admin/screening-quarantines/batch-resolve',
-    {
-      method: 'POST',
-      actor,
-      body: {
-        decisions: input.decisions.map(toPlatformBatchDecision),
-        preview_token: input.previewToken,
-        confirmed: input.confirmed,
+  const decisions = input.decisions.map(toPlatformBatchDecision)
+  let payload: unknown
+  try {
+    payload = await platformAdminRequest(
+      '/api/v1/admin/screening-quarantines/batch-resolve',
+      {
+        method: 'POST',
+        actor,
+        body: {
+          decisions,
+          preview_token: input.previewToken,
+          confirmed: input.confirmed,
+        },
+        timeoutMs: QUARANTINE_BATCH_TIMEOUT_MS,
       },
-    },
-  )
+    )
+  } catch (error) {
+    // Only a lost answer is uncertain: the batch may have reached Platform and
+    // committed some or all of its decisions. A read-back is read-only, so a
+    // gateway answer that came before Platform saw the batch costs nothing.
+    if (
+      !(error instanceof PlatformAdminError) ||
+      !(
+        error.failure === 'timeout' ||
+        error.failure === 'transport' ||
+        (error.status !== null && GATEWAY_LOST_ANSWER.has(error.status))
+      )
+    ) {
+      throw error
+    }
+    return reconcileScreeningQuarantineBatch(decisions, actor, error)
+  }
   return screeningQuarantineBatchExecuteResponseSchema.parse(payload)
+}
+
+/**
+ * Report what a batch whose answer was lost actually recorded (#3042).
+ *
+ * The read-back is the read-only batch preview of the same decisions: an item
+ * Platform recorded reads `already_applied`. A `not_found` item is `failed`:
+ * applying a decision never removes its quarantine, so the batch cannot have
+ * applied it. Nothing else can be confirmed: Platform may still be working
+ * through the batch, and a released agent that has moved past `evaluating`
+ * previews as a conflict. So every other item is `unconfirmed` with Platform's
+ * current message, and the operator previews again before executing it.
+ */
+async function reconcileScreeningQuarantineBatch(
+  decisions: ReturnType<typeof toPlatformBatchDecision>[],
+  actor: string,
+  uncertain: PlatformAdminError,
+) {
+  let preview: z.infer<typeof screeningQuarantineBatchPreviewResponseSchema>
+  try {
+    preview = screeningQuarantineBatchPreviewResponseSchema.parse(
+      await platformAdminRequest('/api/v1/admin/screening-quarantines/batch-preview', {
+        method: 'POST',
+        actor,
+        body: { decisions },
+      }),
+    )
+  } catch (cause) {
+    throw new PlatformAdminError(
+      uncertain.failure,
+      `${uncertain.message} Some decisions may have been applied, and reading them back failed too (${
+        cause instanceof Error ? cause.message : String(cause)
+      }). Preview the batch again before executing anything.`,
+      uncertain.status,
+      uncertain.errorCode,
+    )
+  }
+  const lost =
+    uncertain.failure === 'timeout' || uncertain.status === 504 || uncertain.status === 524
+      ? 'timed out'
+      : 'lost its answer'
+  const items = preview.items.map((item) =>
+    item.disposition === 'already_applied'
+      ? {
+          quarantine_id: item.quarantine_id,
+          status: 'already_applied' as const,
+          agent_status: item.resulting_agent_status,
+          terminal_reconciliation: item.terminal_reconciliation,
+          terminal_ruling: item.terminal_ruling,
+          message: `Recorded on Platform (read back after the batch request ${lost}): ${item.message}`,
+        }
+      : item.disposition === 'not_found'
+        ? {
+            quarantine_id: item.quarantine_id,
+            status: 'failed' as const,
+            agent_status: null,
+            terminal_reconciliation: false,
+            terminal_ruling: null,
+            message: `Not applied: ${item.message}`,
+          }
+        : {
+            quarantine_id: item.quarantine_id,
+            status: 'unconfirmed' as const,
+            agent_status: null,
+            // The preview's ruling is the proposed decision's, not an outcome.
+            terminal_reconciliation: false,
+            terminal_ruling: null,
+            message: `Not confirmed after the batch request ${lost}; Platform may still be applying it. Preview again before executing it. Platform reports: ${item.message}`,
+          },
+  )
+  const count = (status: (typeof items)[number]['status']) =>
+    items.filter((item) => item.status === status).length
+  return screeningQuarantineBatchExecuteResponseSchema.parse({
+    items,
+    applied_count: 0,
+    already_applied_count: count('already_applied'),
+    failed_count: count('failed'),
+    unconfirmed_count: count('unconfirmed'),
+    reconciled_after: uncertain.failure === 'server' ? 'gateway' : uncertain.failure,
+  })
 }
 
 export async function fetchScreeningDisputes(
@@ -2926,6 +3098,9 @@ export async function fetchAthReviewQueue(
     // queue must not be filterable by review status or scoring generation.
     status: 'pending',
     generation: 'all',
+    // SN-499: holds whose reference was public before the held upload come
+    // first (forks of a public release), each tier oldest first.
+    order: 'public_reference_first',
     limit: String(limit),
     offset: String(offset),
   })
@@ -3312,6 +3487,26 @@ export async function rejectScreeningSubmission(rawInput: unknown, actor: string
   return rejectScreeningSubmissionResponseSchema.parse(payload)
 }
 
+export async function amendQuarantineRejectReason(rawInput: unknown, actor: string) {
+  const input = amendQuarantineRejectReasonInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-quarantines/${encodeURIComponent(input.quarantineId)}/amend-reason`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        expected_agent_id: input.expectedAgentId,
+        expected_artifact_sha256: input.expectedArtifactSha256,
+        expected_attempt_id: input.expectedAttemptId,
+        expected_reason: input.expectedReason,
+        reason: input.reason,
+        confirmation: input.confirmation,
+      },
+    },
+  )
+  return amendQuarantineRejectReasonResponseSchema.parse(payload)
+}
+
 export async function fetchScreeningArtifact(rawInput: unknown, actor: string) {
   const input = screeningArtifactInputSchema.parse(rawInput)
   const payload = await platformAdminRequest(
@@ -3696,6 +3891,9 @@ export async function admitStrandedSubmission(actor: string, rawInput: unknown) 
         expected_active_version: input.expectedActiveVersion,
         expected_sha256: input.expectedSha256.toLowerCase(),
         expected_previous_score_count: input.expectedPreviousScoreCount,
+        // Omitted (not null) when unset, so an older Platform sees the body
+        // it always did.
+        ...(input.category == null ? {} : { category: input.category }),
       } satisfies AdmitRequest,
     },
   )
@@ -4104,6 +4302,7 @@ function provisionalAgentScores({
     bench_version: score.bench_version ?? null,
     generated_at: score.accepted_at,
     transcript_sha256: score.transcript_sha256 ?? null,
+    ...(score.dueling_breakdown ? { dueling_breakdown: score.dueling_breakdown } : {}),
   }))
   return agentScoresDetailSchema.parse({
     agent_id: pipeline.agent_id,
@@ -4400,6 +4599,17 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
     const shares = gated.flatMap((evidence) =>
       typeof evidence.flagged_case_share === 'number' ? [evidence.flagged_case_share] : [],
     )
+    // Bench v16+ priced inference cost: the 350-case-normalised cost and the
+    // factor the composite carried, over the rows that priced their run.
+    const priced = gated.flatMap((evidence) =>
+      evidence.priced_cost?.result === 'priced' ? [evidence.priced_cost] : [],
+    )
+    const pricedCosts = priced.flatMap((cost) =>
+      typeof cost.normalized_cost_usd === 'number' ? [cost.normalized_cost_usd] : [],
+    )
+    const pricedFactors = priced.flatMap((cost) =>
+      typeof cost.applied_factor_bps === 'number' ? [cost.applied_factor_bps] : [],
+    )
     const version = {
       bench_version: benchVersion,
       score_count: rows.length,
@@ -4416,6 +4626,8 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
         previousMedian === null ? null : medianComposite - previousMedian,
       gate_posture: postures.size === 1 ? ([...postures][0] ?? null) : null,
       median_flagged_case_share: shares.length ? median(shares) : null,
+      median_priced_cost_usd: pricedCosts.length ? median(pricedCosts) : null,
+      median_priced_cost_factor_bps: pricedFactors.length ? median(pricedFactors) : null,
     }
     previousMedian = medianComposite
     return version
@@ -4656,4 +4868,52 @@ async function readPublishedClaVersion(version: number) {
     if (error instanceof PlatformAdminError && error.status === 404) return null
     throw error
   }
+}
+
+import {
+  airdropExecuteInputSchema, airdropExecuteResultSchema, airdropPreviewInputSchema, airdropPreviewSchema,
+  airdropRunListInputSchema, airdropRunListSchema, airdropRunReportSchema,
+} from '../lib/airdrop-runs.schemas'
+
+/**
+ * SN118 airdrop runs (SN-490). Preview never writes or moves anything; the
+ * signed-in operator is the Platform audit actor on every call.
+ */
+export async function previewAirdrop(rawInput: unknown, actor: string) {
+  const body = airdropPreviewInputSchema.parse(rawInput)
+  return airdropPreviewSchema.parse(await platformAdminRequest('/api/v1/admin/airdrops/preview', {
+    method: 'POST', body, actor,
+  }))
+}
+
+/**
+ * Execute is a dry run unless `dry_run: false` is passed with the preview's
+ * digest and exact phrase. Platform re-derives the preview before recording
+ * anything and resumes, never repeats, a run named by the same key. Settling
+ * a full run can take a while, so the deadline is longer than a read's; a
+ * timeout is resolved by retrying with the same key, never a new one.
+ */
+export async function executeAirdrop(rawInput: unknown, actor: string) {
+  const body = airdropExecuteInputSchema.parse(rawInput)
+  return airdropExecuteResultSchema.parse(await platformAdminRequest('/api/v1/admin/airdrops/execute', {
+    method: 'POST', body, actor, timeoutMs: body.dry_run ? undefined : 120_000,
+  }))
+}
+
+export async function fetchAirdropRuns(rawInput: unknown = {}) {
+  const input = airdropRunListInputSchema.parse(rawInput)
+  const params = new URLSearchParams({ limit: String(input.limit), offset: String(input.offset) })
+  if (input.idempotency_key) params.set('idempotency_key', input.idempotency_key)
+  if (input.asset) params.set('asset', input.asset)
+  if (input.mode) params.set('mode', input.mode)
+  return airdropRunListSchema.parse(await platformAdminRequest(`/api/v1/admin/airdrops?${params}`, {
+    retries: 1,
+  }))
+}
+
+export async function fetchAirdropRun(runId: string) {
+  const id = z.string().uuid().parse(runId)
+  return airdropRunReportSchema.parse(await platformAdminRequest(`/api/v1/admin/airdrops/${id}`, {
+    retries: 1,
+  }))
 }

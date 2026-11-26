@@ -125,6 +125,27 @@ func TestPoolCardinalityCanary(t *testing.T) {
 
 			// Absence false premises (v13_absence.go).
 			{Name: "countryPool", Size: len(countryPool), Role: "question cue (false-premise country)"},
+
+			// V19 shortcut breakers (v19_breakers.go, DITTO-2737). People,
+			// pets, companies and cities come from the humandata and
+			// publicdata banks.
+			{Name: "v19BreakerTwinNames", Size: len(v19BreakerTwinNames), Role: "question entity (near-twin person)"},
+			{Name: "v19BreakerHoldings", Size: len(v19BreakerHoldings), Role: "question entity (held item)"},
+			{Name: "v19BreakerRelations", Size: len(v19BreakerRelations), Role: "record surface (relation)"},
+			{Name: "v19BreakerAllergies", Size: len(v19BreakerAllergies), Role: "answer (allergy)"},
+			{Name: "v19BreakerMedicines", Size: len(v19BreakerMedicines), Role: "question cue (trigger-fact subject)"},
+			{Name: "v19BreakerServices", Size: len(v19BreakerServices), Role: "question cue (trigger-fact subject)"},
+			{Name: "v19BreakerSkills", Size: len(v19BreakerSkills), Role: "question cue (trigger-fact subject)"},
+			{Name: "v19BreakerPlaces", Size: len(v19BreakerPlaces), Role: "record surface (trigger-fact place)"},
+			{Name: "v19BreakerProjects", Size: len(v19BreakerProjects), Role: "question entity (next-step thread)"},
+			{Name: "v19BreakerConditions", Size: len(v19BreakerConditions), Role: "answer (next-step condition)"},
+			{Name: "v19BreakerFillers", Size: len(v19BreakerFillers), Role: "record surface"},
+			{Name: "v19BreakerResponses", Size: len(v19BreakerResponses), Role: "record surface"},
+			// Bench v19 phrase grammar (v19_phrasing.go): frames, synonym
+			// classes, politeness leads and closers compose per family, so the
+			// surface is the smallest family's count of distinct renderings.
+			{Name: "v19 phrase grammar", Parts: []string{"v19BalanceFrames", "v19Politeness", "v19Indirect", "v19PersonCloser", "v19StatusCloser", "v19EventCloser", "v19ChannelCloser", "v19PairCloser"},
+				Size: v19SmallestFamilySurface(), Role: "question template (composed per family)"},
 		},
 
 		// Known-small scored pools when the canary landed (#492). Each value is
@@ -213,6 +234,9 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"V13Families":          poolcanary.Schema,
 			"V14Families":          poolcanary.Schema,
 			"v14RoleFamilies":      poolcanary.Schema,
+			"v18BusinessFamilies":  poolcanary.Schema,
+			"V19BreakerFamilies":   poolcanary.Schema,
+			"V19TriggerWords":      poolcanary.Internal, // typo-protection match set; the question frames carry the words
 			"v14RoleSlots":         poolcanary.Internal,
 			"V13PersonalDomains":   poolcanary.Schema,
 			"V13AbsenceFamilies":   poolcanary.Schema,
@@ -231,6 +255,20 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"storyV13TaskGrammars": poolcanary.Keyed,
 			"v13StoryTaskGrammars": poolcanary.Keyed,
 
+			// Bench v19 phrase grammar banks, keyed by family or class name;
+			// the composed surface is scored as "v19 phrase grammar".
+			"v19StoryGrammars":      poolcanary.Keyed,
+			"v19ProgramGrammars":    poolcanary.Keyed,
+			"v19PersonalGrammars":   poolcanary.Keyed,
+			"v19AbstentionGrammars": poolcanary.Keyed,
+			"v19SharedClasses":      poolcanary.Keyed,
+			"v19ProgramClasses":     poolcanary.Keyed,
+			"v19BalanceClasses":     poolcanary.Keyed,
+			"v19Current":            "v19 meaning-marker set the phrasing tests check; never drawn",
+			"v19NotAsOf":            "v19 forbidden-term set the phrasing tests check; never drawn",
+			"v19WhWords":            poolcanary.Internal,
+			"v19Contractions":       "v19 casual-register rewrite pairs applied to template text; not a drawable pool",
+
 			// Configuration and filters.
 			"monetaryOracles":          poolcanary.Internal,
 			"V14ExcludedShapes":        poolcanary.Internal, // SN-351 admission ledger; never rendered
@@ -239,6 +277,7 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"v14ChainPersonalDomains":  poolcanary.Internal,
 			"V14FamilyMix":             poolcanary.Internal, // SN-351 admission ledger; never rendered
 			"storyDropRotation":        poolcanary.Internal,
+			"v18SaturatedStoryOracles": poolcanary.Internal, // oracle kinds dropped first; never rendered
 			"tripAliasForbidden":       poolcanary.Internal, // words a trip alias must avoid
 
 			// v8..v12 world lists that v13 draws only to hold the rng phase

@@ -299,6 +299,19 @@ func TestParseConcurrencySettingsScoredProviderRouting(t *testing.T) {
 	}
 }
 
+func TestParseDaniLabsPercentage(t *testing.T) {
+	for _, invalid := range []string{`null`, `"10"`, `true`, `10.5`, `-1`, `101`} {
+		if _, err := parseConcurrencySettings([]byte(`{"danilabs_percent":` + invalid + `}`)); err == nil {
+			t.Fatalf("accepted %s", invalid)
+		}
+	}
+	for _, payload := range []string{`{}`, `{"danilabs_percent":0}`, `{"danilabs_percent":20}`} {
+		if _, err := parseConcurrencySettings([]byte(payload)); err != nil {
+			t.Fatalf("%s: %v", payload, err)
+		}
+	}
+}
+
 func TestEffectiveScoredProviderRoutingScopesCanaryToCanaryTickets(t *testing.T) {
 	for _, tc := range []struct {
 		routing, purpose, want string

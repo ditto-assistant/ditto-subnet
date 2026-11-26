@@ -1,7 +1,10 @@
 """The platform must consume the standalone screening protocol package."""
 
 import json
+from typing import Literal
 from uuid import UUID
+
+import pytest
 
 from ditto.api_models.agent_status import AgentStatus as CompatibilityAgentStatus
 from ditto.api_models.screener import ScreenResultRequest as CompatibilityRequest
@@ -21,7 +24,10 @@ def test_compatibility_imports_are_shared_package_types() -> None:
     assert CompatibilityRequest is ScreenResultRequest
 
 
-def test_local_hetzner_jobs_are_valid_screening_wire_responses() -> None:
+@pytest.mark.parametrize("provider", ["hetzner", "aws"])
+def test_local_primary_jobs_are_valid_screening_wire_responses(
+    provider: Literal["hetzner", "aws"],
+) -> None:
     build_id = UUID("550e8400-e29b-41d4-a716-446655440010")
     attempt_id = UUID("550e8400-e29b-41d4-a716-446655440011")
 
@@ -29,14 +35,14 @@ def test_local_hetzner_jobs_are_valid_screening_wire_responses() -> None:
         build_id=build_id,
         attempt_id=attempt_id,
         status="succeeded",
-        provider="hetzner",
+        provider=provider,
         artifact_sha256="12" * 32,
         image_ref=f"ditto-screen/{build_id}-{attempt_id}:latest",
         output_sha256="34" * 32,
         output_size_bytes=1024,
         download_url="https://example.invalid/image.tar.zst",
         runtime_status="succeeded",
-        runtime_provider="hetzner",
+        runtime_provider=provider,
         runtime_image_reference=(
             "registry.example.invalid/ditto/screener@sha256:" + "56" * 32
         ),
@@ -45,13 +51,13 @@ def test_local_hetzner_jobs_are_valid_screening_wire_responses() -> None:
         review_id=UUID("550e8400-e29b-41d4-a716-446655440012"),
         attempt_id=attempt_id,
         status="running",
-        provider="hetzner",
+        provider=provider,
         artifact_sha256="12" * 32,
     )
 
-    assert build.provider == "hetzner"
-    assert build.runtime_provider == "hetzner"
-    assert review.provider == "hetzner"
+    assert build.provider == provider
+    assert build.runtime_provider == provider
+    assert review.provider == provider
 
 
 def test_canonical_versioned_verdict_message_is_wire_compatible() -> None:

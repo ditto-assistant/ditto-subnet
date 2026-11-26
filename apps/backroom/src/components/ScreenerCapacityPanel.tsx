@@ -101,20 +101,27 @@ function providerJobTone(status: string) {
   return 'bg-[var(--cyan-dim)] text-[var(--cyan)]'
 }
 
-type ProviderMode = 'hetzner-overflow' | 'targon-only' | 'gcp-only'
-type RoutingPosture = 'hetzner-primary' | 'targon-only' | 'gce-only' | 'mixed'
+type ProviderMode = 'hetzner-overflow' | 'aws-overflow' | 'targon-only' | 'gcp-only'
+type RoutingPosture = 'hetzner-primary' | 'aws-primary' | 'targon-only' | 'gce-only' | 'mixed'
+type CapacityProvider = ScreenerProviderSettings['runtime_provider_priority'][number]
 
 const HETZNER_PRIORITY = ['hetzner', 'gcp'] as const
+const AWS_PRIORITY = ['aws', 'gcp'] as const
 const TARGON_PRIORITY = ['targon', 'gcp'] as const
 const GCE_PRIORITY = ['gcp'] as const
+// Overflow fronts GCE with one enrolled primary: the fixed-cost Hetzner host or
+// the on-demand AWS EC2 host.
+const PRIMARY_MODES: readonly ProviderMode[] = ['hetzner-overflow', 'aws-overflow']
 
 function providerMode(priority: ScreenerProviderSettings['runtime_provider_priority']): ProviderMode {
   if (priority[0] === 'hetzner') return 'hetzner-overflow'
+  if (priority[0] === 'aws') return 'aws-overflow'
   return priority[0] === 'targon' ? 'targon-only' : 'gcp-only'
 }
 
-function priorityForMode(mode: ProviderMode): ('hetzner' | 'targon' | 'gcp')[] {
+function priorityForMode(mode: ProviderMode): CapacityProvider[] {
   if (mode === 'hetzner-overflow') return [...HETZNER_PRIORITY]
+  if (mode === 'aws-overflow') return [...AWS_PRIORITY]
   return mode === 'targon-only' ? [...TARGON_PRIORITY] : [...GCE_PRIORITY]
 }
 
@@ -125,6 +132,7 @@ function routingPosture(settings: ScreenerProviderSettings): RoutingPosture {
     providerMode(settings.source_review_provider_priority),
   ]
   if (modes.every((mode) => mode === 'hetzner-overflow')) return 'hetzner-primary'
+  if (modes.every((mode) => mode === 'aws-overflow')) return 'aws-primary'
   if (modes.every((mode) => mode === 'targon-only')) return 'targon-only'
   if (modes.every((mode) => mode === 'gcp-only')) return 'gce-only'
   return 'mixed'
@@ -134,6 +142,12 @@ function postureChip(posture: RoutingPosture) {
   if (posture === 'hetzner-primary') {
     return {
       label: 'Hetzner base load',
+      className: 'bg-[var(--acid-dim)] text-[var(--acid)]',
+    }
+  }
+  if (posture === 'aws-primary') {
+    return {
+      label: 'AWS on-demand base load',
       className: 'bg-[var(--acid-dim)] text-[var(--acid)]',
     }
   }
@@ -173,11 +187,12 @@ function ProviderRoutingControl({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const expectedConfirmation = screenerProviderSettingsConfirmation(settings)
+  const primaryMode = providerMode(settings.build_provider_priority)
   const overflowValid = !settings.gce_overflow_enabled || (
     settings.primary_node_id !== null
-    && settings.build_provider_priority[0] === 'hetzner'
-    && settings.runtime_provider_priority[0] === 'hetzner'
-    && settings.source_review_provider_priority[0] === 'hetzner'
+    && PRIMARY_MODES.includes(primaryMode)
+    && providerMode(settings.runtime_provider_priority) === primaryMode
+    && providerMode(settings.source_review_provider_priority) === primaryMode
   )
   const ready = overflowValid && reason.trim().length >= 8 && confirmation === expectedConfirmation
   const caughtUp = appliedRevision === control.current.revision
@@ -246,7 +261,7 @@ function ProviderRoutingControl({
             </span>
           </div>
           <p className="mt-1 max-w-[78ch] text-xs leading-5 text-[var(--muted)]">
-            Hetzner handles normal work. GCE may claim separate, still-unclaimed submissions only
+            The primary node (Hetzner or on-demand AWS) handles normal work. GCE may claim separate, still-unclaimed submissions only
             during a primary-node outage or sustained backlog overflow. A failed lane parks its
             own attempt and never moves to the next provider as an automatic retry.
           </p>
@@ -264,6 +279,7 @@ function ProviderRoutingControl({
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 {([
                   ['hetzner-overflow', 'Hetzner + GCE overflow'],
+                  ['aws-overflow', 'AWS + GCE overflow'],
                   ['gcp-only', 'GCE only'],
                   ['targon-only', 'Targon-first + GCE'],
                 ] as const).map(([mode, modeLabel]) => (
@@ -331,7 +347,7 @@ function ProviderRoutingControl({
           </div>
           {!overflowValid ? (
             <p role="alert" className="mt-3 text-xs text-[var(--amber)]">
-              Enabled overflow requires all three lanes to use Hetzner + GCE overflow and a primary node ID.
+              Enabled overflow requires all three lanes to use the same primary (Hetzner or AWS) + GCE overflow and a primary node ID.
             </p>
           ) : null}
         </fieldset>

@@ -586,3 +586,16 @@ func TestBuildTimeoutsAreSandboxFaults(t *testing.T) {
 		}
 	}
 }
+
+// A dueling battery (10 miner candidates and the default generator) or a slice
+// (five columns and the fallback) at the archive bound must fit one Platform
+// answer, base64-expanded; the old 2x-archive cap truncated it into a JSON
+// error.
+func TestPlatformResponseCapFitsTheLargestDuelingLease(t *testing.T) {
+	encoded := (challenge.MaxArchiveBytes + 2) / 3 * 4
+	for name, archives := range map[string]int{"battery": 2*protocol.DuelingSliceColumns + 1, "slice": protocol.DuelingSliceColumns + 1} {
+		if need := archives * encoded; need >= maxPlatformResponseBytes {
+			t.Fatalf("%s lease needs %d bytes, cap is %d", name, need, maxPlatformResponseBytes)
+		}
+	}
+}

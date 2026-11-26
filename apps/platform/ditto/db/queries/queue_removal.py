@@ -20,6 +20,7 @@ indexed column read.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -81,6 +82,24 @@ async def load_queue_removal(
     return await session.scalar(statement)
 
 
+async def removed_agent_ids(
+    session: AsyncSession, *, agent_ids: Iterable[UUID], bench_version: int
+) -> set[UUID]:
+    """Which of these agents an in-force removal keeps out of one era's queue."""
+    ids = list(agent_ids)
+    if not ids:
+        return set()
+    return set(
+        await session.scalars(
+            select(ValidatorQueueWithdrawal.agent_id).where(
+                ValidatorQueueWithdrawal.agent_id.in_(ids),
+                ValidatorQueueWithdrawal.bench_version == bench_version,
+                removal_in_force(),
+            )
+        )
+    )
+
+
 async def load_reinstatement(
     session: AsyncSession, *, withdrawal_id: UUID
 ) -> ValidatorQueueReinstatement | None:
@@ -98,4 +117,5 @@ __all__ = [
     "load_queue_removal",
     "load_reinstatement",
     "removal_in_force",
+    "removed_agent_ids",
 ]

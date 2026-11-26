@@ -6,6 +6,7 @@
 import type {
   CaseResult,
   CodingShadowScore,
+  DuelingBreakdown,
   GateEvidence,
   NameHandle,
   V9BaseEvidence,
@@ -23,6 +24,34 @@ export type ReviewConclusion =
   | "no_finding"
   | "budget_exhausted"
   | "adverse_signal";
+
+/** Why a waiting submission is not being scored right now when the hold is
+ * not the validator fleet's (`scoring_wait` on activity rows and the agent
+ * summary). From bench v16 every scored run needs an open dueling season. */
+export interface ScoringWait {
+  reason: "dueling_season_closed";
+  bench_version: number;
+  /** Approximate UTC time the next season opens; null when unknown. */
+  next_season_opens_at?: string | null;
+  next_round_epoch?: number | null;
+  /** False when no season is scheduled for bench_version at all (the source
+   * version of an open benchmark rollout); absent means true. */
+  season_scheduled?: boolean;
+}
+
+/** Why a submission reads `era_changed` (`era_change` on activity rows, the
+ * agent summary, the pipeline and miner submission lists): it belongs to an
+ * earlier bench version the active one does not admit, so it does not compete
+ * there. Derived at read time; it clears when the row is admitted. */
+export interface EraChange {
+  reason: "not_admitted_to_active_bench";
+  /** The active bench version the submission does not compete on. */
+  bench_version: number;
+  /** The earlier version it finalized on; its scores there stay visible.
+   * Null for a row that was still waiting for scores. */
+  scored_bench_version?: number | null;
+  next_step: "resubmit";
+}
 
 export interface ActivityEntry {
   agent_id?: string;
@@ -58,6 +87,13 @@ export interface ActivityEntry {
   artifact_sha256?: string | null;
   screening_policy_version?: number | null;
   required_screening_policy_version?: number | null;
+  /** Set only on waiting rows held by something beyond the queue. */
+  scoring_wait?: ScoringWait | null;
+  /** True on a `not_queued` row an operator withdrew from the active
+   * benchmark queue, rather than one that predates the active era. */
+  queue_withdrawn?: boolean;
+  /** Set only on an `era_changed` row. */
+  era_change?: EraChange | null;
 }
 
 interface ActivityPayloadBase<E> {
@@ -267,6 +303,32 @@ export interface InferenceRun {
   updated_at?: string | null;
 }
 
+/** Harness memory one validator's scorer measured for one run (SN-500). */
+export interface HarnessMemoryRun {
+  validator_hotkey?: string;
+  bench_version?: number | null;
+  lease_issued_at?: string | null;
+  outcome?: "scored" | "failed";
+  peak_bytes?: number | null;
+  p50_bytes?: number | null;
+  p95_bytes?: number | null;
+  samples?: number | null;
+  sampled_seconds?: number | null;
+  limit_bytes?: number | null;
+}
+
+/** The agent's measured harness memory across its validator runs (SN-500). */
+export interface HarnessMemory {
+  runs?: number | null;
+  peak_bytes_max?: number | null;
+  p50_bytes_median?: number | null;
+  p95_bytes_median?: number | null;
+  p95_bytes_max?: number | null;
+  limit_bytes_max?: number | null;
+  last_recorded_at?: string | null;
+  recent_runs?: HarnessMemoryRun[];
+}
+
 /** An accepted (provisional/quorum) validator score with its reproducibility
  * evidence. */
 export interface AcceptedScore {
@@ -284,6 +346,8 @@ export interface AcceptedScore {
   case_results?: CaseResult[];
   /** Bench v13+ run-level gate verdict (aggregates only). */
   gate_evidence?: GateEvidence | null;
+  /** Bench v16+ dueling and priced-cost breakdown; omitted below v16. */
+  dueling_breakdown?: DuelingBreakdown | null;
 }
 
 /** A continual top-five retest result. Reusable seed identifiers stay private. */
@@ -361,6 +425,7 @@ export interface PipelinePayload {
   confirmation_sample_composites?: number[];
   validation_attempts?: ValidationAttempt[];
   inference_runs?: InferenceRun[];
+  harness_memory?: HarnessMemory | null;
   screening_attempts?: ScreeningAttempt[];
   dispute?: Dispute | null;
   active_benchmarks?: BenchmarkProgress[];

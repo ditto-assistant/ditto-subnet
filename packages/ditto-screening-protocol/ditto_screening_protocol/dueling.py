@@ -8,8 +8,8 @@ is the Python mirror of the Go contract in ``research/dittobench-datagen``:
 
 - ``challenge/season.go``: :func:`season_commitment`, :func:`season_seed` and
   :func:`slice_seed` (``challenge/testdata/season_vectors.json``);
-- ``challenge/dueling_score.go``: :func:`dueling_composite` and
-  :func:`dueling_composite_stderr`
+- ``challenge/dueling_score.go``: :class:`DuelingWeighting`,
+  :func:`dueling_composite` and :func:`dueling_composite_stderr`
   (``challenge/testdata/dueling_composite_vectors.json``);
 - the ``details.dueling`` report shape the scorer signs
   (:class:`DuelingReport`) and the season column pin
@@ -28,6 +28,7 @@ import math
 import re
 import struct
 from collections.abc import Sequence, Set
+from dataclasses import dataclass
 from typing import Annotated, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -45,8 +46,26 @@ DUELING_SLICE_CASES_PER_COLUMN = 35
 """Case count every slice column's generate request asks for."""
 
 DUELING_COLUMN_WEIGHT = 0.1
-"""One column's share of the composite (0.5 / DUELING_SLICE_COLUMNS). A masked
-column's weight returns to the datagen half, so no column carries more."""
+"""One column's share of the composite on bench 16..18 (0.5 /
+DUELING_SLICE_COLUMNS). A masked column's weight returns to the datagen half,
+so no column carries more. Read :func:`dueling_column_weight_for_version`."""
+
+DUELING_HELD_OUT_MIN_BENCH_VERSION = 19
+"""First bench version that moves rank to the held-out generator columns:
+:data:`DUELING_HELD_OUT_COLUMN_WEIGHT` per column and the datagen qualifier."""
+
+DUELING_HELD_OUT_COLUMN_WEIGHT = 0.15
+"""One column's share of the composite from bench 19 (0.75 /
+DUELING_SLICE_COLUMNS): the datagen half keeps 0.25."""
+
+DUELING_DATAGEN_QUALIFIER_FLOOR = 0.80
+"""The datagen score from which the bench >= 19 qualifier is 1. Below it the
+whole composite scales by ``datagen_raw / floor``."""
+
+DUELING_COLUMN_WEIGHTS = frozenset(
+    {DUELING_COLUMN_WEIGHT, DUELING_HELD_OUT_COLUMN_WEIGHT}
+)
+"""Every contract column weight a ``details.dueling`` block may carry."""
 
 DUELING_SLICE_CONTRACT = "dittobench-dueling-slice/v1"
 """Slice dataset contract (``challenge.SliceContractV1``)."""
@@ -74,6 +93,36 @@ _MIN_GRADING_BENCH_VERSION = 13
 def is_dueling_bench_version(bench_version: int) -> bool:
     """Whether ``bench_version`` carries a generator slice (a floor)."""
     return bench_version >= DUELING_MIN_BENCH_VERSION
+
+
+def is_held_out_bench_version(bench_version: int) -> bool:
+    """Whether ``bench_version`` weights the held-out columns at
+    :data:`DUELING_HELD_OUT_COLUMN_WEIGHT` and applies the datagen qualifier
+    (a floor)."""
+    return bench_version >= DUELING_HELD_OUT_MIN_BENCH_VERSION
+
+
+def dueling_column_weight_for_version(bench_version: int) -> float:
+    """One counted column's share of the composite: 0.1 on bench 16..18 and
+    0.15 from bench 19 (``protocol.DuelingColumnWeightForVersion``)."""
+    if is_held_out_bench_version(bench_version):
+        return DUELING_HELD_OUT_COLUMN_WEIGHT
+    return DUELING_COLUMN_WEIGHT
+
+
+def _qualifier(datagen_raw: float) -> float:
+    q = datagen_raw / DUELING_DATAGEN_QUALIFIER_FLOOR
+    if q > 1:
+        return 1.0
+    return q
+
+
+def dueling_datagen_qualifier(bench_version: int, datagen_raw: float) -> float:
+    """``min(1, datagen_raw / 0.8)`` from bench 19, 1 below it
+    (``protocol.DuelingDatagenQualifier``)."""
+    if not is_held_out_bench_version(bench_version):
+        return 1.0
+    return _qualifier(datagen_raw)
 
 
 def _u64be(value: int) -> bytes:
@@ -184,30 +233,52 @@ def _counted(
     return sorted(kept, key=lambda c: c.column_id)
 
 
+@dataclass(frozen=True)
+class DuelingWeighting:
+    """One bench version's composite weighting (``challenge.DuelingWeighting``):
+    the counted column weight and the datagen qualifier, a factor on the whole
+    composite."""
+
+    column_weight: float
+    qualifier: float
+
+    @classmethod
+    def for_version(cls, bench_version: int, datagen_raw: float) -> DuelingWeighting:
+        """``challenge.DuelingWeightingForVersion``."""
+        return cls(
+            column_weight=dueling_column_weight_for_version(bench_version),
+            qualifier=dueling_datagen_qualifier(bench_version, datagen_raw),
+        )
+
+
 def dueling_composite(
+    weighting: DuelingWeighting,
     datagen_raw: float,
     datagen_gate: float,
     columns: Sequence[DuelingColumnAggregate],
     mask: Set[str],
 ) -> float:
-    """``gate x ((1 - w x |U|) x datagen + w x sum_{c in U} col_c)``.
+    """``gate x q x ((1 - w x |U|) x datagen + w x sum_{c in U} col_c)``.
 
-    ``U`` is the columns whose owner is not in ``mask`` (``""`` is never
-    masked) and ``col_c = sum / n`` (0 when ``n = 0``). The reported composite
-    masks the agent's own owner; the paired dethrone test masks both agents'
-    owners. Mirrors ``challenge.DuelingComposite`` bit for bit.
+    ``w`` and ``q`` are the bench version's weighting
+    (:meth:`DuelingWeighting.for_version`), ``U`` the columns whose owner is
+    not in ``mask`` (``""`` is never masked) and ``col_c = sum / n`` (0 when
+    ``n = 0``). The reported composite masks the agent's own owner; the paired
+    dethrone test masks both agents' owners. Mirrors
+    ``challenge.DuelingComposite`` bit for bit.
     """
-    w = DUELING_COLUMN_WEIGHT
+    w = weighting.column_weight
     counted = _counted(columns, mask)
     generator = 0.0
     for c in counted:
         generator = generator + w * c.mean()
     share = 1 - w * float(len(counted))
     inner = share * datagen_raw + generator
-    return datagen_gate * inner
+    return (datagen_gate * weighting.qualifier) * inner
 
 
 def dueling_composite_stderr(
+    weighting: DuelingWeighting,
     datagen_stderr: float,
     datagen_gate: float,
     columns: Sequence[DuelingColumnAggregate],
@@ -216,11 +287,11 @@ def dueling_composite_stderr(
     """Stratified standard error of :func:`dueling_composite`.
 
     ``SE^2 = (1 - w x |U|)^2 x SE_datagen^2 + w^2 x sum_{c in U} s_c^2 / n_c``,
-    scaled by the datagen gate; ``s_c^2`` is the sample variance (clamped at
-    0, no contribution when ``n < 2``). Mirrors
-    ``challenge.DuelingCompositeStderr`` bit for bit.
+    scaled by the datagen gate and the qualifier (both treated as fixed);
+    ``s_c^2`` is the sample variance (clamped at 0, no contribution when
+    ``n < 2``). Mirrors ``challenge.DuelingCompositeStderr`` bit for bit.
     """
-    w = DUELING_COLUMN_WEIGHT
+    w = weighting.column_weight
     counted = _counted(columns, mask)
     strata = 0.0
     for c in counted:
@@ -235,14 +306,19 @@ def dueling_composite_stderr(
     share = 1 - w * float(len(counted))
     datagen_var = (share * share) * (datagen_stderr * datagen_stderr)
     total = datagen_var + (w * w) * strata
-    return datagen_gate * math.sqrt(total)
+    return (datagen_gate * weighting.qualifier) * math.sqrt(total)
 
 
 class DuelingReport(BaseModel):
     """The ``details.dueling`` block of a bench >= 16 score report.
 
     ``owner_key`` is the scored agent's owner; the reported composite is
-    :meth:`self_composite` (the agent's own columns masked).
+    :meth:`self_composite` (the agent's own columns masked). ``column_weight``
+    is the bench version's column weight; ``datagen_qualifier`` is present from
+    bench 19 only (``min(1, datagen_raw / 0.8)``) and omitted from the dump
+    below it, so a bench 16..18 block round-trips unchanged. The block carries
+    no bench version: a consumer that knows the row's version checks it with
+    :meth:`check_bench_version`.
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True, allow_inf_nan=False)
@@ -254,6 +330,9 @@ class DuelingReport(BaseModel):
     datagen_raw: Annotated[float, Field(ge=0, le=1)]
     datagen_gate: Annotated[float, Field(ge=0, le=1)]
     column_weight: float
+    datagen_qualifier: Annotated[float | None, Field(ge=0, le=1)] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     columns: Annotated[
         list[DuelingColumnAggregate],
         Field(min_length=DUELING_SLICE_COLUMNS, max_length=DUELING_SLICE_COLUMNS),
@@ -262,10 +341,23 @@ class DuelingReport(BaseModel):
 
     @model_validator(mode="after")
     def _contract(self) -> Self:
-        if self.column_weight != DUELING_COLUMN_WEIGHT:
+        if self.column_weight not in DUELING_COLUMN_WEIGHTS:
             raise ValueError(
-                f"column_weight must be the contract weight {DUELING_COLUMN_WEIGHT}"
+                "column_weight must be a contract weight "
+                f"{sorted(DUELING_COLUMN_WEIGHTS)}"
             )
+        # The weight names the contract family: the bench 19 weight carries
+        # the qualifier its datagen half implies, bit for bit; 16..18 none.
+        if self.column_weight == DUELING_HELD_OUT_COLUMN_WEIGHT:
+            if self.datagen_qualifier is None or _bits_differ(
+                self.datagen_qualifier, _qualifier(self.datagen_raw)
+            ):
+                raise ValueError(
+                    "datagen_qualifier must be min(1, datagen_raw / "
+                    f"{DUELING_DATAGEN_QUALIFIER_FLOOR}) at the bench 19 weight"
+                )
+        elif self.datagen_qualifier is not None:
+            raise ValueError("datagen_qualifier is a bench >= 19 field")
         ids = sorted(c.column_id for c in self.columns)
         if ids != [f"c{i}" for i in range(DUELING_SLICE_COLUMNS)]:
             raise ValueError(
@@ -274,15 +366,44 @@ class DuelingReport(BaseModel):
             )
         return self
 
+    @property
+    def weighting(self) -> DuelingWeighting:
+        """The weighting this block was scored with."""
+        return DuelingWeighting(
+            column_weight=self.column_weight,
+            qualifier=1.0 if self.datagen_qualifier is None else self.datagen_qualifier,
+        )
+
+    def check_bench_version(self, bench_version: int) -> None:
+        """Refuse a block whose weighting is not ``bench_version``'s."""
+        want = DuelingWeighting.for_version(bench_version, self.datagen_raw)
+        if self.column_weight != want.column_weight or (
+            self.datagen_qualifier is not None
+        ) != is_held_out_bench_version(bench_version):
+            raise ValueError(
+                f"details.dueling weighting is not bench {bench_version}'s "
+                f"(column_weight {self.column_weight}, want {want.column_weight})"
+            )
+
     def composite(self, mask: Set[str]) -> float:
         """The composite with every column owned by an owner in ``mask`` dropped."""
         return dueling_composite(
-            self.datagen_raw, self.datagen_gate, self.columns, mask
+            self.weighting, self.datagen_raw, self.datagen_gate, self.columns, mask
+        )
+
+    def composite_stderr_for(self, datagen_stderr: float, mask: Set[str]) -> float:
+        """:func:`dueling_composite_stderr` under this block's weighting."""
+        return dueling_composite_stderr(
+            self.weighting, datagen_stderr, self.datagen_gate, self.columns, mask
         )
 
     def self_composite(self) -> float:
         """The reported composite: the agent's own owner masked."""
         return self.composite(frozenset({self.owner_key}))
+
+
+def _bits_differ(a: float, b: float) -> bool:
+    return struct.pack(">d", a) != struct.pack(">d", b)
 
 
 class DuelingColumnPin(BaseModel):

@@ -155,36 +155,36 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
-    if policy_version == 13:
-        return "l2-terra-source-review-v63-policy-v13"
+    if policy_version in {13, 14}:
+        return "l2-terra-source-review-v64-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
-    if policy_version == 13:
-        return "l3-sol-adversarial-critic-v35-policy-v13"
+    if policy_version in {13, 14}:
+        return "l3-sol-adversarial-critic-v36-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
-    if policy_version == 13:
-        return "l3-sol-violation-cause-v40-policy-v13"
+    if policy_version in {13, 14}:
+        return "l3-sol-violation-cause-v41-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
-    if policy_version == 13:
-        return "l3-sol-cause-disagreement-v20-policy-v13"
+    if policy_version in {13, 14}:
+        return "l3-sol-cause-disagreement-v21-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
-    if policy_version == 13:
-        return "l3-sol-safety-adjudicator-v38-policy-v13"
+    if policy_version in {13, 14}:
+        return "l3-sol-safety-adjudicator-v39-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
@@ -1298,9 +1298,28 @@ traced served path.
 For I2, identify the actual applicable trusted instruction/authorization,
 loss of its meaning and material consequence. Evidence loss from retrieval,
 summaries, compaction, checkpointing, retries or fresh fallback alone is not
-rejection, including after a successful model consumed a receipt. For I3, separate
-shape repair from a genuine model critic/final selector with selected/summarized
-context under W3 and real dissent. For I4, conditional deletion of unknown,
+rejection, including after a successful model consumed a receipt. Certify a
+breach only with all seven published proof fields: the exact UUID and SHA; the
+exact instruction, record, argument or receipt; why it is applicable; where it
+entered the final evidence set; where it was removed; the deciding input
+lacking it; and the material alternative that can no longer be evaluated. W3
+permits bounded top-k and multistage selection, so a labelled order-preserving
+excerpt lane that offers the full record through a tool, and identifier-scoped
+candidate narrowing before the deciding input, are selection rather than loss:
+an intermediate retrieval candidate is not protected evidence merely because
+one stage scored it. Protection begins where the pipeline designates the record
+as final evidence, attaches it to a deciding transcript, relies on it for
+substantive reasoning, or uses it for an advisory value or a tool argument, and
+a removal after that point is still I2. Name the lost record, or keep I2 as a
+lead and mark it inconclusive; an inconclusive invariant cannot reject. For I3,
+separate shape repair from a genuine model critic/final selector with
+selected/summarized context under W3 and real dissent. W7 permits recovery from
+missing, empty, malformed or schema-invalid output, so a fallback that fires
+only when the final model text is empty and ships a genuine model draft
+unchanged is recovery, not dissent suppression or derived-value authority. Cite
+the branch condition, and with it either the populated valid result the host
+rejected or replaced to reach a preferred answer, or the finalized field it
+changed. For I4, conditional deletion of unknown,
 none, n/a, or an overlength answer; prose-derived abstention; currency rescale;
 added equivalents; and grader-vocabulary mapping are scorer-field rewrites.
 For I5, conditionality is neither necessary nor sufficient: an always-on
@@ -1415,10 +1434,31 @@ remains a security lead; the scored protocol does not authorize it.
 Trace the effective build and component role. Security findings use lifecycle
 reachability to an unauthorized data, execution, persistence, privilege, or
 material availability effect and do not require a model/scorer effect.
+Two security charges need their defining element before they are reported.
+W15 resolves one authenticated principal across `/seed` and `/run`, and a
+documented default user is one default principal, so compare the seed
+principal with the run principal: report cross_user_access only when two
+substantively different principals exist and one principal's content reaches
+the other's substantive decision, model context, tool call, response or
+outbound sink. Tools scoped to the request user are not a second principal.
+S2 needs a reachable operation and an unauthorized effect, so exfiltration
+needs a transmission path out of the request -- a network destination, a store
+or file another principal reads, or an external endpoint -- or cross-principal
+data. A write to stdout or stderr is not that path by itself, and it is not
+automatically request-local either: name the collector and who can read it.
+Worker streams are collected into operator-readable screening logs, which are
+the authorized review scope for that submission, so the request's own data
+there stays an observation. Report S2 when a reader outside that scope can
+reach the stream, or when what is written is another principal's data or a
+secret.
 """
 _L2_POLICY_TAILS[13] = (
     _L2_POLICY_TAILS[12] + _L2_POLICY_V13_ADDENDUM + "\n" + DECISION_PATH_GUIDANCE
 )
+# V14 source-review invariants are identical to v13.  The only v14 change is
+# in the runtime oracle (zero-call agents now clear rather than escalate);
+# that is a runtime signal, not a source-code invariant.
+_L2_POLICY_TAILS[14] = _L2_POLICY_TAILS[13]
 
 
 def _l2_review_system_prompt(policy_version: int) -> str:
@@ -1785,6 +1825,17 @@ _V13_SAFETY_ADJUDICATOR_TASK = _SAFETY_ADJUDICATOR_TASK.replace(
     "Read every original challenge file and the adjacent served-path files "
     "needed to verify its authority and sink. Use targeted analyzer calls "
     "within the review budget, without paging through whole files.",
+).replace(
+    "host credential, broker evasion, or exfiltration.",
+    "host credential, broker evasion, or exfiltration. The same documented "
+    "default user on `/seed` and `/run` is one principal under W15, so clear a "
+    "cross-user challenge that names no second substantively different "
+    "principal. Exfiltration needs a transmission path out of the request or "
+    "cross-principal data, and a cited stdout or stderr write is not that path "
+    "on its own: establish the collector and its readers, clear the request's "
+    "own data in the operator-readable screening log, and uphold a stream a "
+    "reader outside that scope can reach or one carrying another principal's "
+    "data or a secret.",
 )
 
 _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK = """\
@@ -2870,7 +2921,7 @@ def _signed_runtime_lease_rejection(
     """
     if lease is None:
         return "missing" if policy_version >= 13 and required else None
-    if policy_version != 13 or lease.policy_version != policy_version:
+    if policy_version not in {13, 14} or lease.policy_version not in {13, 14}:
         return "policy"
     if lease.attempt_id != attempt_id:
         return "attempt_id"
@@ -2896,7 +2947,7 @@ def _missing_lease_is_fleet_owned(
     its own; retrying it would only loop, so it keeps the inconclusive hold. A
     present lease that fails identity or freshness is always that hold too.
     """
-    return clause == "missing" and policy_version == 13 and bench_version == 13
+    return clause == "missing" and policy_version >= 13 and bench_version == 13
 
 
 def _log_runtime_lease_hold(
@@ -3155,7 +3206,7 @@ class TerraSolSourceReviewAgent:
                     f"I1-I{'8' if policy_version >= 13 else '7'} independently."
                 ),
             }
-        elif policy_version == 13 and (
+        elif policy_version >= 13 and (
             self._scorer_capabilities_url or self._expected_scorer_revision
         ):
             try:
@@ -4792,7 +4843,7 @@ class TerraSolSourceReviewAgent:
             } <= set(raw_categories)
             task = (
                 _V13_SAFETY_ADJUDICATOR_TASK
-                if policy_version == 13
+                if policy_version >= 13
                 else _SAFETY_ADJUDICATOR_TASK
             ) + (
                 _MIXED_SCORER_SAFETY_TASK
@@ -6239,7 +6290,7 @@ class LayeredSourceReviewAgent:
             self._l2, "_signed_runtime_lease_max_age_seconds", 300
         )
         review_disabled = (
-            policy_version == 13 and requires_lease and self._mode == "off"
+            policy_version >= 13 and requires_lease and self._mode == "off"
         )
         clause = (
             "review_disabled"
@@ -6541,7 +6592,7 @@ class LayeredSourceReviewAgent:
             if review_deadline is None and self._adjudicator:
                 review_deadline = derived_deadline
         always_escalate = (
-            (policy_version == 13 and requires_lease)
+            (policy_version >= 13 and requires_lease)
             or self._always_escalate
             or os.environ.get("SCREENER_L2_ALWAYS_ESCALATE", "").strip().lower()
             in {"1", "true", "yes", "on"}
@@ -8799,7 +8850,10 @@ def _validate_lead_dispositions(
         )
         if not isinstance(lead_id, str) or lead_id not in expected or lead_id in seen:
             raise ValueError("L2 lead disposition ID is invalid")
-        if disposition not in {"resolved", "unresolved"}:
+        # _is_allowed, not a bare ``in``: a list or dict disposition must be
+        # the stable "L2 lead disposition is invalid" contract miss, not an
+        # unhashable-type TypeError with no failure code (ditto-subnet#2987).
+        if not _is_allowed(disposition, {"resolved", "unresolved"}):
             raise ValueError("L2 lead disposition is invalid")
         if not isinstance(reason, str) or not 1 <= len(reason) <= 240:
             raise ValueError("L2 lead disposition reason is invalid")

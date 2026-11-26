@@ -26,7 +26,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Literal
 
 import bittensor
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -80,7 +80,10 @@ from ditto.api_server.source_inspect import (
 )
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.structural_fingerprint import compute_structural_fingerprint
-from ditto.api_server.upload_feedback import submission_cooldown_message
+from ditto.api_server.upload_feedback import (
+    hotkey_not_registered_message,
+    submission_cooldown_message,
+)
 from ditto.chain import ChainError
 from ditto.db.models import AgentClaBinding, AgentStatus
 from ditto.db.queries.agents import (
@@ -93,11 +96,23 @@ from ditto.db.queries.contributor_identity import lock_identity_writes
 from ditto.db.queries.name_claims import upload_name_is_reserved
 from ditto.db.queries.payments import (
     consume_evaluation_credit,
+    credit_expired,
+    credit_ttl,
     get_agent_for_payment_proof,
     get_evaluation_payment_for_proof,
     get_generator_payment_for_proof,
+    get_readmission_payment_for_proof,
     get_same_owner_agent_by_sha,
     insert_evaluation_payment,
+)
+from ditto.db.queries.readmission import (
+    classify_upload_readmission,
+    get_upload_readmission,
+    record_upload_readmission,
+)
+from ditto.db.queries.readmission_gate import (
+    announcement_in_effect,
+    current_readmission_activation,
 )
 from ditto.db.queries.submission_settings import (
     UPLOAD_ADMISSION_TTL,
@@ -113,7 +128,7 @@ from ditto.db.queries.unreleased_copy import store_items as store_distinctive_it
 
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
-    from ditto.db.models import Agent
+    from ditto.db.models import Agent, EvaluationPayment, UploadReadmission
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +214,33 @@ def _ensure_payment_recovery_fresh(block_timestamp: datetime) -> None:
         )
 
 
+def _ensure_credit_fresh(credit: EvaluationPayment) -> None:
+    """A credit expires on its own clock: 24 h, or 30 days for a credit a
+    refused readmission banked (SN-485)."""
+    if credit_expired(credit):
+        window = credit_ttl(credit)
+        span = "24-hour" if window <= timedelta(hours=24) else f"{window.days}-day"
+        raise PaymentRecoveryExpired(
+            f"payment at {_as_utc(credit.timestamp).isoformat()} is outside the "
+            f"{span} window"
+        )
+
+
+async def _readmission_lane_replay(
+    session: AsyncSession, *, block_hash: str, extrinsic_index: int
+) -> None:
+    """Refuse a proof the readmission lane holds (it never funds an upload).
+
+    A credited readmission also banks an ``evaluation_payments`` credit, which
+    the caller looks up first; only a proof that is in the readmission lane
+    alone reaches this check.
+    """
+    if await get_readmission_payment_for_proof(
+        session, block_hash=block_hash, extrinsic_index=extrinsic_index
+    ):
+        raise PaymentReplayedError("payment proof already paid a readmission")
+
+
 ChainDep = Annotated["ChainClient", Depends(get_chain_client)]
 PaymentVerifierDep = Annotated[PaymentVerifier, Depends(get_payment_verifier)]
 StorageDep = Annotated[S3StorageClient, Depends(get_storage_client)]
@@ -248,7 +290,13 @@ async def _cla_check_message(
     if credit and (
         credit.agent_id is not None
         or credit.miner_hotkey != body.hotkey
-        or _payment_recovery_expired(credit.timestamp)
+        or credit_expired(credit)
+    ):
+        return None
+    if credit is None and await get_readmission_payment_for_proof(
+        session,
+        block_hash=body.payment_block_hash,
+        extrinsic_index=body.payment_extrinsic_index,
     ):
         return None
     return cla.message
@@ -286,19 +334,24 @@ async def check(
         codes.append(ERROR_CODE_BAD_SIGNATURE)
         messages.append("signature did not verify against the hotkey")
 
-    # 2. Hotkey registered. On a chain outage we return 503 instead of
-    #    a silent false-pass that would lie to miners.
+    # 2. Hotkey registered. On a chain outage we return 503 instead of a
+    #    silent false-pass or a false 1101, either of which lies to miners.
+    #    A metagraph-cache miss is re-read from chain storage before it
+    #    becomes a 1101, but only for a signed request: an unauthenticated
+    #    hotkey gets the cache's answer, labelled as such.
     try:
-        owner_coldkey = await chain.get_registered_coldkey(body.hotkey, netuid=netuid)
+        registration = await chain.get_hotkey_registration(
+            body.hotkey, netuid=netuid, confirm_absence=signature_valid
+        )
     except ChainError as e:
         logger.warning(f"chain unreachable during /upload/check: {e}")
         raise HTTPException(
             status_code=503, detail="chain unavailable; retry shortly"
         ) from e
-    registered = owner_coldkey is not None
-    if not registered:
+    owner_coldkey = registration.coldkey
+    if not registration.registered:
         codes.append(ERROR_CODE_HOTKEY_NOT_REGISTERED)
-        messages.append(f"hotkey is not registered on netuid {netuid}")
+        messages.append(hotkey_not_registered_message(registration))
 
     # 3. Tarball size cap.
     if body.file_size_bytes > MAX_TARBALL_SIZE_BYTES:
@@ -346,6 +399,57 @@ async def check(
         session,
         default_payment_address=request.app.state.config.upload_payment_address,
     )
+    # SN-485: once the readmission fee is active, an explicit identical
+    # rescore of the owner's own agent is a readmission. Same fee, same
+    # cooldown; the label tells the miner before they pay.
+    readmission_of = None
+    if (
+        signature_valid
+        and owner_coldkey is not None
+        and not banned
+        and body.allow_identical_rescore
+        and announcement_in_effect(settings)
+        and (
+            # A proof that already funded an exact committed upload recovers
+            # that upload; an unused proof or credit labels like a new one.
+            body.payment_block_hash is None
+            or (
+                body.payment_extrinsic_index is not None
+                and await get_agent_for_payment_proof(
+                    session,
+                    block_hash=body.payment_block_hash,
+                    extrinsic_index=body.payment_extrinsic_index,
+                )
+                is None
+            )
+        )
+        and (await current_readmission_activation(session, settings=settings)).active
+    ):
+        # Label against the owner the commit will use: an unused credit of this
+        # hotkey commits under its payment-time coldkey, not the hotkey's
+        # current chain owner, so the preview must match that lineage.
+        credit = (
+            await get_evaluation_payment_for_proof(
+                session,
+                block_hash=body.payment_block_hash,
+                extrinsic_index=body.payment_extrinsic_index,
+            )
+            if body.payment_block_hash is not None
+            and body.payment_extrinsic_index is not None
+            else None
+        )
+        label_coldkey = (
+            credit.miner_coldkey
+            if credit is not None
+            and credit.agent_id is None
+            and credit.miner_hotkey == body.hotkey
+            and credit.miner_coldkey is not None
+            else owner_coldkey
+        )
+        lineage = await get_same_owner_agent_by_sha(
+            session, miner_coldkey=label_coldkey, sha256=body.sha256
+        )
+        readmission_of = lineage.agent_id if lineage is not None else None
     reserved_admission = (
         await get_upload_admission_for_coldkey(session, miner_coldkey=owner_coldkey)
         if owner_coldkey is not None
@@ -405,7 +509,7 @@ async def check(
                     "payment credit belongs to a different hotkey"
                 )
             else:
-                _ensure_payment_recovery_fresh(payment_record.timestamp)
+                _ensure_credit_fresh(payment_record)
                 recovery_payment_verified = True
         else:
             if await get_generator_payment_for_proof(
@@ -416,6 +520,11 @@ async def check(
                 raise PaymentReplayedError(
                     "payment proof already funded a generator upload"
                 )
+            await _readmission_lane_replay(
+                session,
+                block_hash=body.payment_block_hash,
+                extrinsic_index=body.payment_extrinsic_index,
+            )
             # The replay lookup autobegins a read transaction. Do not hold a
             # pooled connection across the recovery proof's chain reads.
             if session.in_transaction():
@@ -515,6 +624,8 @@ async def check(
         payment_required=payment_required,
         identical_agent_id=duplicate.agent_id if duplicate else None,
         identical_agent_status=duplicate.status if duplicate else None,
+        readmission_kind="identical_rescore" if readmission_of else None,
+        readmission_of_agent_id=readmission_of,
         retry_at=retry_at,
         admission_token=admission.token if admission else None,
         admission_expires_at=admission.expires_at if admission else None,
@@ -576,8 +687,9 @@ async def upload_agent(
     1. Form fields auto-validated by FastAPI regex (already done by
        the time this body runs; malformed input returns 422).
     2. Fresh domain-separated upload signature (CPU only, no I/O; 400).
-    3. Hotkey registered on the configured netuid (1 Pylon call;
-       400 if absent, 503 if chain unreachable).
+    3. Hotkey registered on the configured netuid (the cached metagraph,
+       plus one chain-storage read when the cache lacks the hotkey; 400 if
+       absent, 503 if chain unreachable).
     4. Stream tar bytes: size cap (413) + sha256 re-verify (400).
     5. Resolve the proof as an idempotent retry or an available duplicate-upload
        credit. Reusing an assigned proof for different upload data remains a
@@ -624,17 +736,18 @@ async def upload_agent(
             await rollback_result
 
     # 3. Hotkey must be registered on this subnet. Chain outage surfaces
-    # as 503; falling through would silently accept off-subnet hotkeys.
+    # as 503; falling through would silently accept off-subnet hotkeys. A
+    # metagraph-cache miss is re-read from chain storage before refusing.
     try:
-        registered = await chain.is_registered(hotkey, netuid=netuid)
+        registration = await chain.get_hotkey_registration(hotkey, netuid=netuid)
     except ChainError as e:
         logger.warning(f"chain unreachable during /upload/agent: {e}")
         raise HTTPException(
             status_code=503, detail="chain unavailable; retry shortly"
         ) from e
-    if not registered:
+    if not registration.registered:
         raise HTTPException(
-            status_code=400, detail=f"hotkey not registered on netuid {netuid}"
+            status_code=400, detail=hotkey_not_registered_message(registration)
         )
 
     # 4. Stream the tar; enforce size cap + recompute sha256 on bytes.
@@ -695,11 +808,17 @@ async def upload_agent(
         extrinsic_index=payment_extrinsic_index,
     ):
         raise PaymentReplayedError("payment proof already funded a generator upload")
+    if payment_record is None:
+        await _readmission_lane_replay(
+            session,
+            block_hash=payment_block_hash,
+            extrinsic_index=payment_extrinsic_index,
+        )
     if payment_record and payment_record.miner_hotkey != hotkey:
         raise PaymentReplayedError("payment credit belongs to a different hotkey")
     if payment_record:
         try:
-            _ensure_payment_recovery_fresh(payment_record.timestamp)
+            _ensure_credit_fresh(payment_record)
         except PaymentRecoveryExpired as exc:
             return await _refuse_unless_exact_retry(session, exc, retry_identity)
     cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
@@ -761,7 +880,7 @@ async def upload_agent(
     # unchanged. A bare ChainError surfaces when one of the verifier's
     # five chain reads cannot reach the configured backends, which we treat as
     # a 503 to match the shipped /upload/check pattern around
-    # chain.is_registered.
+    # chain.get_hotkey_registration.
     verified = None
     if using_credit:
         assert credit_owner_coldkey is not None
@@ -790,6 +909,9 @@ async def upload_agent(
     duplicate = await get_same_owner_agent_by_sha(
         session, miner_coldkey=owner_coldkey, sha256=sha256
     )
+    # Read before a rollback expires the row: an explicit identical rescore
+    # is the readmission lineage (SN-485).
+    identical_lineage_id = duplicate.agent_id if duplicate is not None else None
     if duplicate and not allow_identical_rescore:
         assert duplicate.version is not None
         duplicate_agent_id = duplicate.agent_id
@@ -823,12 +945,20 @@ async def upload_agent(
                     raced and raced.agent_id is None and raced.miner_hotkey == hotkey
                 ):
                     raise
+        # The existing agent's own readmission label, as an exact retry reports.
+        duplicate_label = await get_upload_readmission(
+            session, agent_id=duplicate_agent_id
+        )
         return UploadAgentResponse(
             agent_id=duplicate_agent_id,
             version=duplicate_version,
             status=duplicate_status,
             payment_disposition="reusable_credit",
             credit_for_agent_id=duplicate_agent_id,
+            readmission_kind=_label_kind(duplicate_label),
+            readmission_of_agent_id=(
+                duplicate_label.lineage_agent_id if duplicate_label else None
+            ),
         )
 
     # The duplicate lookup autobegan a read transaction. Do not pin a pooled
@@ -931,6 +1061,27 @@ async def upload_agent(
             )
             if reserved is not None:
                 raise HTTPException(status_code=409, detail=reserved)
+            # SN-485: whether this upload can be a readmission, resolved once
+            # in this transaction and reused by the label below.
+            activation = (
+                await current_readmission_activation(session, settings=settings)
+                if announcement_in_effect(settings)
+                else None
+            )
+            readmission_live = activation is not None and activation.active
+            # An identical upload committed by a concurrent request after the
+            # lookup above is this rescore's lineage. Re-read it under the
+            # coldkey lock, before this agent exists, so the readmission label
+            # below is never lost to the race.
+            if (
+                identical_lineage_id is None
+                and allow_identical_rescore
+                and readmission_live
+            ):
+                lineage = await get_same_owner_agent_by_sha(
+                    session, miner_coldkey=owner_coldkey, sha256=sha256
+                )
+                identical_lineage_id = lineage.agent_id if lineage else None
             version = await insert_agent(
                 session,
                 agent_id=agent_id,
@@ -973,6 +1124,26 @@ async def upload_agent(
                 await insert_evaluation_payment(
                     session, verified=verified, agent_id=agent_id
                 )
+            # SN-485: label a readmission of the owner's own lineage, only
+            # while the fee is active (never retroactively). Same fee and
+            # cooldown as any upload; the row is accounting and rules only.
+            readmission = None
+            if activation is not None and readmission_live:
+                readmission = await classify_upload_readmission(
+                    session,
+                    miner_coldkey=owner_coldkey,
+                    sha256=sha256,
+                    normalized_source_hash=normalized_source_hash,
+                    identical_agent_id=identical_lineage_id,
+                )
+                if readmission is not None:
+                    await record_upload_readmission(
+                        session,
+                        agent_id=agent_id,
+                        label=readmission,
+                        bench_version=activation.active_bench_version,
+                        miner_coldkey=owner_coldkey,
+                    )
             # Decide consent last, after every write that can wait on a lock
             # (the series lock, the credit row, the payment key), so a version
             # that becomes effective during those waits is not missed. The
@@ -1016,6 +1187,21 @@ async def upload_agent(
         version=version,
         status=AgentStatus.UPLOADED,
         payment_disposition="credit_consumed" if using_credit else "consumed",
+        readmission_kind=readmission.kind if readmission is not None else None,
+        readmission_of_agent_id=(
+            readmission.lineage_agent_id if readmission is not None else None
+        ),
+    )
+
+
+def _label_kind(
+    label: UploadReadmission | None,
+) -> Literal["identical_rescore", "near_duplicate"] | None:
+    """The wire kind of a recorded readmission label."""
+    if label is None:
+        return None
+    return (
+        "identical_rescore" if label.kind == "identical_rescore" else "near_duplicate"
     )
 
 
@@ -1067,11 +1253,16 @@ async def _exact_retry_of_accepted_upload(
     ):
         return None
     assert existing.version is not None
+    # The readmission label recorded with the original upload (SN-485), so an
+    # exact retry reports what the first response did.
+    label = await get_upload_readmission(session, agent_id=existing.agent_id)
     # Read the row before a commit expires it.
     recovered = UploadAgentResponse(
         agent_id=existing.agent_id,
         version=existing.version,
         status=existing.status,
+        readmission_kind=_label_kind(label),
+        readmission_of_agent_id=label.lineage_agent_id if label else None,
     )
     if identity.admission_token is not None:
         await release_upload_admission_for_exact_retry(

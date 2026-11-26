@@ -1,0 +1,25 @@
+---
+# Any host: the bearer was placed out of band as a root-only file. Use this on
+# a host with no federated identity (for example a Hetzner node), and remove
+# the file when the host is retired.
+- name: Inspect the Platform bearer file
+  ansible.builtin.stat:
+    path: "{{ generator_scorer_token_file }}"
+  register: generator_scorer_token_file_stat
+
+- name: Require a root-only bearer file
+  ansible.builtin.assert:
+    that:
+      - generator_scorer_token_file_stat.stat.exists
+      - generator_scorer_token_file_stat.stat.isreg
+      - generator_scorer_token_file_stat.stat.pw_name == 'root'
+      - generator_scorer_token_file_stat.stat.mode in ['0400', '0600']
+    fail_msg: "{{ generator_scorer_token_file }} must exist as a regular root-owned file with mode 0400 or 0600"
+    quiet: true
+
+- name: Read the Platform bearer from the host file
+  ansible.builtin.command:
+    argv: [cat, "{{ generator_scorer_token_file }}"]
+  register: generator_scorer_token_read
+  changed_when: false
+  no_log: true

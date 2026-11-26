@@ -589,6 +589,20 @@ resource "google_secret_manager_secret" "backroom_platform_operator_proof" {
   }
 }
 
+# Empty container: the trial key is installed separately and never enters
+# Terraform state. The relay remains off until a bounded operator binding and
+# Backroom percentage are both configured.
+resource "google_secret_manager_secret" "danilabs_trial_key" {
+  project   = var.project
+  secret_id = "platform-danilabs-trial-key"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 # Let the runtime SA read every platform secret above.
 resource "google_secret_manager_secret_iam_member" "platform_access" {
   for_each  = toset(local.platform_secret_ids)

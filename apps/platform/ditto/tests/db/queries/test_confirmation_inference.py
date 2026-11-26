@@ -307,3 +307,71 @@ async def test_concurrent_same_nonce_admits_once_and_replay_fails_closed(
         == 1
     )
     assert outcomes.count(ConfirmationInferenceDecline.NONCE_REPLAYED) == 1
+
+
+@pytest.mark.parametrize(
+    ("remaining", "delivered"),
+    [
+        # Landing exactly on the budget is within it: delivered, then spent.
+        (2100, True),
+        # Overshooting it (#2971): refused, but the provider already billed the
+        # call, so its real usage is booked and the grant stops admitting.
+        (1000, False),
+    ],
+)
+async def test_settled_cost_is_booked_and_a_spent_cost_budget_exhausts(
+    session: AsyncSession, remaining: int, delivered: bool
+) -> None:
+    async with session.begin():
+        _, offers = await _grants(session)
+        judge, bearer = next(
+            (grant, token) for grant, token in offers if grant.lane == "judge"
+        )
+        judge.cost_microusd = judge.cost_budget_microusd - remaining
+        admitted = await begin_confirmation_inference_request(
+            session,
+            grant_id=judge.grant_id,
+            nonce=uuid4(),
+            bearer=bearer,
+            model=judge.model,
+            token_reservation=10,
+            max_chargeable_tokens=20,
+            now=_NOW,
+        )
+        assert not isinstance(admitted, ConfirmationInferenceDecline)
+        _, request = admitted
+        assert (
+            await finish_confirmation_inference_request(
+                session,
+                grant_id=judge.grant_id,
+                nonce=request.nonce,
+                generation=judge.generation,
+                status="completed",
+                prompt_tokens=12,
+                completion_tokens=5,
+                cost_microusd=2100,
+                upstream_provider=judge.receipt_provider,
+                now=_NOW + timedelta(seconds=1),
+            )
+            is delivered
+        )
+        assert request.status == ("completed" if delivered else "failed")
+        assert (request.prompt_tokens, request.completion_tokens) == (12, 5)
+        assert request.cost_microusd == 2100
+        assert (judge.prompt_tokens, judge.completion_tokens) == (12, 5)
+        assert judge.cost_microusd == judge.cost_budget_microusd - remaining + 2100
+        assert judge.active_requests == 0
+        assert judge.status == "exhausted"
+        assert (
+            await begin_confirmation_inference_request(
+                session,
+                grant_id=judge.grant_id,
+                nonce=uuid4(),
+                bearer=bearer,
+                model=judge.model,
+                token_reservation=10,
+                max_chargeable_tokens=20,
+                now=_NOW + timedelta(seconds=2),
+            )
+            is ConfirmationInferenceDecline.BUDGET_EXHAUSTED
+        )

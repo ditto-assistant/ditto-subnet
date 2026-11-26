@@ -57,10 +57,37 @@ func CheckDuelingColumns(columns []DuelingColumnAggregate) error {
 	return nil
 }
 
-// duelingWeight is the column weight as a float64 variable, never a typed
-// constant: a constant expression such as w*w is evaluated exactly at compile
-// time, while the Python mirror rounds every product.
-func duelingWeight() float64 { return protocol.DuelingColumnWeight }
+// DuelingWeighting is one bench version's composite weighting: the counted
+// column weight w and the datagen qualifier q, a factor on the whole
+// composite. Both are float64 fields, never typed constants: a constant
+// expression such as w*w is evaluated exactly at compile time, while the
+// Python mirror rounds every product.
+type DuelingWeighting struct {
+	ColumnWeight float64
+	Qualifier    float64
+}
+
+// DuelingWeightingForVersion is bench version v's weighting for a run whose
+// datagen half scored datagenRaw: w = protocol.DuelingColumnWeightForVersion(v)
+// and q = protocol.DuelingDatagenQualifier(v, datagenRaw), which is 1 below
+// bench 19.
+func DuelingWeightingForVersion(v int, datagenRaw float64) DuelingWeighting {
+	return DuelingWeighting{
+		ColumnWeight: protocol.DuelingColumnWeightForVersion(v),
+		Qualifier:    protocol.DuelingDatagenQualifier(v, datagenRaw),
+	}
+}
+
+// DuelingDetailsWeighting is the weighting a details.dueling block was scored
+// with: its column_weight and its datagen_qualifier, 1 when absent (bench
+// 16..18).
+func DuelingDetailsWeighting(d protocol.DuelingDetails) DuelingWeighting {
+	q := 1.0
+	if d.DatagenQualifier != nil {
+		q = *d.DatagenQualifier
+	}
+	return DuelingWeighting{ColumnWeight: d.ColumnWeight, Qualifier: q}
+}
 
 // mean is the column's mean case score; a column with no cases scores 0.
 func (c DuelingColumnAggregate) mean() float64 {
@@ -86,23 +113,26 @@ func duelingCounted(columns []DuelingColumnAggregate, mask map[string]bool) []Du
 
 // DuelingComposite is the dueling composite of docs/dueling-bench.md section 1:
 //
-//	gate × ((1 − w × |U|) × datagen + w × Σ_{c ∈ U} col_c)
+//	gate × q × ((1 − w × |U|) × datagen + w × Σ_{c ∈ U} col_c)
 //
-// where w is protocol.DuelingColumnWeight, U the columns whose owner is not in
-// mask (an empty owner is never masked), and col_c = sum / n (0 when n = 0).
-// A masked column's weight returns to the datagen half, so no column carries
-// more than w. The reported composite masks the agent's own owner; the paired
-// dethrone test masks both agents' owners.
+// where w and q are the bench version's weighting (DuelingWeightingForVersion:
+// w = 0.1 and q = 1 on bench 16..18; w = 0.15 and q = min(1, datagen / 0.8)
+// from bench 19), U the columns whose owner is not in mask (an empty owner is
+// never masked), and col_c = sum / n (0 when n = 0). A masked column's weight
+// returns to the datagen half, so no column carries more than w. The reported
+// composite masks the agent's own owner; the paired dethrone test masks both
+// agents' owners. q depends on the datagen half alone, so every mask shares it.
 //
 // The arithmetic is float64 in a fixed order: columns in column ID order, and
 // every product is converted explicitly so the compiler cannot fuse it into a
 // multiply-add. The Go spec lets an implementation fuse an unconverted
 // product into a later add, even across statements (arm64 does); only an
 // explicit float64 conversion forces the rounding the Python mirror does.
+// gate × q is exact when q = 1, so bench 16..18 composites are unchanged.
 // ditto_screening_protocol.dueling reproduces every result bit for bit
 // (testdata/dueling_composite_vectors.json).
-func DuelingComposite(datagenRaw, datagenGate float64, columns []DuelingColumnAggregate, mask map[string]bool) float64 {
-	w := duelingWeight()
+func DuelingComposite(weighting DuelingWeighting, datagenRaw, datagenGate float64, columns []DuelingColumnAggregate, mask map[string]bool) float64 {
+	w := weighting.ColumnWeight
 	counted := duelingCounted(columns, mask)
 	var generator float64
 	for _, c := range counted {
@@ -110,7 +140,7 @@ func DuelingComposite(datagenRaw, datagenGate float64, columns []DuelingColumnAg
 	}
 	share := 1 - float64(w*float64(len(counted)))
 	inner := float64(share*datagenRaw) + generator
-	return float64(datagenGate * inner)
+	return float64(float64(datagenGate*weighting.Qualifier) * inner)
 }
 
 // DuelingCompositeStderr is the composite's stratified standard error
@@ -118,15 +148,16 @@ func DuelingComposite(datagenRaw, datagenGate float64, columns []DuelingColumnAg
 //
 //	SE² = (1 − w × |U|)² × SE_datagen² + w² × Σ_{c ∈ U} s_c² / n_c
 //
-// scaled by the datagen gate. s_c² is the column's sample variance
+// scaled by the datagen gate and the qualifier, which the error treats as fixed
+// exactly as it does the gate. s_c² is the column's sample variance
 // (sum_sq − sum²/n) / (n − 1), clamped at 0; a column with n < 2 contributes
-// no variance. With no column masked this is the section 4 form
-// 0.25 × SE_datagen² + 0.25 × SE_G², SE_G² = (1/k²) Σ s_c²/n_c over k = 5
-// columns; a masked column's weight returns to the datagen half exactly as in
+// no variance. With no column masked on bench 16..18 this is the section 4
+// form 0.25 × SE_datagen² + 0.25 × SE_G², SE_G² = (1/k²) Σ s_c²/n_c over
+// k = 5 columns (bench 19: 0.0625 × SE_datagen² + 0.5625 × SE_G²); a masked column's weight returns to the datagen half exactly as in
 // DuelingComposite. datagenStderr is the datagen half's standard error before
 // gates.
-func DuelingCompositeStderr(datagenStderr, datagenGate float64, columns []DuelingColumnAggregate, mask map[string]bool) float64 {
-	w := duelingWeight()
+func DuelingCompositeStderr(weighting DuelingWeighting, datagenStderr, datagenGate float64, columns []DuelingColumnAggregate, mask map[string]bool) float64 {
+	w := weighting.ColumnWeight
 	counted := duelingCounted(columns, mask)
 	var strata float64
 	for _, c := range counted {
@@ -144,5 +175,5 @@ func DuelingCompositeStderr(datagenStderr, datagenGate float64, columns []Duelin
 	share := 1 - float64(w*float64(len(counted)))
 	datagenVar := float64(float64(share*share) * float64(datagenStderr*datagenStderr))
 	total := datagenVar + float64(float64(w*w)*strata)
-	return float64(datagenGate * math.Sqrt(total))
+	return float64(float64(datagenGate*weighting.Qualifier) * math.Sqrt(total))
 }

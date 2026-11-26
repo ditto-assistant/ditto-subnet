@@ -1,0 +1,78 @@
+---
+# CPM (model_context) scorer GPU host: docs/research/cpm/competition-v1.md §6.1,
+# infra/terraform/stacks/aws-cpm-scorer (g6e.xlarge, one L40S, Ubuntu 24.04).
+
+# The scorer runs in the signed release image as this unprivileged account.
+# systemd runs only the Docker client (as root).
+cpm_scorer_user: ditto-cpm-scorer
+cpm_scorer_group: ditto-cpm-scorer
+cpm_scorer_unit: ditto-cpm-scorer
+cpm_scorer_container: ditto-cpm-scorer
+cpm_scorer_release_root: /opt/ditto-cpm-scorer
+cpm_scorer_config_dir: /etc/ditto-cpm-scorer
+# Base checkpoints, miner models, generated seed artifacts: tens of GB, on the
+# root volume (aws-cpm-scorer requires boot_disk_gb >= 200).
+cpm_scorer_cache_dir: /var/lib/ditto-cpm-scorer/cache
+
+# A full released commit SHA is required for the supervised bootstrap: its
+# immutable image (ditto-subnet-stack:cpm-scorer-sha-<revision>) is verified
+# and activated first, then the timer follows cpm-scorer-stable-1. Pass the
+# currently released revision; an older one rolls the host back.
+cpm_scorer_revision: ""
+cpm_scorer_image_repository: ghcr.io/ditto-assistant/ditto-subnet-stack
+
+cpm_scorer_platform_url: https://platform-api.heyditto.ai
+cpm_scorer_poll_seconds: 30
+# Platform records this as scorer_id. Inside the container the hostname is a
+# random container ID, so name the host explicitly.
+cpm_scorer_id: "{{ inventory_hostname }}"
+# g6e.xlarge has 32 GiB; leave the host and Docker room.
+cpm_scorer_container_memory: 28g
+
+cpm_scorer_gcp_project: ditto-app-dev
+# Created (empty) by gcp-platform/cpm-scorer.tf; Platform reads the same value
+# as DITTO_MODEL_CONTEXT_SCORER_TOKEN.
+cpm_scorer_token_secret: model-context-scorer-token-prod
+
+# Where the Platform bearer comes from. The secret itself lives in GCP Secret
+# Manager (Platform reads it there); the host reaches it one of two ways:
+#   aws-wif  the EC2 instance role ditto-cpm-scorer, federated through the
+#            cpm-scorer-aws Workload Identity pool (gcp-platform/cpm-scorer.tf)
+#   file     a root-only file already on the host (cpm_scorer_token_source_file)
+# Either way the role renders it into cpm_scorer_token_file, mode 0400, owned by
+# cpm_scorer_user, which the service bind-mounts read-only.
+cpm_scorer_token_source: aws-wif
+cpm_scorer_token_source_file: "{{ cpm_scorer_config_dir }}/platform-token.source"
+cpm_scorer_token_file: "{{ cpm_scorer_config_dir }}/platform-token"
+
+# aws-wif audience. The project number is not secret; it is
+# data.google_project.this.number in gcp-platform.
+cpm_scorer_gcp_project_number: "22790208601"
+cpm_scorer_gcp_wif_pool: cpm-scorer-aws
+cpm_scorer_gcp_wif_provider: aws-ec2
+cpm_scorer_gcp_wif_dir: "{{ cpm_scorer_config_dir }}/gcp"
+# Pinned packages.cloud.google.com/apt/doc/apt-key.gpg. A rotated key fails
+# closed here; re-pin only after checking the new key's fingerprint.
+cpm_scorer_google_cloud_apt_key_sha256: "3ecc63922b7795eb23fdc449ff9396f9114cb3cf186d6f5b53ad4cc3ebfbb11f"
+
+# NVIDIA's signed CUDA apt repository for Ubuntu 24.04 serves both the driver
+# and the container toolkit. Key 3bf863cc.pub, fingerprint
+# EB69 3B30 35CD 5710 E231 E123 A4B4 6996 3BF8 63CC (cudatools@nvidia.com).
+cpm_scorer_nvidia_repo: https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/
+cpm_scorer_nvidia_apt_key_sha256: "7eb71103e32e813ea3e1c06bdb01b143f36feb8d83ecac2b0c11c9273f9e6822"
+# The r595 branch is CUDA 13.2's (the release image's base declares
+# NVIDIA_REQUIRE_CUDA=cuda>=13.2; torch 2.15.0's wheels are CUDA 13.2). The
+# open kernel modules are NVIDIA's recommended driver for Ada (L40S).
+# nvidia-driver-pinning-<version> holds every driver package at this version.
+cpm_scorer_nvidia_driver_version: "595.112.07"
+cpm_scorer_nvidia_driver_package_version: "595.112.07-1ubuntu1"
+cpm_scorer_nvidia_container_toolkit_version: "1.20.2-1"
+cpm_scorer_expected_gpu: NVIDIA L40S
+# The release image's CUDA base (Dockerfile.cpm-scorer-release): a small probe
+# that the container runtime reaches the GPU before any release runs.
+cpm_scorer_gpu_probe_image: docker.io/nvidia/cuda:13.2.1-base-ubuntu24.04@sha256:7be56e69d8ae7c3648b8fca009fa35980ecd9c6eefaafbff3ee8c224e0043eb5
+
+# Pinned Docker apt key (download.docker.com/linux/ubuntu/gpg; the same key as
+# the Debian repository's).
+docker_apt_key_sha256: "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"
+cpm_scorer_docker_apt_arch: amd64

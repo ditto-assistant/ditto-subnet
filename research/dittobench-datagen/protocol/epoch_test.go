@@ -88,8 +88,8 @@ func TestSupportedBenchVersionsAreOneDerivedList(t *testing.T) {
 		}
 	}
 	newest := NewestSupportedBenchVersion()
-	if newest != versions[len(versions)-1] || newest != BenchVersionV15 {
-		t.Fatalf("newest supported version = %d, want %d (last of %v)", newest, BenchVersionV15, versions)
+	if newest != versions[len(versions)-1] || newest != BenchVersionV18 {
+		t.Fatalf("newest supported version = %d, want %d (last of %v)", newest, BenchVersionV18, versions)
 	}
 	for _, v := range versions {
 		if !SupportedBenchVersion(v) {
@@ -114,7 +114,7 @@ func TestSupportedBenchVersionsAreOneDerivedList(t *testing.T) {
 	if _, err := RotateSeedForVersion(1, beyond); err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("rotation error must render the derived list %q: %v", want, err)
 	}
-	if got := SupportedBenchVersionList(); got != "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15" {
+	if got := SupportedBenchVersionList(); got != "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18" {
 		t.Fatalf("SupportedBenchVersionList() = %q", got)
 	}
 	// Epochs advance monotonically with the version so no two contracts share a
@@ -132,11 +132,10 @@ func TestSupportedBenchVersionsAreOneDerivedList(t *testing.T) {
 // staged contract continues the supported list contiguously, generates with
 // its own epoch and rotate seed, and is invisible to every supported-set
 // helper until the cross-layer PR promotes it into supportedBenchVersions.
+// v16 was promoted by the flip that raised the shared ceiling to 16; its
+// epoch and rotation are pinned here so promotion provably moved no byte.
 func TestStagedBenchVersionsAreGeneratableNotSupported(t *testing.T) {
 	staged := StagedBenchVersions()
-	if len(staged) != 1 || staged[0] != BenchVersionV16 {
-		t.Fatalf("staged versions = %v, want [16]", staged)
-	}
 	prev := NewestSupportedBenchVersion()
 	prevEpoch, _ := DatasetEpochForVersion(prev)
 	for _, v := range staged {
@@ -162,13 +161,35 @@ func TestStagedBenchVersionsAreGeneratableNotSupported(t *testing.T) {
 		}
 		prev, prevEpoch = v, epoch
 	}
-	if NewestGeneratableBenchVersion() != BenchVersionV16 || NewestSupportedBenchVersion() != BenchVersionV15 {
-		t.Fatalf("newest generatable %d / supported %d", NewestGeneratableBenchVersion(), NewestSupportedBenchVersion())
+	if len(staged) == 0 && NewestGeneratableBenchVersion() != NewestSupportedBenchVersion() {
+		t.Fatalf("nothing staged, yet newest generatable %d != newest supported %d", NewestGeneratableBenchVersion(), NewestSupportedBenchVersion())
+	}
+	// v16 left staging with the epoch it was staged with.
+	if !SupportedBenchVersion(BenchVersionV16) || StagedBenchVersion(BenchVersionV16) {
+		t.Fatal("v16 must be supported and no longer staged")
 	}
 	if got, _ := DatasetEpochForVersion(BenchVersionV16); got.Format(time.RFC3339) != "2027-08-01T00:00:00Z" {
 		t.Fatalf("v16 epoch = %s", got)
 	}
-	if _, err := RotateSeedForVersion(1, BenchVersionV16+1); err == nil || !strings.Contains(err.Error(), "staged: 16") {
-		t.Fatalf("error must name the staged list: %v", err)
+	// v17 is the priced-cost-v2 contract.
+	if !SupportedBenchVersion(BenchVersionV17) || StagedBenchVersion(BenchVersionV17) {
+		t.Fatal("v17 must be supported and not staged")
+	}
+	if got, _ := DatasetEpochForVersion(BenchVersionV17); got.Format(time.RFC3339) != "2027-09-01T00:00:00Z" {
+		t.Fatalf("v17 epoch = %s", got)
+	}
+	// v18 (the accuracy contract) left staging with the epoch it was staged with.
+	if !SupportedBenchVersion(BenchVersionV18) || StagedBenchVersion(BenchVersionV18) || NewestSupportedBenchVersion() != BenchVersionV18 {
+		t.Fatal("v18 must be supported and no longer staged")
+	}
+	if got, _ := DatasetEpochForVersion(BenchVersionV18); got.Format(time.RFC3339) != "2027-10-01T00:00:00Z" {
+		t.Fatalf("v18 epoch = %s", got)
+	}
+	// v19 (the generalization contract) is staged until the cross-layer PR.
+	if SupportedBenchVersion(BenchVersionV19) || !StagedBenchVersion(BenchVersionV19) || NewestGeneratableBenchVersion() != BenchVersionV19 {
+		t.Fatal("v19 must be staged, generatable and not supported")
+	}
+	if got, _ := DatasetEpochForVersion(BenchVersionV19); got.Format(time.RFC3339) != "2027-11-01T00:00:00Z" {
+		t.Fatalf("v19 epoch = %s", got)
 	}
 }

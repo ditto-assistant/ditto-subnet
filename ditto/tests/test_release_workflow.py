@@ -76,7 +76,6 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     )
     assert {
         "miner_starter_kit",
-        "dittobench_coding_starter_kit",
         "dittobench_api",
         "dittobench_coding_datagen",
         "dittobench_datagen",
@@ -104,10 +103,6 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert "needs.verify-source.result == 'success'" in jobs["release"]["if"]
     assert "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["release"]["if"]
     assert (
-        "needs.plan.outputs.dittobench_coding_starter_kit == 'true'"
-        in jobs["release"]["if"]
-    )
-    assert (
         "needs.plan.outputs.dittobench_coding_datagen == 'true'"
         in jobs["release"]["if"]
     )
@@ -115,13 +110,8 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert (
         "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["admit-current"]["if"]
     )
-    assert (
-        "needs.plan.outputs.dittobench_coding_starter_kit == 'true'"
-        in jobs["admit-current"]["if"]
-    )
     assert jobs["verify-source"]["if"] == "always()"
     assert "verify-dittobench-coding-datagen" in jobs["verify-source"]["needs"]
-    assert "verify-dittobench-coding-starter-kit" in jobs["verify-source"]["needs"]
     coding_gate = jobs["verify-dittobench-coding-datagen"]
     assert "needs.plan.outputs.dittobench_coding_datagen == 'true'" in coding_gate["if"]
     assert coding_gate["defaults"]["run"]["working-directory"] == (
@@ -134,76 +124,11 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         "../../packages/dittobench-coding-contract/"
         "generate_inference_vectors.py --check" in coding_release_run
     )
-    coding_starter_gate = jobs["verify-dittobench-coding-starter-kit"]
-    assert (
-        "needs.plan.outputs.dittobench_coding_starter_kit == 'true'"
-        in coding_starter_gate["if"]
-    )
-    assert coding_starter_gate["defaults"]["run"]["working-directory"] == (
-        "miners/dittobench-coding-starter-kit"
-    )
-    cache_gate = _step(
-        coding_starter_gate["steps"],
-        "Cache coding starter-kit Cargo dependencies",
-    )
-    assert "miners/dittobench-coding-starter-kit/target" in cache_gate["with"]["path"]
-    assert "miners/dittobench-unified-starter-kit/target" in cache_gate["with"]["path"]
-    image_gate = _step(
-        coding_starter_gate["steps"],
-        "Build coding starter kit image from exact merge source",
-    )
-    assert str(image_gate["uses"]).startswith("docker/build-push-action@")
-    assert image_gate["with"]["context"] == "miners/dittobench-coding-starter-kit"
-    assert "scope=coding-starter-kit" in image_gate["with"]["cache-from"]
-    assert "scope=coding-starter-kit" in image_gate["with"]["cache-to"]
-    unified_gate = _step(
-        coding_starter_gate["steps"],
-        "Verify unified starter kit from exact merge source",
-    )
-    assert unified_gate["working-directory"] == "miners/dittobench-unified-starter-kit"
-    assert "cargo run --locked -- submit" in unified_gate["run"]
-    unified_image_gate = _step(
-        coding_starter_gate["steps"],
-        "Build unified starter kit image from exact merge source",
-    )
-    assert str(unified_image_gate["uses"]).startswith("docker/build-push-action@")
-    assert unified_image_gate["with"]["context"] == "miners"
-    assert unified_image_gate["with"]["file"] == (
-        "miners/dittobench-unified-starter-kit/Dockerfile"
-    )
-    # The route probe below runs the tag from the local daemon.
-    assert unified_image_gate["with"]["load"] is True
-    unified_probe_gate = _step(
-        coding_starter_gate["steps"],
-        "Probe unified starter kit routes from exact merge source",
-    )
-    assert "test-image-health.sh" in unified_probe_gate["run"]
-    e2e_gate = _step(
-        coding_starter_gate["steps"],
-        "Run scripted coding practice E2E from exact merge source",
-    )
-    assert "scripts/test-coding-starter-practice-e2e.sh" in e2e_gate["run"]
-    source_gate = _step(
-        jobs["verify-source"]["steps"],
-        "Require every selected exact-source gate",
-    )
-    assert source_gate["env"]["CODING_STARTER_REQUIRED"] == (
-        "${{ needs.plan.outputs.dittobench_coding_starter_kit }}"
-    )
-    assert source_gate["env"]["CODING_STARTER_RESULT"] == (
-        "${{ needs.verify-dittobench-coding-starter-kit.result }}"
-    )
-    assert (
-        'require_selected "$CODING_STARTER_REQUIRED" "$CODING_STARTER_RESULT" '
-        "dittobench-coding-starter-kit" in source_gate["run"]
-    )
-
     for job_name, job in jobs.items():
         if job_name in {
             "plan",
             "admit-current",
             "release",
-            "verify-dittobench-coding-starter-kit",
             "verify-source",
         }:
             continue
@@ -352,6 +277,7 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
         "build-dittobench",
         "publish-datagen",
         "publish-generator-scorer",
+        "publish-cpm-scorer",
         "deploy-dittobench",
         "assemble-stack",
         "smoke-stack-runtime-amd64",
@@ -557,20 +483,6 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert "cargo build --locked --verbose" in starter_verification["run"]
     assert "cargo test --locked --verbose" in starter_verification["run"]
 
-    coding_starter_verification = _step(
-        jobs["verify-dittobench-coding-starter-kit"]["steps"],
-        "Gate coding starter kit release on exact merge source",
-    )
-    assert "cargo fmt --check" in coding_starter_verification["run"]
-    assert (
-        "cargo clippy --locked --all-targets --all-features -- -D warnings"
-        in coding_starter_verification["run"]
-    )
-    assert (
-        "cargo test --locked --all-targets --all-features --verbose"
-        in coding_starter_verification["run"]
-    )
-
     model_relay_steps = jobs["verify-model-relay"]["steps"]
     model_relay_uv = _step(model_relay_steps, "Install uv")
     assert str(model_relay_uv["uses"]).startswith("astral-sh/setup-uv@")
@@ -607,9 +519,9 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
             "Gate screener orchestrator release on exact merge source",
             "needs.plan.outputs.screener_orchestrator == 'true'",
         ),
-        "verify-dittobench-coding-starter-kit": (
-            "Gate coding starter kit release on exact merge source",
-            "needs.plan.outputs.dittobench_coding_starter_kit == 'true'",
+        "verify-cpm-scorer": (
+            "Gate CPM scorer release on exact merge source",
+            "needs.plan.outputs.cpm_scorer == 'true'",
         ),
     }
     for job_name, (step_name, condition) in component_gates.items():
@@ -623,13 +535,13 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert {
         "verify-root",
         "verify-starter-kit",
-        "verify-dittobench-coding-starter-kit",
         "verify-platform",
         "verify-model-relay",
         "verify-backroom",
         "verify-dittobench-api",
         "verify-dittobench-datagen",
         "verify-dittobench-coding-datagen",
+        "verify-cpm-scorer",
         "verify-screener",
         "verify-screener-orchestrator",
     } < set(aggregate["needs"])
@@ -659,13 +571,13 @@ def test_superseded_candidate_skips_expensive_source_verification_early() -> Non
     for job_name in (
         "verify-root-run",
         "verify-starter-kit",
-        "verify-dittobench-coding-starter-kit",
         "verify-platform",
         "verify-model-relay",
         "verify-backroom",
         "verify-dittobench-api",
         "verify-dittobench-datagen",
         "verify-dittobench-coding-datagen",
+        "verify-cpm-scorer",
         "verify-screener",
         "verify-screener-orchestrator",
     ):
@@ -716,7 +628,8 @@ def test_release_uses_the_hash_locked_host_semantic_release_cli() -> None:
     project = tomllib.loads(PYPROJECT_PATH.read_text())
 
     assert project["dependency-groups"]["release"] == [
-        "python-semantic-release==10.6.1"
+        "python-semantic-release==10.6.1",
+        "GitPython>=3.2.1",
     ]
     assert not any(
         str(step.get("uses", "")).startswith(
@@ -1464,6 +1377,14 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
             if "docker/build-push-action@" not in (step.get("uses") or ""):
                 continue
             values = step.get("with") or {}
+            if job_name == "publish-cpm-scorer":
+                # Its multi-GB torch CUDA layer stays out of the shared GHA
+                # cache: it reuses the last published image's inline cache.
+                assert values["cache-from"] == (
+                    "type=registry,ref=${{ env.STACK_REPOSITORY }}:cpm-scorer-stable-1"
+                )
+                assert values["cache-to"] == "type=inline"
+                continue
             cache_from = values.get("cache-from")
             cache_to = values.get("cache-to")
             assert cache_from
@@ -1488,10 +1409,6 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
 
     assert writer_scopes == {
         "publish-generator-scorer": ["generator-scorer-release"],
-        "verify-dittobench-coding-starter-kit": [
-            "coding-starter-kit",
-            "unified-starter-kit",
-        ],
         "build-validator-amd64": ["validator-amd64"],
         "build-validator-arm64": ["validator-arm64"],
         "build-sandbox-docker": ["sandbox-docker"],
@@ -1513,5 +1430,74 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
     assert reader_scopes["build-validator-arm64"] == [["validator-arm64", "validator"]]
     assert (
         len({scope for job_scopes in writer_scopes.values() for scope in job_scopes})
-        == 13
+        == 11
     )
+
+
+def test_cpm_scorer_image_is_gated_signed_and_channelled() -> None:
+    """The CPM GPU image releases with its component, from the release commit,
+    behind its exact-source gate, and reaches the host only signed."""
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    jobs = workflow["jobs"]
+    plan = jobs["plan"]
+    assert plan["outputs"]["cpm_scorer"] == (
+        "${{ steps.components.outputs.cpm_scorer }}"
+    )
+    for job_name in ("admit-current", "release"):
+        assert "needs.plan.outputs.cpm_scorer == 'true'" in jobs[job_name]["if"]
+
+    gate = jobs["verify-cpm-scorer"]
+    assert gate["needs"] == ["plan", "admit-current"]
+    assert gate["defaults"]["run"]["working-directory"] == "services/cpm-scorer"
+    assert gate["steps"][0]["with"]["ref"] == "${{ github.sha }}"
+    gate_run = _step(gate["steps"], "Gate CPM scorer release on exact merge source")
+    assert "uv sync --locked --extra cpu" in gate_run["run"]
+    assert "pytest -q" in gate_run["run"]
+    verify_source = _step(
+        jobs["verify-source"]["steps"], "Require every selected exact-source gate"
+    )
+    assert (
+        'require_selected "$CPM_SCORER_REQUIRED" "$CPM_SCORER_RESULT" cpm-scorer'
+        in verify_source["run"]
+    )
+
+    publish = jobs["publish-cpm-scorer"]
+    assert publish["needs"] == ["plan", "release"]
+    assert "needs.plan.outputs.cpm_scorer == 'true'" in publish["if"]
+    assert publish["environment"] == "prod"
+    assert publish["permissions"] == {
+        "contents": "read",
+        "packages": "write",
+        "id-token": "write",
+    }
+    assert publish["steps"][0]["with"]["ref"] == (
+        "${{ needs.release.outputs.commit_sha }}"
+    )
+    build = _step(publish["steps"], "Publish the immutable scorer image")
+    assert build["with"]["file"] == "Dockerfile.cpm-scorer-release"
+    assert build["with"]["platforms"] == "linux/amd64"
+    assert build["with"]["build-args"] == (
+        "DITTO_REVISION=${{ needs.release.outputs.commit_sha }}"
+    )
+    assert build["with"]["tags"] == (
+        "${{ env.STACK_REPOSITORY }}:cpm-scorer-sha-"
+        "${{ needs.release.outputs.commit_sha }}"
+    )
+    promote = _step(publish["steps"], "Sign, verify and promote the pull channel")
+    run = promote["run"]
+    assert run.index("cosign sign --yes") < run.index("cosign verify")
+    assert run.index("cosign verify") < run.index("cpm-scorer-stable-1")
+    assert "release.yml@refs/heads/main" in run
+    assert "token.actions.githubusercontent.com" in run
+
+    # The host updater trusts exactly what this job signs and promotes.
+    repo = RELEASE_WORKFLOW_PATH.parents[2]
+    updater = (repo / "scripts/cpm-scorer-auto-update.sh").read_text()
+    assert 'CHANNEL="$REPOSITORY:cpm-scorer-stable-1"' in updater
+    assert "release.yml@refs/heads/main" in updater
+    assert 'test "$(label io.heyditto.cpm-scorer.update-protocol)" = 1' in updater
+    dockerfile = (repo / "Dockerfile.cpm-scorer-release").read_text()
+    assert 'io.heyditto.cpm-scorer.update-protocol="1"' in dockerfile
+    for line in dockerfile.splitlines():
+        if line.startswith(("FROM ", "COPY --from=ghcr")):
+            assert "@sha256:" in line, line

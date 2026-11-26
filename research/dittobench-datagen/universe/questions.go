@@ -30,6 +30,9 @@ type QuestionPlan struct {
 	Unanswerable bool
 	Family       string
 	asOfAnchor   time.Time
+	// phrase is the v19 phrase family of a program question
+	// (v19_phrasing.go); empty for the families keyed by oracleKind.
+	phrase string
 
 	oracleKind  string
 	oracleIndex int
@@ -199,6 +202,7 @@ func (w World) questionCandidates() []QuestionPlan {
 		if w.v13Surface() {
 			outstanding = w.v13Question(oracleProjectOutstanding, i, projectSlots)
 		}
+		outstanding = w.v19Or(outstanding, V19PhraseBalanceOutstanding, fmt.Sprintf("%s:%d:%d", oracleProjectOutstanding, i, i), V19Slots{"vendor": p.Vendor, "alias": p.Alias, "purpose": p.Purpose, "client": p.Client})
 		out = append(out, QuestionPlan{
 			Case:            memoryCase(w.Seed, oracleProjectOutstanding, i, outstanding, fmt.Sprintf("%d", p.OutstandingCents), protocol.AnswerMoney, w.moneyDistractors(i, p.OutstandingCents)),
 			RequiredPairIDs: []string{p.ContextPairID, p.LedgerPairID, p.CorrectionPairID},
@@ -272,6 +276,7 @@ func (w World) questionCandidates() []QuestionPlan {
 		if w.v13Surface() {
 			leg = w.v13Question(oracleTripChangedLegCurrent, i, tripSlots)
 		}
+		leg = w.v19Or(leg, V19PhraseTripLegDays, fmt.Sprintf("%s:%d:%d", oracleTripChangedLegCurrent, i, i), V19Slots{"country": trip.Countries[changed], "alias": trip.Alias, "purpose": trip.Purpose, "when": trip.When})
 		out = append(out, tripPlan(w, oracleTripChangedLegCurrent, i, leg, trip.LegDays[changed], commonEvidence, constraints))
 
 		longest := trip.LegDays[0]
@@ -296,6 +301,9 @@ func (w World) questionCandidates() []QuestionPlan {
 }
 
 func (w World) contactCurrentQuestion(p Person, index int) string {
+	if w.BenchVersion >= protocol.BenchVersionV19 {
+		return V19Phrase(V19PhraseContactEmail, w.Seed, fmt.Sprintf("%s:%s:%d", oracleContactCurrent, p.IdentityPairID, index), V19Slots{"name": p.Name, "employer": p.Employer, "context": p.Context})
+	}
 	if w.v13Surface() {
 		return w.v13Question(oracleContactCurrent, index, map[string]string{"name": p.Name, "employer": p.Employer, "context": p.Context})
 	}
@@ -326,6 +334,7 @@ func (w World) projectOutstandingSurface(i, variant int) QuestionPlan {
 		fmt.Sprintf("What remains on the corrected %s bill tied to %q, the %s project for %s, after what we already paid?", p.Vendor, p.Alias, p.Purpose, p.Client),
 		fmt.Sprintf("Reconcile %q for %s: after replacing the original %s invoice figure with the approved one and subtracting the partial payment, what balance remains?", p.Alias, p.Client, p.Vendor),
 	}[variant%4]
+	outstanding = w.v19Or(outstanding, V19PhraseBalanceOutstanding, fmt.Sprintf("%s:%d:%d", oracleProjectOutstanding, i, variant), V19Slots{"vendor": p.Vendor, "alias": p.Alias, "purpose": p.Purpose, "client": p.Client})
 	return QuestionPlan{
 		Case:            memoryCase(w.Seed, oracleProjectOutstanding, i, outstanding, fmt.Sprintf("%d", p.OutstandingCents), protocol.AnswerMoney, w.moneyDistractors(i, p.OutstandingCents)),
 		RequiredPairIDs: []string{p.ContextPairID, p.LedgerPairID, p.CorrectionPairID},
@@ -355,6 +364,7 @@ func (w World) tripChangedLegCurrentSurface(i, variant int) QuestionPlan {
 		fmt.Sprintf("For %s, our %s trip, how many days is the changed %s stay now?", trip.Alias, trip.Purpose, changedCountry),
 		fmt.Sprintf("After changing the %s part of %s, our trip from %s, how many days are we spending there?", changedCountry, trip.Alias, trip.When),
 	}[variant%4]
+	leg = w.v19Or(leg, V19PhraseTripLegDays, fmt.Sprintf("%s:%d:%d", oracleTripChangedLegCurrent, i, variant), V19Slots{"country": trip.Countries[changed], "alias": trip.Alias, "purpose": trip.Purpose, "when": trip.When})
 	return tripPlan(w, oracleTripChangedLegCurrent, i, leg, trip.LegDays[changed], commonEvidence, constraints)
 }
 

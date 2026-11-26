@@ -54,14 +54,46 @@ type V13MemoryEnvelope struct {
 	Isolation int
 	// StoryArcs, when positive, is how many story arcs the story slot asks
 	// about (StoryArcs x six oracles); the other arcs stay seeded as haystack.
-	// Zero asks every arc of the world (v13..v15). Bench v16 only.
+	// Zero asks every arc of the world (v13..v15). Bench v16 and later.
 	StoryArcs int
+	// StoryPerArc, when positive, is how many oracles each asked arc keeps.
+	// Zero keeps v13StoryOraclesPerArc (every table through v17). Bench v18
+	// asks more arcs with fewer oracles each.
+	StoryPerArc int
+	// EnterprisePrograms, when positive, is how many of the business-program
+	// slots the deterministic enterprise slice fills; the rest are v13/v14
+	// family groups. Zero keeps the v13..v17 rule (min(12, BusinessPrograms)).
+	EnterprisePrograms int
+	// DropSaturatedStoryOracles drops the story oracles every v17 agent
+	// solved (v18SaturatedStoryOracles) before the pure-money rotation trims
+	// an arc to its slot. Bench v18 only.
+	DropSaturatedStoryOracles bool
+	// Breakers is the v19 shortcut-breaker slot (gen/v19_envelope.go,
+	// universe/v19_breakers.go). Zero for every table through v18.
+	Breakers int
+}
+
+// storyPerArc is the number of oracles each asked story arc keeps.
+func (e V13MemoryEnvelope) storyPerArc() int {
+	if e.StoryPerArc > 0 {
+		return e.StoryPerArc
+	}
+	return v13StoryOraclesPerArc
+}
+
+// EnterpriseCount is how many business-program slots the enterprise slice
+// fills; the rest are family groups.
+func (e V13MemoryEnvelope) EnterpriseCount() int {
+	if e.EnterprisePrograms > 0 {
+		return min(e.EnterprisePrograms, e.BusinessPrograms)
+	}
+	return min(12, e.BusinessPrograms)
 }
 
 // Total is the number of memory cases the envelope publishes.
 func (e V13MemoryEnvelope) Total() int {
 	return e.Story + e.OrdinaryWorld + e.BusinessPrograms + e.PersonalPrograms + e.Abstention +
-		e.RecordQuantity + e.Divergence + e.PointInTime + e.Integrity + e.Isolation
+		e.RecordQuantity + e.Divergence + e.PointInTime + e.Integrity + e.Isolation + e.Breakers
 }
 
 // Interim is the number of cases currently filled by the interim world fill.
@@ -95,6 +127,8 @@ func (e V13MemoryEnvelope) slot(name string) int {
 		return e.Integrity
 	case V13SlotIsolation:
 		return e.Isolation
+	case V19SlotBreakers:
+		return e.Breakers
 	}
 	return 0
 }
@@ -111,13 +145,15 @@ const (
 	V13SlotPointInTime      = "point-in-time"
 	V13SlotIntegrity        = "integrity"
 	V13SlotIsolation        = "isolation"
+	// V19SlotBreakers is empty in every table through v18.
+	V19SlotBreakers = "shortcut-breakers"
 )
 
 // V13SlotOrder is the published slot order for reports.
 var V13SlotOrder = []string{
 	V13SlotStory, V13SlotOrdinaryWorld, V13SlotBusinessPrograms, V13SlotPersonalPrograms,
 	V13SlotAbstention, V13SlotRecordQuantity, V13SlotDivergence, V13SlotPointInTime,
-	V13SlotIntegrity, V13SlotIsolation,
+	V13SlotIntegrity, V13SlotIsolation, V19SlotBreakers,
 }
 
 // v13InterimSlots are the slots whose dedicated generator has not landed. Remove
@@ -211,14 +247,25 @@ func V13EnvelopeForRunSize(runSize string) (V13MemoryEnvelope, bool) {
 // and the interim fill for slots without a generator.
 func (e V13MemoryEnvelope) worldPlanSelection() universe.WorldPlanSelection {
 	return universe.WorldPlanSelection{
-		StoryPerArc:  v13StoryOraclesPerArc,
+		StoryPerArc:  e.storyPerArc(),
 		Ordinary:     e.OrdinaryWorld,
 		OrdinaryCaps: map[string]int{"project-outstanding": V13OrdinaryProjectOutstandingCap},
 		Interim:      e.Interim(),
 		Salt:         "v13",
 		// Zero for every v13..v15 table, so their selection is unchanged.
 		StoryArcLimit: e.StoryArcs,
+		// Nil for every table through v17.
+		StoryDropFirst: e.storyDropFirst(),
 	}
+}
+
+// storyDropFirst is the oracle kinds an arc drops before the pure-money
+// rotation: the v18 saturated set, or none.
+func (e V13MemoryEnvelope) storyDropFirst() []string {
+	if !e.DropSaturatedStoryOracles {
+		return nil
+	}
+	return universe.V18SaturatedStoryOracles()
 }
 
 // generateV13WorldMemorySuite fills the published v13 slot table. It shares the
@@ -245,7 +292,13 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	if err != nil {
 		return MemorySuite{}, err
 	}
-	if benchVersion >= protocol.BenchVersionV16 {
+	if benchVersion >= protocol.BenchVersionV18 {
+		// v18 re-weights the asked twins toward the absence families v17
+		// agents missed most (v18AbstentionQuotas); every probe record stays
+		// planted.
+		decision = v18AbstentionSubset(decision, envelope.Abstention)
+		temporal = balancedTwinSubset(temporal, envelope.PointInTime/2)
+	} else if benchVersion >= protocol.BenchVersionV16 {
 		// v16 asks a family-balanced subset of the world's twins; the world
 		// (and every probe record it plants) is the v15 world unchanged.
 		decision = v16AbstentionSubset(decision, envelope.Abstention)
@@ -271,7 +324,7 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	var business []universe.V10GeneratedCase
 	// The deterministic launch slice spends existing business slots, not
 	// extra score weight: 12 full-profile cases, 4 in smoke/medium.
-	enterpriseCount := min(12, envelope.BusinessPrograms)
+	enterpriseCount := envelope.EnterpriseCount()
 	legacyCount := envelope.BusinessPrograms - enterpriseCount
 	if legacyCount > 0 {
 		business, err = universe.GenerateV13ProgramsForVersion(seed, legacyCount, benchVersion)
@@ -346,6 +399,15 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 		suite.FamilyCompilerCases++
 	}
 	suite.V13Slots[V13SlotRecordQuantity] = suite.FamilyCompilerCases
+	if envelope.Breakers > 0 {
+		breakers, pairs, err := v19BreakerCases(seed, world, envelope.Breakers, benchVersion)
+		if err != nil {
+			return MemorySuite{}, err
+		}
+		suite.Cases = append(suite.Cases, breakers...)
+		suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, pairs...)
+		suite.V13Slots[V19SlotBreakers] = len(breakers)
+	}
 	suite.Cases = placeV13TwinPairs(seed, suite.Cases, append(decision, temporal...))
 	for i := range suite.Cases {
 		for _, id := range suite.Cases[i].RequiredPairIDs {

@@ -90,6 +90,13 @@ func GenerateDataset(seed int64, prof Profile, benchVersion int) (DatasetArtifac
 // bench_version >= 13 surfaces (see V13ApplyArtifactSurfacePass) and is
 // ignored below v13.
 func GenerateDatasetWithSurface(seed int64, prof Profile, benchVersion int, surface SurfaceOptions) (DatasetArtifact, error) {
+	if benchVersion >= protocol.BenchVersionV18 {
+		// v18's tool menu is built from the pinned production catalog
+		// snapshot; without it the dataset cannot be generated (fail closed).
+		if err := catalog.V18SnapshotReady(); err != nil {
+			return DatasetArtifact{}, fmt.Errorf("bench_version %d: %w", benchVersion, err)
+		}
+	}
 	// v2 is a FROZEN contract, served from a snapshot of the generator as it
 	// stood when v2 shipped (internal/v2gen). It is not a conditional through
 	// the live generator: the v3 anti-gaming work perturbs the shared rng stream
@@ -155,6 +162,16 @@ func BuildArtifactForVersion(seed int64, benchVersion int, toolCases []protocol.
 // explicit v13 surface contract; SurfaceOptions{} reproduces
 // BuildArtifactForVersion byte-for-byte.
 func BuildArtifactForVersionWithSurface(seed int64, benchVersion int, toolCases []protocol.ToolCase, memCases []StagedCase, memWaves []protocol.SeedRequest, surface SurfaceOptions) (DatasetArtifact, error) {
+	// v18 builds its menu from the pinned snapshot: fail closed here too, not
+	// only in GenerateDatasetWithSurface, so no entry point can panic.
+	var v18Catalog []protocol.ToolDefinition
+	if benchVersion >= protocol.BenchVersionV18 {
+		tools, err := catalog.CatalogForSeedChecked(benchVersion, seed)
+		if err != nil {
+			return DatasetArtifact{}, fmt.Errorf("bench_version %d: %w", benchVersion, err)
+		}
+		v18Catalog = tools
+	}
 	epoch, err := protocol.DatasetEpochForVersion(benchVersion)
 	if err != nil {
 		return DatasetArtifact{}, err
@@ -182,7 +199,10 @@ func BuildArtifactForVersionWithSurface(seed int64, benchVersion int, toolCases 
 		MemoryCases:  flat,
 		ToolFixtures: fixtures,
 	}
-	if benchVersion >= protocol.BenchVersionV13 {
+	switch {
+	case v18Catalog != nil:
+		artifact.Catalog = v18Catalog
+	case benchVersion >= protocol.BenchVersionV13:
 		artifact.Catalog = catalog.CatalogForSeed(benchVersion, seed)
 	}
 	if benchVersion >= protocol.BenchVersionV8 {

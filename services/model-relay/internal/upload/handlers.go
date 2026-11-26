@@ -1,7 +1,8 @@
 // Package upload implements the first strangler slice of the upload plane:
 // fee pricing and the ordinary pre-payment admission check. Finalized-payment
-// recovery and multipart archive commit remain on Python until their chain,
-// object-storage, and fingerprinting contracts have Go parity coverage.
+// recovery, a hotkey missing from the recent-neurons snapshot, and multipart
+// archive commit remain on Python until their chain, object-storage, and
+// fingerprinting contracts have Go parity coverage.
 package upload
 
 import (
@@ -348,6 +349,18 @@ func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string) (*admis
 			return nil, current, err
 		}
 	}
+	// A readmission reservation of this coldkey inside its block window holds
+	// the slot exactly like an upload reservation (SN-485).
+	readmissionBlock, err := q.GetReadmissionBlockUntil(ctx, postgres.GetReadmissionBlockUntilParams{
+		MinerColdkey: coldkey,
+		ObservedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	})
+	if err != nil {
+		return nil, current, err
+	}
+	if readmissionBlock.Valid && readmissionBlock.Time.After(now) {
+		return nil, current, &cooldownError{retryAt: readmissionBlock.Time.UTC()}
+	}
 	blocked, err := retryAt(ctx, q, coldkey, current.cooldownSeconds, now)
 	if err != nil {
 		return nil, current, err
@@ -416,6 +429,16 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		d.Logger.Warn("chain unreachable during upload check", slog.String("error", err.Error()))
 		relayhttp.WriteHTTPError(w, r, http.StatusServiceUnavailable, "chain unavailable; retry shortly", nil)
+		return
+	}
+	if ownerColdkey == "" && d.Legacy != nil {
+		// Pylon's recent-neurons snapshot can keep a re-registered uid's
+		// previous hotkey long past its refresh interval (SN-463). Python
+		// re-reads a snapshot miss from chain storage before answering 1101,
+		// so it owns that answer. Forward unchanged.
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+		d.Legacy.ServeHTTP(w, r)
 		return
 	}
 	registered := ownerColdkey != ""

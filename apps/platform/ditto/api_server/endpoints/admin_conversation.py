@@ -8,11 +8,11 @@ import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from time import monotonic
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.conversation import (
@@ -26,6 +26,7 @@ from ditto.api_models.conversation import (
     ConversationRetryRequest,
     ConversationSettingsRequest,
 )
+from ditto.api_models.public import PublicLeaderboardEntry
 from ditto.api_models.submission_settings import AdminSubmissionSettingsRequest
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -39,6 +40,8 @@ from ditto.db.queries.submission_settings import effective_submission_settings
 from ditto_screening_protocol.conversation import (
     INSTRUMENT,
     JUDGE_MODEL,
+    RUN_BUDGETS,
+    RUN_RESERVATION_MICROUSD,
     digest,
     proposed_quality_micros,
 )
@@ -47,8 +50,36 @@ from ditto_screening_protocol.conversation_story import story, story_digest
 router = APIRouter(prefix="/admin/conversation-assessments", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
-DAILY_BUDGET_MICROUSD = 180_000_000
-RUN_RESERVATION_MICROUSD = 30_000_000
+DAILY_BUDGET_MICROUSD = 30_000_000
+"""$30 rolling 24 h cap (2026-11-08, Peyton: "30 or 50 a day"; the conservative
+end). With the $1 hold that admits up to 30 assessments a day; measured spend
+is ~$0.18 each."""
+ADMISSION_RANK_LIMIT = 15
+"""Finalized, owner-deduplicated public ranks admitted (2026-11-08: widened from
+the top five so a rank-change estimate covers more than the podium)."""
+REPEAT_RANK_LIMIT = 5
+REPEAT_SAMPLES = 2
+"""Completed fresh-seed repeats per leading artifact, after every eligible
+artifact has its canonical assessment: three judged samples measure judge
+noise."""
+REPEAT_ATTEMPT_LIMIT = 4
+"""Repeat attempts per artifact, completed or not. Bounds what an agent whose
+repeats keep failing can cost (and stays inside the repeat_index 0-8 check)."""
+LEASE_MINUTES = 125
+"""The worker derives its own deadlines from this lease: the conversation gets
+the lease minus a 15-minute judge window and 3 minutes for settlement and
+delivery, and ends as ``deadline_exceeded`` (still delivered before expiry)
+when slow turns use it up. 125 minutes allows ~3.5 minutes per exchange on
+average, each capped at the bench's 5-minute /run envelope. A lease that covered
+the worst case (30 x 5 min + judge = 165) would hold the single global slot for
+harnesses that are failing anyway. v1's 65 minutes fit only its 120 s deadline."""
+ADMISSION_IDLE_COOLDOWN_SECONDS = 30.0
+"""How long a process waits after a no-work admission before rebuilding.
+
+Each attempt rebuilds the public leaderboard, and on 2026-11-06 the gate was
+busy 67% of the time while finding nothing to admit. A write in this process
+that can create work (settings, a retry authorization, a posted result) clears
+the wait."""
 logger = logging.getLogger(__name__)
 
 
@@ -58,6 +89,15 @@ class _AdmissionGate:
     diagnostics: ConversationAdmissionDiagnostics = field(
         default_factory=ConversationAdmissionDiagnostics
     )
+    idle_until: float = 0.0
+    """``monotonic()`` time before which an attempt returns no work at once."""
+    work_writes: int = 0
+    """Count of writes that may have created work; an attempt that overlapped
+    one does not arm the cooldown from its now-stale no-work answer."""
+
+    def clear_idle_cooldown(self) -> None:
+        self.work_writes += 1
+        self.idle_until = 0.0
 
 
 def _admission_gate(request: Request) -> _AdmissionGate:
@@ -107,18 +147,42 @@ async def set_settings(
         )
     )
     await session.commit()
+    _admission_gate(request).clear_idle_cooldown()
     return await observations(request, None, session)
 
 
-async def _reserved(session: AsyncSession, now: datetime) -> int:
-    return int(
-        await session.scalar(
+def _charge(reserved_microusd: int, report: dict | None) -> int:
+    """What one assessment counts against the rolling cap.
+
+    A leased or expired assessment keeps its full hold: its spend is unknown.
+    A settled one counts its recorded judge + harness spend, which already
+    includes any retained hold or price-ceiling upper bound. The cap therefore
+    bounds what the lane actually spent (2026-11-08, Peyton), not the
+    worst-case holds of runs that are long finished."""
+    if report is None:
+        return reserved_microusd
+    settled = ConversationReport.model_validate(report)
+    usage = settled.harness_usage
+    return settled.spent_microusd + (usage.spent_microusd if usage else 0)
+
+
+async def _rolling(session: AsyncSession, now: datetime) -> list[tuple[datetime, int]]:
+    rows = (
+        await session.execute(
             select(
-                func.coalesce(func.sum(ConversationAssessment.reserved_microusd), 0)
-            ).where(ConversationAssessment.created_at >= now - timedelta(days=1))
+                ConversationAssessment.created_at,
+                ConversationAssessment.reserved_microusd,
+                ConversationAssessment.report,
+            )
+            .where(ConversationAssessment.created_at >= now - timedelta(days=1))
+            .order_by(ConversationAssessment.created_at)
         )
-        or 0
-    )
+    ).all()
+    return [(created, _charge(hold, report)) for created, hold, report in rows]
+
+
+async def _reserved(session: AsyncSession, now: datetime) -> int:
+    return sum(charge for _, charge in await _rolling(session, now))
 
 
 def _observation(
@@ -142,20 +206,50 @@ def _observation(
         if score is not None
         else None,
         reserved_microusd=row.reserved_microusd,
-        spent_microusd=report.spent_microusd + report.harness_usage.spent_microusd
+        spent_microusd=report.spent_microusd
+        + (report.harness_usage.spent_microusd if report.harness_usage else 0)
         if report
-        and not report.unmetered
-        and report.harness_usage
-        and not report.harness_usage.unmetered
-        and not report.harness_usage.cost_is_upper_bound
-        and not report.judge_cost_is_upper_bound
         else None,
         error_code=report.error_code if report else None,
         report_sha256=digest(row.report) if row.report is not None else None,
+        instrument=row.instrument,
+        repeat_index=row.repeat_index,
+        **(_evidence_summary(report) if report else {}),
         retry_of=row.retry_of,
         retry_authorization=row.retry_authorization,
         retry_assessment_id=retry_id,
     )
+
+
+def _evidence_summary(report: ConversationReport) -> dict[str, object]:
+    """Failure-class fields an operator can read without the transcript."""
+    usage = report.harness_usage
+    failure = usage.failure if usage else None
+    return {
+        "judge_model": report.model,
+        "spent_is_upper_bound": bool(
+            report.unmetered
+            or report.judge_cost_is_upper_bound
+            or usage is None
+            or usage.unmetered
+            or usage.cost_is_upper_bound
+        ),
+        "judge_spent_microusd": report.spent_microusd,
+        "harness_spent_microusd": usage.spent_microusd if usage else None,
+        "judge_cost_basis": report.judge_cost_basis,
+        "judge_requests": report.judge_requests,
+        "judge_input_tokens": report.input_tokens,
+        "judge_output_tokens": report.output_tokens,
+        "exchange_count": len(report.exchanges),
+        "empty_answers": sum(1 for e in report.exchanges if not e.assistant),
+        "truncated_answers": sum(1 for e in report.exchanges if e.assistant_truncated),
+        "failed_turns": [e.turn_id for e in report.exchanges if e.failure],
+        "harness_requests": usage.requests if usage else None,
+        "harness_provider_retries": usage.provider_retries if usage else None,
+        "harness_failure_code": failure.code if failure else None,
+        "harness_failure_stage": failure.stage if failure else None,
+        "harness_failure_http_status": failure.http_status if failure else None,
+    }
 
 
 @router.get("", response_model=ConversationObservations)
@@ -191,19 +285,10 @@ async def observations(
         )
     ).all()
     retries = {parent: child for parent, child in retry_rows if parent is not None}
-    reserved = await _reserved(session, now)
+    rolling = await _rolling(session, now)
+    reserved = sum(charge for _, charge in rolling)
     next_slot = None
     if reserved + RUN_RESERVATION_MICROUSD > DAILY_BUDGET_MICROUSD:
-        rolling = (
-            await session.execute(
-                select(
-                    ConversationAssessment.created_at,
-                    ConversationAssessment.reserved_microusd,
-                )
-                .where(ConversationAssessment.created_at >= now - timedelta(days=1))
-                .order_by(ConversationAssessment.created_at)
-            )
-        ).all()
         remaining = reserved
         for created_at, amount in rolling:
             remaining -= amount
@@ -284,6 +369,7 @@ async def authorize_retry(
         expires_at=now + timedelta(hours=48),
     ).model_dump(mode="json")
     await session.commit()
+    _admission_gate(request).clear_idle_cooldown()
     return await observations(request, None, session)
 
 
@@ -304,13 +390,25 @@ async def claim_assessment(
     if gate.lock.locked():
         gate.diagnostics.busy_skips += 1
         return None
+    if monotonic() < gate.idle_until:
+        gate.diagnostics.idle_skips += 1
+        return None
     # No await occurs between the locked check and acquiring an unlocked lock.
     async with gate.lock:
         gate.diagnostics.attempts += 1
         started = monotonic()
+        writes_before = gate.work_writes
         try:
             result = await _claim_assessment(request, session, worker_hotkey)
             gate.diagnostics.last_outcome = "claimed" if result is not None else "idle"
+            # A write that cleared the cooldown while this attempt ran may have
+            # created the work it did not see, so only an undisturbed idle
+            # answer starts the wait.
+            gate.idle_until = (
+                monotonic() + ADMISSION_IDLE_COOLDOWN_SECONDS
+                if result is None and gate.work_writes == writes_before
+                else 0.0
+            )
             return result
         except asyncio.CancelledError:
             gate.diagnostics.last_outcome = "cancelled"
@@ -324,10 +422,12 @@ async def claim_assessment(
             )
             gate.diagnostics.last_completed_at = datetime.now(UTC)
             logger.info(
-                "conversation_admission outcome=%s elapsed_ms=%d busy_skips=%d",
+                "conversation_admission outcome=%s elapsed_ms=%d busy_skips=%d "
+                "idle_skips=%d",
                 gate.diagnostics.last_outcome,
                 gate.diagnostics.last_elapsed_ms,
                 gate.diagnostics.busy_skips,
+                gate.diagnostics.idle_skips,
             )
 
 
@@ -349,7 +449,7 @@ async def _claim_assessment(
             for entry in board.entries
             if entry.finalized
             and entry.rank is not None
-            and entry.rank <= 5
+            and entry.rank <= ADMISSION_RANK_LIMIT
             and entry.bench_version is not None
             and entry.bench_version >= 9
         ),
@@ -374,6 +474,7 @@ async def _claim_assessment(
         return None
     if await _reserved(session, now) + RUN_RESERVATION_MICROUSD > DAILY_BUDGET_MICROUSD:
         return None
+    eligible: list[tuple[PublicLeaderboardEntry, Agent]] = []
     for entry in candidates:
         agent = await session.get(Agent, entry.agent_id)
         if (
@@ -384,15 +485,26 @@ async def _claim_assessment(
             or not agent.screened_image_upload_id
             or not agent.screened_image_size_bytes
             or not agent.screened_image_verified_at
+            or not 0 <= entry.official_composite <= 1
+            or entry.bench_version is None
         ):
-            continue
+            continue  # Legacy efficiency-adjusted values cannot be base quality.
+        eligible.append((entry, agent))
+
+    def identity(agent: Agent, entry: PublicLeaderboardEntry) -> tuple[Any, ...]:
+        return (
+            ConversationAssessment.agent_id == agent.agent_id,
+            ConversationAssessment.artifact_sha256 == agent.sha256,
+            ConversationAssessment.bench_version == entry.bench_version,
+            ConversationAssessment.instrument == INSTRUMENT,
+            ConversationAssessment.retry_of.is_(None),
+        )
+
+    # Pass 1: one canonical assessment per eligible artifact, best rank first.
+    for entry, agent in eligible:
         existing = await session.scalar(
             select(ConversationAssessment).where(
-                ConversationAssessment.agent_id == agent.agent_id,
-                ConversationAssessment.artifact_sha256 == agent.sha256,
-                ConversationAssessment.bench_version == entry.bench_version,
-                ConversationAssessment.instrument == INSTRUMENT,
-                ConversationAssessment.retry_of.is_(None),
+                *identity(agent, entry), ConversationAssessment.repeat_index == 0
             )
         )
         if existing is not None:
@@ -416,43 +528,116 @@ async def _claim_assessment(
                 or existing.report.get("error_code") != "harness_inference_incomplete"
             ):
                 continue
-        if not 0 <= entry.official_composite <= 1:
-            continue  # Legacy efficiency-adjusted values cannot be base quality.
-        row = ConversationAssessment(
-            assessment_id=uuid4(),
-            agent_id=agent.agent_id,
-            artifact_sha256=agent.sha256,
-            screened_image_sha256=agent.screened_image_sha256,
-            bench_version=entry.bench_version,
-            instrument=INSTRUMENT,
+        return await _admit(
+            session,
+            agent,
+            entry.bench_version or 0,  # Filtered to a real version above.
             seed=existing.seed if existing is not None else secrets.token_hex(32),
-            lease_token=uuid4(),
-            created_at=now,
-            expires_at=now + timedelta(minutes=65),
             base_quality_micros=existing.base_quality_micros
             if existing is not None
             else round(entry.official_composite * 1_000_000),
-            reserved_microusd=RUN_RESERVATION_MICROUSD,
+            now=now,
             worker_hotkey=worker_hotkey,
             retry_of=existing.assessment_id if existing is not None else None,
         )
-        session.add(row)
-        await session.commit()
-        return ConversationClaim(
-            assessment_id=row.assessment_id,
-            agent_id=row.agent_id,
-            artifact_sha256=row.artifact_sha256,
-            screened_image_sha256=row.screened_image_sha256,
-            bench_version=row.bench_version,
-            seed=row.seed,
-            lease_token=row.lease_token,
-            expires_at=row.expires_at,
+    # Pass 2: only when every eligible artifact has its canonical assessment,
+    # spend spare capacity on fresh-seed repeats of the leaders. Repeats never
+    # change a score; they measure how far the judge moves on the same agent.
+    for entry, agent in eligible:
+        if (entry.rank or 0) > REPEAT_RANK_LIMIT:
+            continue
+        canonical = await session.scalar(
+            select(ConversationAssessment).where(
+                *identity(agent, entry), ConversationAssessment.repeat_index == 0
+            )
+        )
+        if (
+            canonical is None
+            or canonical.report is None
+            or canonical.report.get("status") != "completed"
+        ):
+            continue  # Repeat only an artifact the judge has actually scored.
+        repeat_rows = (
+            await session.execute(
+                select(
+                    ConversationAssessment.repeat_index,
+                    # Only the status: never deserialize transcripts here.
+                    ConversationAssessment.report["status"].as_string(),
+                ).where(
+                    *identity(agent, entry), ConversationAssessment.repeat_index > 0
+                )
+            )
+        ).all()
+        repeats = [index for index, _ in repeat_rows]
+        completed = sum(1 for _, status in repeat_rows if status == "completed")
+        # A repeat that expired or ended incomplete is no noise sample, so it
+        # does not use up one of the two; the attempt cap still bounds spend on
+        # an agent whose repeats keep failing.
+        if completed >= REPEAT_SAMPLES or len(repeats) >= REPEAT_ATTEMPT_LIMIT:
+            continue
+        return await _admit(
+            session,
+            agent,
+            entry.bench_version or 0,  # Filtered to a real version above.
+            seed=secrets.token_hex(32),
+            base_quality_micros=canonical.base_quality_micros,
+            now=now,
+            worker_hotkey=worker_hotkey,
+            repeat_index=max(repeats, default=0) + 1,
         )
     return None
 
 
+async def _admit(
+    session: AsyncSession,
+    agent: Agent,
+    bench_version: int,
+    *,
+    seed: str,
+    base_quality_micros: int,
+    now: datetime,
+    worker_hotkey: str | None,
+    retry_of: UUID | None = None,
+    repeat_index: int = 0,
+) -> ConversationClaim:
+    row = ConversationAssessment(
+        assessment_id=uuid4(),
+        agent_id=agent.agent_id,
+        artifact_sha256=agent.sha256,
+        screened_image_sha256=agent.screened_image_sha256,
+        bench_version=bench_version,
+        instrument=INSTRUMENT,
+        seed=seed,
+        lease_token=uuid4(),
+        created_at=now,
+        expires_at=now + timedelta(minutes=LEASE_MINUTES),
+        base_quality_micros=base_quality_micros,
+        reserved_microusd=RUN_RESERVATION_MICROUSD,
+        worker_hotkey=worker_hotkey,
+        retry_of=retry_of,
+        repeat_index=repeat_index,
+    )
+    session.add(row)
+    await session.commit()
+    judge_budget, harness_budget = RUN_BUDGETS[row.reserved_microusd]
+    return ConversationClaim(
+        instrument=INSTRUMENT,
+        judge_budget_microusd=judge_budget,
+        harness_budget_microusd=harness_budget,
+        assessment_id=row.assessment_id,
+        agent_id=row.agent_id,
+        artifact_sha256=row.artifact_sha256,
+        screened_image_sha256=row.screened_image_sha256,
+        bench_version=row.bench_version,
+        seed=row.seed,
+        lease_token=row.lease_token,
+        expires_at=row.expires_at,
+    )
+
+
 @router.post("/{assessment_id}/result", response_model=ConversationObservation)
 async def submit_result(
+    request: Request,
     assessment_id: UUID,
     payload: ConversationResultRequest,
     _admin: AdminDep,
@@ -483,7 +668,7 @@ async def submit_result(
         row.bench_version,
         row.instrument,
         story_digest(row.seed),
-        25_000_000,
+        RUN_BUDGETS.get(row.reserved_microusd, (None, None))[0],
     ):
         raise HTTPException(409, "conversation identity mismatch")
     expected = story(row.seed)
@@ -501,6 +686,8 @@ async def submit_result(
         raise HTTPException(409, "conversation lease expired")
     row.report = document
     await session.commit()
+    # The single global assessment slot is free again.
+    _admission_gate(request).clear_idle_cooldown()
     return _observation(row, now)
 
 

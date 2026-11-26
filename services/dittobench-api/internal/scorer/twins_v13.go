@@ -300,7 +300,10 @@ func ApplyV13TwinPostPass(perCase []protocol.CaseScore, evidence map[string]Twin
 				counterfactual = m.index
 			}
 		}
-		if base < 0 || counterfactual < 0 || out[base].Undelivered || out[counterfactual].Undelivered {
+		// A budget-refused member (bench v18) never answered: like an
+		// undelivered one, it makes the pair unusable.
+		if base < 0 || counterfactual < 0 || out[base].Undelivered || out[counterfactual].Undelivered ||
+			out[base].BudgetExhausted || out[counterfactual].BudgetExhausted {
 			continue
 		}
 		summary.CounterfactualPairs++
@@ -323,7 +326,7 @@ func ApplyV13TwinPostPass(perCase []protocol.CaseScore, evidence map[string]Twin
 		relation := members[0].evidence.TwinRelation
 		usable := true
 		for _, m := range members {
-			if m.evidence.TwinRelation != relation || out[m.index].Undelivered {
+			if m.evidence.TwinRelation != relation || out[m.index].Undelivered || out[m.index].BudgetExhausted {
 				usable = false
 				break
 			}
@@ -424,7 +427,7 @@ func relationMeans(perCase []protocol.CaseScore, evidence map[string]TwinEvidenc
 	count := map[string]int{}
 	for _, cs := range perCase {
 		ev, ok := evidence[cs.CaseID]
-		if !ok || cs.Undelivered {
+		if !ok || cs.Undelivered || cs.BudgetExhausted {
 			continue
 		}
 		for _, relation := range []string{ev.Relation, ev.TwinRelation} {

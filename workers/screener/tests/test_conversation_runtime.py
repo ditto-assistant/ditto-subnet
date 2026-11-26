@@ -126,6 +126,9 @@ async def test_verified_image_is_fresh_isolated_and_never_receives_provider_key(
     assert miner[miner.index("--network-alias") + 1] == "agent"
     relay = next(args for args, _ in calls if args[0] == "create")
     assert "--publish" not in relay
+    assert (
+        f"CONVERSATION_RELAY_BUDGET_MICROUSD={launch.harness_budget_microusd}" in relay
+    )
     assert any(
         args[:3] == ("exec", "--interactive", runtime.relay) for args, _ in calls
     )
@@ -308,8 +311,8 @@ async def test_bridge_preserves_safe_operation_failure_without_replay(path, erro
 
     async def docker(*args, **kwargs):
         calls.append((args, kwargs))
-        assert json.loads(kwargs["input_data"])["timeout"] == 120
-        assert kwargs["timeout"] == 125
+        assert json.loads(kwargs["input_data"])["timeout"] == 300
+        assert kwargs["timeout"] == 305
         if error == "exec_failed":
             raise AssessmentFailure("sandbox_operation_failed")
         return json.dumps({"error": error})
@@ -343,6 +346,8 @@ async def test_bridge_rejects_untrusted_error_text():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["seed", "run"])
 async def test_outer_operation_deadline_keeps_stage_and_does_not_retry(operation):
+    """The empty-graph seed failing means the harness never started; a slow
+    /run is recorded as that turn's empty reply. Neither is retried."""
     import asyncio
 
     from ditto_screener.conversation import Limits, MemoryHarness
@@ -360,7 +365,12 @@ async def test_outer_operation_deadline_keeps_stage_and_does_not_retry(operation
         harness = MemoryHarness(
             client, "http://127.0.0.1", Limits(operation_seconds=0.01)
         )
-        with pytest.raises(AssessmentFailure, match=f"^harness_{operation}_timeout$"):
-            await harness.converse(story("a" * 64)[0])
+        if operation == "seed":
+            with pytest.raises(AssessmentFailure, match="^harness_seed_timeout$"):
+                await harness.converse(story("a" * 64)[0])
+            assert harness.exchanges == []
+        else:
+            exchange = await harness.converse(story("a" * 64)[0])
+            assert exchange.failure == "harness_run_timeout"
+            assert exchange.assistant == ""
     assert calls.count("/" + operation) == 1
-    assert harness.exchanges == []

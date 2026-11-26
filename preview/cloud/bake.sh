@@ -5,8 +5,8 @@
 # stops.
 #
 # The point is everything a preview boot would otherwise do over the network on
-# a cold machine: apt (already done by startup.sh above), the four pulled compose
-# images, and the expensive base layers of the five built ones. BuildKit keeps
+# a cold machine: apt (already done by startup.sh above), the pulled compose
+# images, and the expensive base layers of the built ones. BuildKit keeps
 # its cache under /var/lib/docker/buildkit on the boot disk, so imaging this disk
 # carries the cache with it.
 set -euo pipefail
@@ -40,7 +40,7 @@ export PREVIEW_POSTGRES_PASSWORD="bake"
 
 # Pulled images are the clean win: identical bytes on every preview, pinned by
 # tag in compose.yml, and worth ~1.5GB of boot-path download.
-compose pull --quiet postgres minio minio-init gateway
+compose pull --quiet postgres gateway
 
 # dashboard's VITE_API_BASE_URL is derived from the VM's own IP, so its final
 # layer is guaranteed to miss at runtime. Everything under it -- the base image,

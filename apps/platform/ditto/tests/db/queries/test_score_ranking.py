@@ -133,9 +133,12 @@ class TestComparator:
             confirmation_depth={legacy.agent_id: 32, current.agent_id: 15},
         )
 
-        assert active[legacy.agent_id] == dict.fromkeys(shared, 0.8)
-        assert active[current.agent_id] == shared
-        assert depths == {legacy.agent_id: 15, current.agent_id: 15}
+        # The 15 seeds recorded under the former cap fold only the current
+        # 10-seed work cap's window, most shared first, then by seed.
+        window = range(17, 27)
+        assert active[legacy.agent_id] == dict.fromkeys(window, 0.8)
+        assert active[current.agent_id] == dict.fromkeys(window, 0.75)
+        assert depths == {legacy.agent_id: 10, current.agent_id: 10}
 
     def test_ranks_by_score_descending(self) -> None:
         low = _Row(_uuid("1"), _BASE, 0.10)
@@ -351,6 +354,47 @@ class TestComparator:
         assert winner.agent_id == later.agent_id
         assert winner.fold_first_seen == _BASE
         assert select_owner_representative([first, later])[0].agent_id == later.agent_id
+
+    def test_superseded_rerun_never_represents_while_its_successor_is_present(
+        self,
+    ) -> None:
+        """SN-485: a newer run of the same bytes represents them, whatever it drew.
+
+        The superseded flag is a leading key term, not a filter: the owner keeps
+        a representative when a caller's registration filter removes only the
+        newer run.
+        """
+
+        @dataclass(frozen=True)
+        class _RerunRow(_CrownRow):
+            superseded_rerun: bool = False
+
+        lucky = _RerunRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.95,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            superseded_rerun=True,
+        )
+        rerun = _RerunRow(
+            agent_id=_uuid("2"),
+            miner_hotkey="5" + "B" * 47,
+            first_seen=_BASE + timedelta(days=1),
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+        )
+        scores = {lucky.agent_id: 0.95, rerun.agent_id: 0.90}
+
+        assert select_owner_representative([lucky, rerun], scores=scores)[0] == rerun
+        [winner] = dedupe_owner_rows([lucky, rerun], scores=scores)
+        assert winner.agent_id == rerun.agent_id
+        [fallback] = dedupe_owner_rows(
+            [lucky, rerun], scores=scores, registered_hotkeys={lucky.miner_hotkey}
+        )
+        assert fallback.agent_id == lucky.agent_id
 
     def test_equal_quality_keeps_the_earlier_crown_across_efficiency(self) -> None:
         early_expensive = _CrownRow(

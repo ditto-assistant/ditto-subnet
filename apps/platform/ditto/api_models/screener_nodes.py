@@ -23,7 +23,7 @@ from ditto_screening_protocol import (
     SourceReviewObservationPayload,
 )
 
-ScreenerProvider = Literal["gcp", "targon", "hetzner", "home", "test"]
+ScreenerProvider = Literal["gcp", "targon", "hetzner", "aws", "home", "test"]
 ScreenerNodeStatus = Literal["active", "draining", "quarantined", "revoked"]
 TrustedImageBuildStatus = Literal[
     "queued",
@@ -319,7 +319,7 @@ class TrustedImageBuildView(BaseModel):
     dockerfile_path: str
     destination: str
     status: TrustedImageBuildStatus
-    provider: Literal["targon", "gcp", "hetzner"] | None = None
+    provider: Literal["targon", "gcp", "hetzner", "aws"] | None = None
     provider_resource_id: str | None = None
     image_digest: str | None = None
     error_code: str | None = None
@@ -353,7 +353,7 @@ class TrustedImageBuildUpdateRequest(BaseModel):
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
     status: Literal["running", "succeeded", "failed", "fallback_required"]
-    provider: Literal["targon", "gcp", "hetzner"]
+    provider: Literal["targon", "gcp", "hetzner", "aws"]
     provider_resource_id: Annotated[str, Field(min_length=1, max_length=200)] | None = (
         None
     )
@@ -660,7 +660,7 @@ class ScreenerProviderJobView(BaseModel):
     job_id: UUID
     lane: Literal["build", "runtime", "source_review"]
     status: str
-    provider: Literal["targon", "gcp", "hetzner"] | None = None
+    provider: Literal["targon", "gcp", "hetzner", "aws"] | None = None
     node_id: str | None = None
     provider_resource_id: str | None = None
     image_reference: str | None = None

@@ -39,7 +39,7 @@ def judge_ordinary_run(
     if answer is None:
         return SemanticOutcome("inconclusive", "run_response_unavailable")
     if model_calls == 0:
-        return SemanticOutcome("fail", "no_model_call")
+        return SemanticOutcome("inconclusive", "no_model_call")
     if "challenge_seen" not in events:
         return SemanticOutcome("inconclusive", "challenge_not_forwarded_to_model")
     if not any(token in answer for token in challenge_tokens):
@@ -58,7 +58,7 @@ def judge_tool_run(
     if answer is None:
         return SemanticOutcome("inconclusive", "run_response_unavailable")
     if model_calls == 0:
-        return SemanticOutcome("fail", "no_model_call")
+        return SemanticOutcome("inconclusive", "no_model_call")
     if "challenge_seen" not in events:
         return SemanticOutcome("inconclusive", "challenge_not_forwarded_to_model")
     if "emitted" not in events:
@@ -84,7 +84,7 @@ def judge_memory_run(
     if answer is None:
         return SemanticOutcome("inconclusive", "run_response_unavailable")
     if model_calls == 0:
-        return SemanticOutcome("fail", "no_model_call")
+        return SemanticOutcome("inconclusive", "no_model_call")
     if "challenge_seen" not in events:
         return SemanticOutcome("inconclusive", "challenge_not_forwarded_to_model")
     final_text = response.get("final_text") if response is not None else None

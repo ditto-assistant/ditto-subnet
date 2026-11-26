@@ -543,7 +543,8 @@ def hold_reason(evidence: dict[str, Any], *, top_score: float, threshold: float)
     cited = f" Locations in this artifact: {', '.join(locations)}." if locations else ""
     return (
         "Held for operator copy review by the unreleased-copy signal "
-        f"(score {top_score:.0f}, threshold {threshold:.0f}): this artifact carries "
+        f"(score {top_score:.0f} weighted shared items, threshold {threshold:.0f}; "
+        "a count, not a percentage): this artifact carries "
         "distinctive content that another owner's agent held before this upload "
         f"while it was still unreleased.{cited} This is a hold, not a rejection; "
         "an operator rules on it."

@@ -138,6 +138,10 @@ class TestWrite:
             "relay_delay_fingerprint_max_ms": 160,
             # A non-default cap proves a legacy write carries it forward.
             "sandbox_memory_limit_mib": 8_192,
+            # So does a non-default SN-500 memory-factor policy.
+            "memory_factor_posture": "off",
+            "memory_factor_free_mib": 256,
+            "memory_factor_floor_bps": 9_500,
         }
         decision_lane = {
             **InferenceConcurrencySettings().decision_lane.model_dump(mode="json"),
@@ -150,6 +154,7 @@ class TestWrite:
                 benchmark_runtime=runtime,
                 decision_lane=decision_lane,
                 scored_provider_routing="bf16_price_order_canary",
+                danilabs_percent=10,
             ),
             headers=_HEADERS,
         )
@@ -169,6 +174,7 @@ class TestWrite:
         assert legacy.status_code == 200, legacy.text
         assert legacy.json()["settings"]["benchmark_runtime"] == runtime
         assert legacy.json()["settings"]["decision_lane"] == decision_lane
+        assert legacy.json()["settings"]["danilabs_percent"] == 10
         assert (
             legacy.json()["settings"]["scored_provider_routing"]
             == "bf16_price_order_canary"
