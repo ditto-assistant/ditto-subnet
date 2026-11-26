@@ -35,14 +35,16 @@ type finishParams struct {
 // finishInferenceRequest reproduces ditto/db/queries/inference.py::
 // finish_inference_request inside the caller's (settle) transaction. Lock
 // order matches begin: unlocked grant snapshot -> ticket FOR UPDATE ->
-// grant FOR UPDATE -> request FOR UPDATE. Returns deliverable.
-func finishInferenceRequest(ctx context.Context, q *postgres.Queries, p finishParams) (bool, error) {
+// grant FOR UPDATE -> request FOR UPDATE. Returns deliverable and the grant
+// row as it stands after this settlement (nil when the grant is gone), whose
+// ledger_cost_microusd is the X-Ditto-Ledger-Cost-Microusd evidence (#3271).
+func finishInferenceRequest(ctx context.Context, q *postgres.Queries, p finishParams) (bool, *postgres.InferenceGrant, error) {
 	snapshot, err := q.GetInferenceGrant(ctx, pgUUID(p.grantID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
+			return false, nil, nil
 		}
-		return false, err
+		return false, nil, err
 	}
 	var ticket *postgres.ValidatorTicket
 	ticketRow, err := q.GetValidatorTicketForUpdate(ctx, postgres.GetValidatorTicketForUpdateParams{
@@ -53,14 +55,14 @@ func finishInferenceRequest(ctx context.Context, q *postgres.Queries, p finishPa
 	if err == nil {
 		ticket = &ticketRow
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return false, err
+		return false, nil, err
 	}
 	grant, err := q.GetInferenceGrantForUpdate(ctx, pgUUID(p.grantID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
+			return false, nil, nil
 		}
-		return false, err
+		return false, nil, err
 	}
 	request, err := q.GetInferenceRequestForUpdate(ctx, postgres.GetInferenceRequestForUpdateParams{
 		GrantID: pgUUID(p.grantID),
@@ -68,18 +70,19 @@ func finishInferenceRequest(ctx context.Context, q *postgres.Queries, p finishPa
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
+			return false, &grant, nil
 		}
-		return false, err
+		return false, nil, err
 	}
 	if (request.Status != "started" && request.Status != "canceled") ||
 		int64(request.Generation) != p.generation {
-		return false, nil
+		return false, &grant, nil
 	}
 	wasStarted := request.Status == "started"
-	if !wasStarted && (request.PromptTokens > 0 || request.CompletionTokens > 0 || request.CostMicrousd > 0) {
+	if !wasStarted && (request.PromptTokens > 0 || request.CompletionTokens > 0 ||
+		request.CostMicrousd > 0 || request.LedgerCostMicrousd > 0) {
 		// Already charged by a reclamation path: double-settle guard.
-		return false, nil
+		return false, &grant, nil
 	}
 	deliverable := p.status == "completed" &&
 		p.usageAvailable &&
@@ -95,6 +98,7 @@ func finishInferenceRequest(ctx context.Context, q *postgres.Queries, p finishPa
 	promptTokens := max64(0, p.promptTokens)
 	completionTokens := max64(0, p.completionTokens)
 	costMicrousd := max64(0, p.costMicrousd)
+	usageClamped := false
 	if !p.usageAvailable {
 		// No receipt, no spend. Charging the reservation estimate booked
 		// megatokens against grants that never saw provider usage.
@@ -110,7 +114,16 @@ func finishInferenceRequest(ctx context.Context, q *postgres.Queries, p finishPa
 		promptTokens = request.MaxChargeableTokens
 		completionTokens = 0
 		deliverable = false
+		usageClamped = true
 	}
+	// Ledger cost (#3271): settled units at the grant-stamped list price. The
+	// provider bill is an input only for a chat grant minted with no list
+	// price, and only when the receipt was trusted.
+	trustedProviderCost := int64(0)
+	if p.usageAvailable && !usageClamped {
+		trustedProviderCost = costMicrousd
+	}
+	ledgerCost := ledgerCostMicrousd(&grant, request.RequestKind, promptTokens, completionTokens, trustedProviderCost)
 	newStatus := "canceled"
 	if wasStarted && (deliverable || p.status != "completed") {
 		newStatus = p.status
@@ -120,6 +133,7 @@ func finishInferenceRequest(ctx context.Context, q *postgres.Queries, p finishPa
 		PromptTokens:       promptTokens,
 		CompletionTokens:   completionTokens,
 		CostMicrousd:       costMicrousd,
+		LedgerCostMicrousd: ledgerCost,
 		UpstreamProvider:   p.upstreamProvider,
 		UpstreamAttempts:   max32(0, p.upstreamAttempts),
 		OpenrouterAttempts: max32(0, p.openrouterAttempts),
@@ -131,62 +145,82 @@ func finishInferenceRequest(ctx context.Context, q *postgres.Queries, p finishPa
 		GrantID:            pgUUID(p.grantID),
 		Nonce:              pgUUID(p.nonce),
 	}); err != nil {
-		return false, err
+		return false, nil, err
 	}
+	var updated postgres.InferenceGrant
 	if request.RequestKind == kindChat {
 		active := grant.ActiveRequests
 		if wasStarted {
 			active = max32(0, active-1)
 		}
-		updated, err := q.ApplyGrantChatSettlement(ctx, postgres.ApplyGrantChatSettlementParams{
-			ActiveRequests:   active,
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			CostMicrousd:     costMicrousd,
-			Now:              pgTime(p.now),
-			GrantID:          pgUUID(p.grantID),
+		updated, err = q.ApplyGrantChatSettlement(ctx, postgres.ApplyGrantChatSettlementParams{
+			ActiveRequests:     active,
+			PromptTokens:       promptTokens,
+			CompletionTokens:   completionTokens,
+			CostMicrousd:       costMicrousd,
+			LedgerCostMicrousd: ledgerCost,
+			Now:                pgTime(p.now),
+			GrantID:            pgUUID(p.grantID),
 		})
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		if updated.PromptTokens+updated.CompletionTokens >= updated.TokenBudget {
 			if err := q.MarkInferenceGrantExhausted(ctx, postgres.MarkInferenceGrantExhaustedParams{
 				Now:     pgTime(p.now),
 				GrantID: pgUUID(p.grantID),
 			}); err != nil {
-				return false, err
+				return false, nil, err
 			}
+			updated.Status = "exhausted"
 		}
 	} else if request.RequestKind == kindDecision {
 		active := grant.DecisionActiveRequests
 		if wasStarted {
 			active = max32(0, active-1)
 		}
-		if _, err := q.ApplyGrantDecisionSettlement(ctx, postgres.ApplyGrantDecisionSettlementParams{
+		updated, err = q.ApplyGrantDecisionSettlement(ctx, postgres.ApplyGrantDecisionSettlementParams{
 			DecisionActiveRequests: active,
 			DecisionTokens:         promptTokens,
 			DecisionCostMicrousd:   costMicrousd,
+			LedgerCostMicrousd:     ledgerCost,
 			Now:                    pgTime(p.now),
 			GrantID:                pgUUID(p.grantID),
-		}); err != nil {
-			return false, err
+		})
+		if err != nil {
+			return false, nil, err
 		}
 	} else {
 		active := grant.EmbeddingActiveRequests
 		if wasStarted {
 			active = max32(0, active-1)
 		}
-		if _, err := q.ApplyGrantEmbeddingSettlement(ctx, postgres.ApplyGrantEmbeddingSettlementParams{
+		updated, err = q.ApplyGrantEmbeddingSettlement(ctx, postgres.ApplyGrantEmbeddingSettlementParams{
 			EmbeddingActiveRequests: active,
 			EmbeddingTokens:         promptTokens,
 			EmbeddingCostMicrousd:   costMicrousd,
+			LedgerCostMicrousd:      ledgerCost,
 			Now:                     pgTime(p.now),
 			GrantID:                 pgUUID(p.grantID),
-		}); err != nil {
-			return false, err
+		})
+		if err != nil {
+			return false, nil, err
 		}
 	}
-	return deliverable, nil
+	// The committed writer for the cost wall: once settled ledger cost meets
+	// an ENFORCED ceiling the grant is exhausted, on whichever lane crossed
+	// it, and admission refuses both lanes with 4110 from then on. Only an
+	// active grant moves (a revoked lease stays revoked).
+	if updated.Status == "active" && costCeilingEnforcedAndReached(&updated) {
+		if err := q.MarkInferenceGrantExhausted(ctx, postgres.MarkInferenceGrantExhaustedParams{
+			Now:     pgTime(p.now),
+			GrantID: pgUUID(p.grantID),
+		}); err != nil {
+			return false, nil, err
+		}
+		updated.Status = "exhausted"
+	}
+	return deliverable, &updated, nil
 }
 
 // recordRouteObservation reproduces inference_routing.py::

@@ -124,6 +124,11 @@ type exchangeResponse struct {
 	DecisionModel         *string `json:"decision_model,omitempty"`
 	DecisionRequestBudget *int32  `json:"decision_request_budget,omitempty"`
 	DecisionTokenBudget   *int64  `json:"decision_token_budget,omitempty"`
+	// The run's ledger-cost ceiling (#3271). Present only when the grant has
+	// a stamped ceiling in shadow or enforce mode, so an off-mode exchange is
+	// byte-identical to one from before the ceiling existed.
+	CostCeilingMicrousd *int64  `json:"cost_ceiling_microusd,omitempty"`
+	CostCeilingMode     *string `json:"cost_ceiling_mode,omitempty"`
 }
 
 // devBypassPermit mirrors _dev_bypass_permit: only when the flag is truthy
@@ -258,6 +263,12 @@ func (d *Deps) handleExchange(w http.ResponseWriter, r *http.Request) {
 		EmbeddingTokenBudget:   activated.EmbeddingTokenBudget,
 		MaxOutputTokens:        d.Cfg.Inference.MaxOutputTokens,
 	}
+	if costCeilingActive(activated) {
+		ceiling := activated.CostCeilingMicrousd.Int64
+		mode := activated.CostCeilingMode
+		resp.CostCeilingMicrousd = &ceiling
+		resp.CostCeilingMode = &mode
+	}
 	if activated.BenchVersion >= 7 {
 		if activated.RouteProvider.Valid {
 			resp.Provider = &activated.RouteProvider.String
@@ -294,6 +305,10 @@ func (d *Deps) handleExchange(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Ditto-Embedding-Request-Budget", strconv.FormatInt(int64(resp.EmbeddingRequestBudget), 10))
 	w.Header().Set("X-Ditto-Embedding-Token-Budget", strconv.FormatInt(resp.EmbeddingTokenBudget, 10))
 	w.Header().Set("X-Ditto-Max-Output-Tokens", strconv.Itoa(resp.MaxOutputTokens))
+	if resp.CostCeilingMicrousd != nil && resp.CostCeilingMode != nil {
+		w.Header().Set(headerCostCeilingMicrousd, strconv.FormatInt(*resp.CostCeilingMicrousd, 10))
+		w.Header().Set(headerCostCeilingMode, *resp.CostCeilingMode)
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
 }

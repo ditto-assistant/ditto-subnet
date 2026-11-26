@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ditto-assistant/model-relay/internal/metrics"
+	"github.com/ditto-assistant/model-relay/internal/postgres"
 	"github.com/ditto-assistant/model-relay/internal/relayhttp"
 	"github.com/ditto-assistant/model-relay/internal/traces"
 )
@@ -291,6 +292,9 @@ func (d *Deps) handleDecisions(w http.ResponseWriter, r *http.Request) {
 		metrics.DecisionRequests.WithLabelValues("declined_" + decline.String()).Inc()
 		d.traceDeclined(r, headers, traces.LaneInference, traces.KindDecision, body, now,
 			traceInferenceGrant(&grantSnapshot, pin), decline.String())
+		if result != nil {
+			setLedgerCostHeader(w, &result.grant)
+		}
 		relayhttp.WriteDecline(w, r, *decline, relayhttp.LaneDecision)
 		return
 	}
@@ -309,6 +313,7 @@ func (d *Deps) handleDecisions(w http.ResponseWriter, r *http.Request) {
 	price := result.grant.DecisionInputMicrousdPerMtok
 	started := time.Now()
 	var deliverable bool
+	var settledGrant *postgres.InferenceGrant
 	var settleErr error
 	settled := false
 	settle := func() {
@@ -322,7 +327,7 @@ func (d *Deps) handleDecisions(w http.ResponseWriter, r *http.Request) {
 		outcome.completionTokens = 0
 		outcome.costMicrousd = decisionLedgerCost(outcome.promptTokens, price)
 		outcome.usageAvailable = outcome.status == "completed"
-		deliverable, settleErr = d.settleRequest(ctx, headers, outcome)
+		deliverable, settledGrant, settleErr = d.settleRequest(ctx, headers, outcome)
 		if settleErr != nil {
 			d.Logger.Error("decisions: settle", slog.String("error", settleErr.Error()))
 		}
@@ -398,6 +403,7 @@ func (d *Deps) handleDecisions(w http.ResponseWriter, r *http.Request) {
 		relayhttp.WriteInternalError(w, r)
 		return
 	}
+	setLedgerCostHeader(w, settledGrant)
 	if requestFailure != nil {
 		writeHTTPError(w, r, requestFailure)
 		return

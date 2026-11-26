@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/ditto-assistant/model-relay/internal/postgres"
 	"github.com/ditto-assistant/model-relay/internal/relayhttp"
 	"github.com/ditto-assistant/model-relay/internal/traces"
 )
@@ -174,6 +174,9 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	if decline != nil {
 		d.traceDeclined(r, headers, traces.LaneInference, traces.KindEmbedding, body, now,
 			traceInferenceGrant(&grantSnapshot, cfg.EmbeddingModel), decline.String())
+		if result != nil {
+			setLedgerCostHeader(w, &result.grant)
+		}
 		relayhttp.WriteDecline(w, r, *decline, relayhttp.LaneEmbedding)
 		return
 	}
@@ -192,6 +195,7 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	settled := false
 	var deliverable bool
+	var settledGrant *postgres.InferenceGrant
 	var settleErr error
 	settle := func() {
 		if settled {
@@ -199,13 +203,14 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		}
 		settled = true
 		outcome.elapsed = time.Since(started)
-		// Embedding settle: completion 0; cost from the catalog price
-		// ($0.004 / 1M input tokens, banker's rounding); provider cost is
-		// never trusted; usage_available tracks completion status.
+		// Embedding settle: completion 0; cost from the grant-stamped catalog
+		// price ($0.004 / 1M input tokens unless stamped otherwise, banker's
+		// rounding); provider cost is never trusted; usage_available tracks
+		// completion status.
 		outcome.completionTokens = 0
-		outcome.costMicrousd = int64(math.RoundToEven(float64(outcome.promptTokens) * 0.004))
+		outcome.costMicrousd = embeddingCatalogCostMicrousd(&result.grant, outcome.promptTokens)
 		outcome.usageAvailable = outcome.status == "completed"
-		deliverable, settleErr = d.settleRequest(ctx, headers, outcome)
+		deliverable, settledGrant, settleErr = d.settleRequest(ctx, headers, outcome)
 		if settleErr != nil {
 			d.Logger.Error("embeddings: settle", slog.String("error", settleErr.Error()))
 		}
@@ -289,6 +294,7 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		relayhttp.WriteInternalError(w, r)
 		return
 	}
+	setLedgerCostHeader(w, settledGrant)
 	if requestFailure != nil {
 		writeHTTPError(w, r, requestFailure)
 		return
