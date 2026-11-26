@@ -20,6 +20,7 @@ ReviewModel = Literal[
     "openai/gpt-5.6-terra",
     "openai/gpt-6-sol",
     "openai/gpt-6.1-terra",
+    "openai/gpt-6.1-sol",
     "moonshotai/kimi-k3",
     "z-ai/glm-5.2",
     "openai/gpt-5.6-sol",
@@ -169,7 +170,12 @@ class ReviewSettings(BaseModel):
     l2_model: ReviewModel
     l2_fallback_models: tuple[ReviewModel, ...]
     l3_enabled: bool = True
-    l3_model: Literal["openai/gpt-5.6-sol", "openai/gpt-6-sol", "openai/gpt-6.1-terra"]
+    l3_model: Literal[
+        "openai/gpt-5.6-sol",
+        "openai/gpt-6-sol",
+        "openai/gpt-6.1-terra",
+        "openai/gpt-6.1-sol",
+    ]
     timeout_seconds: Annotated[int, Field(ge=30, le=3_600)]
     max_steps: Annotated[int, Field(ge=1, le=256)]
     source_review_max_steps: Annotated[int, Field(ge=1, le=240)] = 200

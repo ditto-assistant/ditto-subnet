@@ -7969,6 +7969,21 @@ def test_gpt61_terra_cost_fallback_uses_its_own_conservative_rates() -> None:
     ) == pytest.approx(0.244)
 
 
+def test_gpt61_sol_cost_fallback_uses_its_own_tiered_ceiling() -> None:
+    # Below 272k prompt tokens: the $4/$20 priority ceiling, $0.20 cached.
+    assert _cost(80_000, 8_000, model="openai/gpt-6.1-sol") == pytest.approx(0.48)
+    assert _cost(
+        200_000,
+        8_000,
+        cached_input_tokens=150_000,
+        model="openai/gpt-6.1-sol-20260929",
+    ) == pytest.approx(0.39)
+    # At 272k the long-context priority ceiling applies: $8/$30, $0.40 cached.
+    assert _cost(272_000, 8_000, model="openai/gpt-6.1-sol") == pytest.approx(2.416)
+    # It never falls through to the GPT-5.6 SOL catalog estimate.
+    assert _cost(80_000, 8_000, model="openai/gpt-6.1-sol") < _cost(80_000, 8_000)
+
+
 def test_exact_reported_cost_precedes_conservative_fallback(
     tmp_path: Path,
 ) -> None:
