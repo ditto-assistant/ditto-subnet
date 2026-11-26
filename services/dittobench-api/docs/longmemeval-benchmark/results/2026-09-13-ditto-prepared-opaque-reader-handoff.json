@@ -1,0 +1,334 @@
+{
+  "schema_version": 1,
+  "status": "preparation_complete_reader_results_pending",
+  "off_resume_bootstrap_erratum": {
+    "artifact": "qa-final-off-resume-1b575560.log",
+    "sha256": "8d64f9dad6da719682a09c6a420406c8bf9374d6050c3860ce7e87c4aa875c47",
+    "error": "lookup postgres: no such host",
+    "cause": "Invocation typo used database hostname postgres instead of the required loopback address 127.0.0.1.",
+    "phase": "bootstrap before reader preflight or inference",
+    "exit_code": 1,
+    "original_judged_checkpoint_rows_unchanged": 497,
+    "corrected_attempt_log": "qa-final-off-resume-corrected-1b575560.log",
+    "source_or_fixture_mutation": false
+  },
+  "source_sha": "1b5755609b3ea95660fdba289e6a747adb8c5dae",
+  "binary_sha256": "695b6c3a0338b902949deb55456a87b17e1ba97e2b92dca63054e187ef75fa21",
+  "configuration_sha256": {
+    "local": "d2bee32f9749c311831f29637469c6633145ba38379b874e2d891dace2d03377",
+    "common": "6fb161f7c7b714ad851a2242ed0f9987a895321817a1de2c73f244368f54081f"
+  },
+  "native_resume": {
+    "artifact": "evidence/dream-resumed-1b575560-after-disk-stop.jsonl",
+    "sha256": "0f8c6a52ee30624f434d51e0357af33315de4a858c4845701cb87ae40287d48f",
+    "rows": 169,
+    "unique_users": 169,
+    "complete": 96,
+    "incomplete": 73,
+    "started_at": "2026-09-13T03:32:15.682889Z",
+    "completed_at": "2026-09-13T04:45:50.330283Z"
+  },
+  "settle_waves": [
+    {
+      "artifact": "evidence/settle-receipts-wave1-1b575560.jsonl",
+      "sha256": "99036cf923dc4a059206a065284f4c61467782d3a9271c292cb983b1cd9dee50",
+      "rows": 27,
+      "unique_users": 27,
+      "complete": 27,
+      "incomplete": 0,
+      "started_at": "2026-09-12T22:03:53.330475Z",
+      "completed_at": "2026-09-12T22:04:18.914681Z"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave2-1b575560.jsonl",
+      "sha256": "88afa7c8c24a5aca905890cdca16fa1f2d5f09d15d01ad8d2e24b61f7641609a",
+      "rows": 10,
+      "unique_users": 10,
+      "complete": 10,
+      "incomplete": 0,
+      "started_at": "2026-09-12T22:09:14.414428Z",
+      "completed_at": "2026-09-12T22:09:24.038396Z"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave3-1b575560.jsonl",
+      "sha256": "cb1635ddb545587ab8e8a38332b306a38b1d71c244c19885a6fc5641dd71f0c0",
+      "rows": 7,
+      "unique_users": 7,
+      "complete": 7,
+      "incomplete": 0,
+      "started_at": "2026-09-13T03:34:41.457041Z",
+      "completed_at": "2026-09-13T03:34:47.63734Z"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave4-1b575560.jsonl",
+      "sha256": "01cc1cdf4c98a3316df2a37e4ae0e54b38ea0953ddd3bc52ac5bf2286913e3e2",
+      "rows": 8,
+      "unique_users": 8,
+      "complete": 8,
+      "incomplete": 0,
+      "started_at": "2026-09-13T03:46:49.965469Z",
+      "completed_at": "2026-09-13T03:46:56.750332Z"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave5-1b575560.jsonl",
+      "sha256": "e62d28aaa0c9a42e698a95c50bbad664ed7a20acda5d1b160a6d9d20ead274dc",
+      "rows": 12,
+      "unique_users": 12,
+      "complete": 12,
+      "incomplete": 0,
+      "started_at": "2026-09-13T04:00:11.90764Z",
+      "completed_at": "2026-09-13T04:00:21.948886Z"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave6-1b575560.jsonl",
+      "sha256": "9e49d9bd3222883643545ec7e528964b8b73ad3928b7acebee2ab37f1e24b7f1",
+      "rows": 7,
+      "unique_users": 7,
+      "complete": 7,
+      "incomplete": 0,
+      "started_at": "2026-09-13T04:09:58.612219Z",
+      "completed_at": "2026-09-13T04:10:04.082461Z"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave7-1b575560.jsonl",
+      "sha256": "a3783cb871669f1c7efa57766a50a0159f60b7602206fd7f6e7e9e00d8e227b0",
+      "rows": 8,
+      "unique_users": 8,
+      "complete": 8,
+      "incomplete": 0,
+      "started_at": "2026-09-13T04:18:52.685439Z",
+      "completed_at": "2026-09-13T04:19:01.985333Z"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave8-1b575560.jsonl",
+      "sha256": "ca6c7c00bf8b32c53f6fe438e83ece2e6bea20ce17969fdc283b8c741ff12dba",
+      "rows": 15,
+      "unique_users": 15,
+      "complete": 15,
+      "incomplete": 0,
+      "started_at": "2026-09-13T04:30:08.142017Z",
+      "completed_at": "2026-09-13T04:30:16.337361Z"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave9-1b575560.jsonl",
+      "sha256": "50231ec273a1e52a2bdf9ac4d5afb30577e3400ea3a645a432aaea0e33fd0265",
+      "rows": 12,
+      "unique_users": 12,
+      "complete": 12,
+      "incomplete": 0,
+      "started_at": "2026-09-13T04:38:44.595172Z",
+      "completed_at": "2026-09-13T04:38:56.826054Z"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave10-1b575560.jsonl",
+      "sha256": "add2ebc89f6495e89aa16a47557a5485777111a538c8e8072a71bf952814a9bd",
+      "rows": 7,
+      "unique_users": 7,
+      "complete": 7,
+      "incomplete": 0,
+      "started_at": "2026-09-13T04:46:37.535178Z",
+      "completed_at": "2026-09-13T04:46:46.813123Z"
+    }
+  ],
+  "settle_unique_users": 113,
+  "forced_graph": {
+    "artifact": "evidence/final-force-graph-1b575560.jsonl",
+    "sha256": "33c925f14dd3062bd5647009acc6fccae6123b68b58642a29c18739797bc5c00",
+    "rows": 500,
+    "unique_users": 500,
+    "complete": 500,
+    "incomplete": 0,
+    "started_at": "2026-09-13T04:48:02.990377Z",
+    "completed_at": "2026-09-13T04:56:02.71334Z"
+  },
+  "labels": {
+    "artifact": "evidence/final-labels-1b575560.jsonl",
+    "sha256": "ec9b482f5844e8dc2f57f0a6dc87e3144042a7703f12d5080ce20c7fdc4329c7",
+    "rows": 500,
+    "unique_users": 500,
+    "complete": 500,
+    "incomplete": 0,
+    "started_at": "2026-09-13T04:56:40.340351Z",
+    "completed_at": "2026-09-13T05:05:35.657463Z",
+    "native_warning_count": 0,
+    "empty_label_policy": "intentional-or-unresolved",
+    "empty_labels": 1909
+  },
+  "final_preparation_counts": {
+    "pairs": 124366,
+    "pending_generation": 0,
+    "pending_storage": 0,
+    "pending_refinement": 0,
+    "raw_pending_refinement": 0,
+    "accepted_refinement_receipts": 0,
+    "pending_key_flags": 0,
+    "subjects": 173168,
+    "links": 295274,
+    "edges": 568202,
+    "clusters": 10731,
+    "llm_labels": 8822
+  },
+  "opaque_audit": {
+    "audited_at": "2026-09-13T05:15:55.623468+00:00",
+    "pass": true,
+    "counts": {
+      "missing_whole_session_occurrences": 0,
+      "missing_turns_in_whole_sessions": 0,
+      "present_sessions_with_missing_turns": 0,
+      "missing_turns_inside_present_sessions": 0,
+      "extra_turns": 0,
+      "missing_manifest_pair_ids": 0,
+      "wrong_scope_pairs": 0,
+      "out_of_range_timestamp_pairs": 0,
+      "exact_multiset_but_sequence_differs": 0,
+      "session_occurrences": 23867,
+      "original_nonempty_turns": 246738,
+      "represented_nonempty_turns": 246738,
+      "mapped_pair_references": 124366,
+      "dataset_cases": 500,
+      "distinct_source_session_ids": 19195,
+      "manifest_cases": 500,
+      "database_pairs": 124366,
+      "unmapped_database_pairs": 0,
+      "duplicate_manifest_pair_references": 0
+    },
+    "dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "manifest_sha256": "a232c2b7ee77f06597535416682c00187f9c44bb2a324de7ccd5dce3fa13ccef",
+    "opaque_id_scheme": "lme-opaque-sha256-v1",
+    "opaque_ids_valid": true,
+    "require_opaque_ids": true,
+    "require_sequence": true,
+    "sequence_order": "manifest",
+    "manifest_unchanged_during_audit": true
+  },
+  "opaque_audit_artifact_sha256": "fc8dece146e993176364e831e18730cb10d5e6f9a4a4689e7251ac91b3fea963",
+  "opaque_rewrite": {
+    "receipt_sha256": "a6d3119c7eb1b34ef4ff3090513e3dc8402af34e499431ed953bd7aec7b12955",
+    "source_manifest_sha256": "a20eec7a9d772e153403b279faa919e0e24b9ea57fa2f9dc1ab2d6d0636f3095",
+    "output_manifest_sha256": "a232c2b7ee77f06597535416682c00187f9c44bb2a324de7ccd5dce3fa13ccef",
+    "preservation": "all columns of memory_pairs except firestore_pair_id; all subject/edge/link/cluster rows",
+    "updated_at": "preserved by transaction-scoped named-trigger pause under ACCESS EXCLUSIVE lock"
+  },
+  "independent_snapshot": {
+    "captured_at": "2026-09-13T05:21:05Z",
+    "artifact_sha256": "ae406120c33d27d01ab21e6262e09e49372d6173ee6a82f2d57766d02c2f12c6",
+    "version": "postgres-jsonb-row-multiset-sha256-v1",
+    "sha256": "01c6a7070cba4e1455894c6da07132dcbba1b5cbc37c2c58c9f26db4adb3d055",
+    "users_count": 500,
+    "tables": [
+      {
+        "table": "users",
+        "sha256": "13076df16f7b3de59590d3c238c1c36c17ad26d536e29a3305fe01f950def369",
+        "rows": 500
+      },
+      {
+        "table": "memory_pairs",
+        "sha256": "3595b695c8b0713eb8e385fa70e9d967ce8b8662f5fa554cca93ee696db4a3fb",
+        "rows": 124366
+      },
+      {
+        "table": "subjects",
+        "sha256": "202f0e0ca8d8d4446f6cd2b3ceb02d5a5f79e76cd316137451290c551c6808bb",
+        "rows": 173168
+      },
+      {
+        "table": "subject_memory_pair_links",
+        "sha256": "2e2cb15d420dc6f9bc7cf0705e6090f8819cd5106890be7033456a8f5e7f494c",
+        "rows": 295274
+      },
+      {
+        "table": "subject_artifact_links",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "rows": 0
+      },
+      {
+        "table": "subject_edges",
+        "sha256": "c22cbd46de79333da31057e06fa6ae013bc06d796bd20b7babeb082594cc6c3b",
+        "rows": 568202
+      },
+      {
+        "table": "subject_graph_state",
+        "sha256": "ccf677d935c6948f0a72377fef17033226b3f6a14b9fdc201e318db20fc1596d",
+        "rows": 500
+      },
+      {
+        "table": "subject_clusters",
+        "sha256": "a765af9b676904fcb41d22821728da757da3d1b19cb13c0f1b0892459b1bb1f6",
+        "rows": 10731
+      },
+      {
+        "table": "subject_cluster_members",
+        "sha256": "b907182effb7a478c1f907b343da2c1571e9d2b5a76b3ac6f48ae0affbdb7ef0",
+        "rows": 165509
+      },
+      {
+        "table": "subject_cluster_edges",
+        "sha256": "849ed714fb4de62774539803adb4d1f7ef9415c1586bac1c1782976dcd60d128",
+        "rows": 16608
+      }
+    ]
+  },
+  "reader_condition": {
+    "answer_model": "openai/gpt-5.6-luna",
+    "reasoning_effort": "medium",
+    "judge_model": "google/gemini-3.1-flash-lite",
+    "prompt_clock": "question-date",
+    "require_graph": true,
+    "concurrency": 8,
+    "question_count": 500,
+    "arms_order": [
+      "graph_retrieval_off",
+      "graph_retrieval_on"
+    ],
+    "same_frozen_binary_and_configuration": true,
+    "score": null
+  },
+  "limitations": [
+    "Native resume retained 73 incomplete barrier attempts and exit1; later bounded settle closed those users. Do not claim the initial native pipeline was flawless.",
+    "All refinement receipts remain empty; raw pending and accepted receipts are both zero.",
+    "1909 empty cluster labels are intentional-or-unresolved, not a universal naming success claim.",
+    "No complete reader result or accuracy is asserted by this preparation artifact.",
+    "This aggregate excludes raw fixture text, provider IDs, environment values and absolute local paths."
+  ],
+  "reader_off_attempt_1": {
+    "report_filename": "20260913-052153-1b5755609b3ea95660fdba289e6a747adb8c5dae-longmemeval.json",
+    "report_sha256": "745eb4d0f3e68c7557a5b52dc77279a4616402201952ab97f03ab8c1070e6f5f",
+    "run_id": "20260913-052153-1b5755609b3ea95660fdba289e6a747adb8c5dae",
+    "started_at": "2026-09-13T05:21:53.086755Z",
+    "finished_at": "2026-09-13T05:46:42.086389Z",
+    "attempted_cases": 500,
+    "judged_cases": 497,
+    "failures": [
+      {
+        "case_id": "gpt4_15e38248",
+        "notes": [
+          "agent loop: remote error: tls: bad record MAC"
+        ]
+      },
+      {
+        "case_id": "46a3abf7",
+        "notes": [
+          "agent loop: remote error: tls: bad record MAC"
+        ]
+      },
+      {
+        "case_id": "88432d0a",
+        "notes": [
+          "agent loop: remote error: tls: bad record MAC"
+        ]
+      }
+    ],
+    "metadata": {
+      "lme_complete": "false",
+      "lme_cases_completed": "500/500",
+      "lme_judged_cases": "497",
+      "lme_prepared_snapshot_sha256": "01c6a7070cba4e1455894c6da07132dcbba1b5cbc37c2c58c9f26db4adb3d055",
+      "lme_prepared_snapshot_after_sha256": "01c6a7070cba4e1455894c6da07132dcbba1b5cbc37c2c58c9f26db4adb3d055",
+      "lme_prepared_snapshot_unchanged": "true",
+      "lme_manifest_sha256": "a232c2b7ee77f06597535416682c00187f9c44bb2a324de7ccd5dce3fa13ccef",
+      "lme_source_evidence": "clean-go-build-vcs-and-git-startup",
+      "lme_cost_estimate_valid": "false"
+    },
+    "retry_policy": "Resume identical command/checkpoint for only the three unjudged failures. Preserve all 497 judged answers and the immutable incomplete report; no score claim."
+  }
+}

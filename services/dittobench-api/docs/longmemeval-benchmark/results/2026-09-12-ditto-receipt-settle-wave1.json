@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "scope": "receipt_aware_settle_27_closed_users_only",
+  "phase": "receipt-aware-settle-wave1",
+  "status": "27_selected_users_settled_not_full_preparation_or_score",
+  "source_report_sha256": "eb50f00603668022d5c2c3ad1d07834f9c8cc3008ace60cbc27c247538a96f4b",
+  "started_at_utc": "2026-09-12T22:03:53.330475Z",
+  "completed_at_utc": "2026-09-12T22:04:18.914681Z",
+  "completed_observed_at_utc": "2026-09-12T22:04:30Z",
+  "source_sha": "1b5755609b3ea95660fdba289e6a747adb8c5dae",
+  "source_evidence": "clean-go-build-vcs-and-git-startup",
+  "binary_sha256": "695b6c3a0338b902949deb55456a87b17e1ba97e2b92dca63054e187ef75fa21",
+  "stage": "settle",
+  "concurrency": 2,
+  "selected_users": [
+    "lme_s_55241a1f", "lme_s_8b9d4367", "lme_s_94f70d80", "lme_s_982b5123_abs",
+    "lme_s_9a707b82", "lme_s_9ea5eabc", "lme_s_a08a253f", "lme_s_a11281a2",
+    "lme_s_a1cc6108", "lme_s_a3045048", "lme_s_a40e080f", "lme_s_a4996e51",
+    "lme_s_a82c026e", "lme_s_a89d7624", "lme_s_a96c20ee", "lme_s_a96c20ee_abs",
+    "lme_s_aae3761f", "lme_s_af082822", "lme_s_afdc33df", "lme_s_affe2881",
+    "lme_s_b01defab", "lme_s_b320f3f8", "lme_s_b46e15ee", "lme_s_b6025781",
+    "lme_s_b86304ba", "lme_s_bbf86515", "lme_s_c14c00dd"
+  ],
+  "input_manifest_sha256": "f3cdb6dead1fd18926c20d2483315f17c65b48d6f02e70477f9ee24905df1670",
+  "output_manifest_sha256": "a20eec7a9d772e153403b279faa919e0e24b9ea57fa2f9dc1ab2d6d0636f3095",
+  "audit_sha256": "99036cf923dc4a059206a065284f4c61467782d3a9271c292cb983b1cd9dee50",
+  "receipt_journal_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "receipt_journal_bytes": 0,
+  "users_attempted": 27,
+  "users_complete": 27,
+  "unique_audited_users": 27,
+  "native_warning_count": 0,
+  "raw_pending_refinement": 0,
+  "accepted_refinement_receipts": 0,
+  "remaining_pending_refinement": 0,
+  "refinement_receipt_version": "native-semantic-save-v1",
+  "configuration": {
+    "embedded_config_available": false,
+    "local_config_sha256": "d2bee32f9749c311831f29637469c6633145ba38379b874e2d891dace2d03377",
+    "common_config_sha256": "6fb161f7c7b714ad851a2242ed0f9987a895321817a1de2c73f244368f54081f",
+    "injection": "Local then common; ignore leading-comment/no-equals lines, split at first equals, trim key/value, set only absent process keys; mirrors cfg/envs.EnvFile.Load for the validated input files.",
+    "preserved_operator_overrides": ["SUPABASE_DB_URL", "GOOGLE_APPLICATION_CREDENTIALS"],
+    "database_scope": "explicit private loopback-only benchmark database"
+  },
+  "limitations": [
+    "The first launch at 22:02:28Z exited before preparation because the build clone lacked embedded local configuration; the successful launch used the identical source and binary with process configuration injection.",
+    "The previously literal-delimiter subject naturally ceased to contain that delimiter after one native refinement in this phase. No receipt exemption, test proof, or direct content edit was used; the receipt journal is empty.",
+    "Only the selected closed users were covered. A different earlier-source native process was still preparing other users; this is not the full 500-case final barrier, opaque-ID audit, reader run, or benchmark score."
+  ],
+  "publication_boundary": "Only public-dataset-derived fixture IDs needed to reproduce the selected cohort are included. Configuration values, private paths, database names, credentials, subject text, answers, and transcripts are excluded."
+}
