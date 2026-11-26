@@ -1473,6 +1473,9 @@ async def test_exchange_inference_grant_drops_an_unusable_cost_ceiling(
         {"cost_ceiling_microusd": "1000", "cost_ceiling_mode": "enforce"},
         {"cost_ceiling_microusd": 1000, "cost_ceiling_mode": "enforced"},
         {"cost_ceiling_microusd": 1000, "cost_ceiling_mode": 3},
+        {"cost_ceiling_microusd": 1000, "cost_ceiling_mode": []},
+        {"cost_ceiling_microusd": 1000, "cost_ceiling_mode": {"mode": "enforce"}},
+        {"cost_ceiling_microusd": [1000], "cost_ceiling_mode": "enforce"},
     ],
 )
 async def test_exchange_inference_grant_survives_a_malformed_body_ceiling(

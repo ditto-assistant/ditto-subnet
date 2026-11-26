@@ -379,7 +379,10 @@ def _without_unusable_cost_ceiling(raw: object) -> object:
     if ceiling is not None and not _usable_cost_ceiling(ceiling):
         del cleaned["cost_ceiling_microusd"]
     mode = cleaned.get("cost_ceiling_mode")
-    if mode is not None and mode not in _COST_CEILING_MODES:
+    # A JSON array or object is unhashable, so check the type first.
+    if mode is not None and (
+        not isinstance(mode, str) or mode not in _COST_CEILING_MODES
+    ):
         del cleaned["cost_ceiling_mode"]
     return cleaned
 
