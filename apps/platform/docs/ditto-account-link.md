@@ -62,13 +62,47 @@ the token request to the configured issuer. It is never logged or served.
 | `DITTO_LINK_CLIENT_SECRET` | — | DittoBench app secret. Required when enabled. |
 | `DITTO_LINK_REDIRECT_URL` | — | Exact verified callback, e.g. `https://dittobench.ai/api/v1/miner-auth/ditto/callback`. |
 | `DITTO_LINK_RETURN_URL` | `https://dittobench.ai/#/reviews` | Where the browser lands afterwards. |
-| `DITTO_LINK_SCOPES` | `openid email` | Requested scopes. No memory or spend scope is requested. |
+| `DITTO_LINK_SCOPES` | `openid email connection:github:read` | Identity plus GitHub connection metadata; no memory, tool or spend access. |
 
 Register the callback origin on the app first (`heyditto apps origins verify
 --app <id> https://dittobench.ai`), then set the four `DITTO_LINK_*` values
 and restart. `check_config` refuses a half-configured deployment.
 
+The enable gates follow the identity source. `DITTO_LINK_ENABLED=false` stops
+confirmation of Ditto-derived GitHub proofs, even after browser approval.
+`GITHUB_LINK_ENABLED=false` stops direct GitHub OAuth proofs. Connect Ditto
+does not require the direct GitHub OAuth app or its credentials; disabling
+direct OAuth leaves an enabled Connect Ditto flow available. Disable both
+features to stop every source of new links. Existing proof history is retained.
+
 ## What the link is used for
+
+Connect Ditto is the main onboarding flow. GitHub must already be connected in
+the consenting Ditto account; Ditto's generic prerequisite screen offers the
+connection when it is missing. After code exchange, Platform checks
+`/oauth/connections` using the access token and requires the response subject
+to match the verified ID-token subject. Tokens are neither stored nor returned.
+An unavailable provider or mismatched identity stops the attempt.
+
+For the GitHub proof, Platform creates a parallel GitHub attempt with the same
+server-generated UUID as the Ditto attempt. This equality records provenance;
+neither UUID is caller-selected. The shared browser acceptance approves it,
+and the signed GitHub proof endpoint additionally requires the original
+Ditto attempt to be linked by its starting miner session. The CLI signs the
+existing canonical GitHub payload and uses the unchanged finalized owner,
+nonce, global numeric GitHub uniqueness and immutable history checks. A matching
+existing proof is kept. Direct GitHub OAuth and old proofs remain compatible.
+
+Dashboard users finish the wallet signature with
+`ditto link-github --ditto-attempt <id>`; `ditto link-ditto` does this in the
+same command. Unattended signing still requires a pinned `--expect-github-id`.
+The short-lived proof attempt expires after ten minutes. Multiple hotkeys can
+share a Ditto router account, while a numeric GitHub identity retains its
+single active bounty hotkey. Connecting Ditto does not enable credit spending.
+
+Deploy the backend/API and consent UI first. An explicit legacy
+`DITTO_LINK_SCOPES=openid email` preserves identity-only linking during a staged
+rollout; remove that override when the prerequisite API and UI are ready.
 
 - **Relay attribution** (`services/model-relay`, config-gated, off by
   default): when the Ditto Router upstream is enabled, a grant whose agent's
