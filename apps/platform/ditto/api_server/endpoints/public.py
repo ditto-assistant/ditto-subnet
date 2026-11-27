@@ -40,7 +40,7 @@ import os
 import re
 import statistics
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, cast
@@ -168,6 +168,7 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
 from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL
+from ditto.api_models.clean_board import CLEAN_BOARD_PROTOCOL
 from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.continual_retest_settings import (
@@ -239,6 +240,7 @@ from ditto.api_server.ath_review_state import (
 )
 from ditto.api_server.bench import CURRENT_BENCH_VERSION, is_bench_version_retired
 from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
+from ditto.api_server.clean_board import unpaid_fractions as clean_board_fractions
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
     configured_crown_gate,
@@ -409,6 +411,7 @@ from ditto.db.queries.benchmark_rollout import (
     rollout_state,
     verified_scorer_for_version,
 )
+from ditto.db.queries.clean_board import load_clean_board_facts
 from ditto.db.queries.confirmation_bundles import (
     ActiveConfirmationWork,
     list_active_confirmation_work,
@@ -3020,6 +3023,9 @@ def _public_koth_emissions(
     crown_gate: CrownGate | None = None,
     crown_rules: CrownGate | None = None,
     duel_history: Mapping[UUID, Sequence[Any]] | None = None,
+    clean_board_fractions: Mapping[UUID, float] | None = None,
+    clean_board_attested: Collection[UUID] | None = None,
+    clean_board_mode: Literal["enforce", "shadow"] | None = None,
 ) -> PublicKothEmissions | None:
     """Project the caller's finalized, registration-eligible score pool.
 
@@ -3037,6 +3043,11 @@ def _public_koth_emissions(
     ``dueling_history`` (bench v16+) is each agent's raw confirmation records
     with their signed ``details.dueling``; the seeds this projection admits
     pair-mask exactly as the pinned fold does.
+
+    ``clean_board_fractions`` are the #2911 unpaid fractions the policy computes
+    for this pool, and ``clean_board_mode`` says whether validators apply them.
+    Ranks and shares are untouched; only ``paid_fraction`` and the burned total
+    move, exactly as the protocol-36 fold reports them.
     """
     quorum_values = quorum_by_agent or {}
     bonus_values = efficiency_bonuses or {}
@@ -3157,27 +3168,46 @@ def _public_koth_emissions(
     curve = tuple(rank_shares) if rank_shares is not None else KOTH_RANK_SHARES
     share_total = sum(allocation.shares)
     normalized_shares = tuple(share / share_total for share in allocation.shares)
-    recipients = [
-        PublicEmissionRecipient(
-            role=(
-                "joint_champion"
-                if allocation.mode == "score_ceiling_pool"
-                else "champion"
-                if index == 0
-                else "tail"
-            ),
-            agent_id=entry.agent_id,
-            miner_hotkey=entry.miner_hotkey,
-            raw_rank=entry.raw_rank,
-            share_of_miner_pool=normalized_shares[index],
-            paid=(
-                provisional_incumbent is None
-                or entry.agent_id != provisional_incumbent.agent_id
-            ),
-            shared_seed_confirmations=depths.get(entry.agent_id, 0),
+    fractions = clean_board_fractions or {}
+    attested_ids = (
+        set(clean_board_attested) if clean_board_attested is not None else None
+    )
+    enforcing_clean_board = clean_board_mode == "enforce"
+    recipients = []
+    unattested_burn_share = 0.0
+    for index, entry in enumerate(allocation.members):
+        paid = (
+            provisional_incumbent is None
+            or entry.agent_id != provisional_incumbent.agent_id
         )
-        for index, entry in enumerate(allocation.members)
-    ]
+        # A provisional incumbent is unpaid whole; the clean-board fraction
+        # reads only the payable pool.
+        unpaid = fractions.get(entry.agent_id, 0.0) if paid else 0.0
+        unattested_burn_share += normalized_shares[index] * unpaid
+        recipients.append(
+            PublicEmissionRecipient(
+                role=(
+                    "joint_champion"
+                    if allocation.mode == "score_ceiling_pool"
+                    else "champion"
+                    if index == 0
+                    else "tail"
+                ),
+                agent_id=entry.agent_id,
+                miner_hotkey=entry.miner_hotkey,
+                raw_rank=entry.raw_rank,
+                share_of_miner_pool=normalized_shares[index],
+                paid=paid,
+                attested=(
+                    entry.agent_id in attested_ids if attested_ids is not None else None
+                ),
+                unpaid_fraction=unpaid,
+                paid_fraction=(
+                    0.0 if not paid else 1.0 - unpaid if enforcing_clean_board else 1.0
+                ),
+                shared_seed_confirmations=depths.get(entry.agent_id, 0),
+            )
+        )
     champion_record = (reward_eligibility or {}).get(projection.champion.agent_id)
     # Holding the crown and being paid are separate facts. An enforcing gate has
     # already removed withheld rows from ``rows``; the one withheld row that can
@@ -3283,6 +3313,9 @@ def _public_koth_emissions(
             else None
         ),
         recipients=recipients,
+        clean_board_mode=clean_board_mode,
+        clean_board_required_protocol=CLEAN_BOARD_PROTOCOL,
+        unattested_burn_share=min(1.0, max(0.0, unattested_burn_share)),
         crown_rules=PublicCrownRules(
             active=crown_gate is not None,
             required_protocol=CROWN_GATE_PROTOCOL,
@@ -4074,6 +4107,28 @@ async def build_public_leaderboard(
         (await burn_resolver.resolve(session_maker)).rank_shares
         if burn_resolver is not None and bench_version is None
         else None
+    )
+    # The clean-board partial burn (#2911), projected exactly as the ledger
+    # serves it: enforced once enabled and the weight setters report v36,
+    # otherwise published as a shadow rehearsal.
+    clean_board_resolver = getattr(request.app.state, "clean_board_settings", None)
+    clean_board_policy = (
+        await clean_board_resolver.resolve(session_maker)
+        if clean_board_resolver is not None and bench_version is None
+        else None
+    )
+    board_clean_board_mode: Literal["enforce", "shadow"] | None = (
+        None
+        if clean_board_policy is None
+        else "enforce"
+        if clean_board_policy.enabled
+        and await live_weight_setter_fleet_supports_protocol(
+            session,
+            minimum_protocol=CLEAN_BOARD_PROTOCOL,
+            now=now,
+            freshness=_VALIDATOR_STALE_WINDOW,
+        )
+        else "shadow"
     )
     board_rank_shares = (
         operator_rank_shares
@@ -4945,6 +5000,20 @@ async def build_public_leaderboard(
         season_entry(item, len(entries) + 1).model_copy(update={"rank": None})
         for item in expired_rows
     )
+    clean_board_facts = (
+        await load_clean_board_facts(
+            session, [row.agent_id for row in emission_rows], quorum=SCORING_QUORUM
+        )
+        if board_clean_board_mode is not None and clean_board_policy is not None
+        else {}
+    )
+    board_clean_board_fractions = (
+        clean_board_fractions(
+            list(clean_board_facts), clean_board_facts, clean_board_policy, now=now
+        )
+        if clean_board_policy is not None
+        else {}
+    )
     return PublicLeaderboardResponse(
         generated_at=now,
         count=len(entries),
@@ -4998,6 +5067,17 @@ async def build_public_leaderboard(
                 rank_shares=board_rank_shares,
                 crown_gate=crown_gate_active_rules,
                 crown_rules=crown_rules,
+                clean_board_fractions=board_clean_board_fractions,
+                clean_board_attested=(
+                    {
+                        agent_id
+                        for agent_id, facts in clean_board_facts.items()
+                        if facts.attested
+                    }
+                    if board_clean_board_mode is not None
+                    else None
+                ),
+                clean_board_mode=board_clean_board_mode,
                 duel_history=(
                     await duel_history_by_agent(
                         session,

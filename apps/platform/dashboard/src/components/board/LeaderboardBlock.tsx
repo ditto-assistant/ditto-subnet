@@ -59,6 +59,12 @@ import {
   setLeaderboardVersionView,
 } from "./board-state";
 import { leaderboardStore } from "./leaderboard-data";
+import {
+  cleanBoardPaidFraction,
+  paidShare,
+  paidShareRange,
+  shareRangeText,
+} from "../../lib/payout";
 import type { BoardEntry, LeaderboardStore } from "./leaderboard-data";
 
 /** How many historical versions stay on the row beside "Current rollout".
@@ -547,6 +553,11 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
   const jointChampions = createMemo(() =>
     (emissions()?.recipients || []).filter((r) => r.role === "joint_champion"),
   );
+  // What validators actually pay the joint crown: members can differ once an
+  // unattested slot is enforced (#2911).
+  const jointPaidRange = createMemo(() =>
+    paidShareRange(jointChampions(), emissions()?.clean_board_mode),
+  );
   const tails = createMemo(() => (emissions()?.recipients || []).filter((r) => r.role === "tail"));
   const scoreCeilingPool = (): boolean => emissions()?.allocation_mode === "score_ceiling_pool";
 
@@ -561,12 +572,10 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
     const entry = championEntry();
     return entry && entry.rank ? "raw #" + entry.rank : "current score pool";
   };
-  const championShare = (): number | undefined => {
-    const recipient = championRecipient();
-    return recipient && Number.isFinite(recipient.share_of_miner_pool)
-      ? recipient.share_of_miner_pool
-      : emissions()?.champion_share;
-  };
+  const championShare = (): number | undefined =>
+    paidShare(championRecipient(), emissions()?.clean_board_mode) ?? emissions()?.champion_share;
+  const championPaidFraction = (): number | undefined =>
+    cleanBoardPaidFraction(championRecipient(), emissions()?.clean_board_mode);
 
   // Every consensus constant in this strip comes from the fold the API
   // reports (margin, dethrone_z, champion_share, rank_shares, tail_size).
@@ -580,7 +589,10 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
         "The incumbent's required dethrone score is at or above the best challenger's attainable score ceiling. " +
         "A single-winner crown would therefore be impossible to win. The fold instead pays the highest evidence-tied cohort, anchored on raw #1, and includes every tied destination beyond the normal tail cutoff. " +
         n +
-        " joint champions split the full miner pool equally; missing paired evidence cannot widen the cohort."
+        " joint champions split the full miner pool equally; missing paired evidence cannot widen the cohort." +
+        (e.clean_board_mode === "enforce"
+          ? " The split is of allocated slots: a slot that is not board-attested is paid only its paid fraction, and the rest burns."
+          : "")
       );
     }
     const champion = championEntry();
@@ -789,7 +801,12 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
                       <>
                         {" (" + championRank() + ") receives "}
                         {pct(championShare() as number)}
-                        {" of the miner pool."}
+                        {" of the miner pool"}
+                        {championPaidFraction() !== undefined
+                          ? ", " +
+                            pct(1 - (championPaidFraction() as number)) +
+                            " of its slot unpaid: not board-attested."
+                          : "."}
                       </>
                     }
                   >
@@ -815,8 +832,13 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
               <span class="emission-badge joint_champion">
                 <span aria-hidden="true">♛</span> Score-ceiling joint crown
               </span>
-              {" · " + jointChampions().length + " evidence-tied agents each receive "}
-              {pct(jointChampions()[0]?.share_of_miner_pool as number)}
+              {" · " +
+                jointChampions().length +
+                " evidence-tied agents " +
+                (jointPaidRange()?.[0] === jointPaidRange()?.[1] ? "each receive " : "receive ")}
+              {jointPaidRange()
+                ? shareRangeText(jointPaidRange() as [number, number], pct)
+                : pct(jointChampions()[0]?.share_of_miner_pool as number)}
               {" of the miner pool."}
             </Show>
           </Show>
@@ -890,8 +912,14 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
                     <Show when={entry()} fallback={label()}>
                       {(e) => <EntityButton kind="agent" id={e().agent_id} label={label()} />}
                     </Show>{" "}
-                    {pct(recipient.share_of_miner_pool as number)}
+                    {pct(
+                      (paidShare(recipient, emissions()?.clean_board_mode) ??
+                        recipient.share_of_miner_pool) as number,
+                    )}
                     {recipient.paid === false ? " unpaid" : ""}
+                    {cleanBoardPaidFraction(recipient, emissions()?.clean_board_mode) !== undefined
+                      ? " (not board-attested)"
+                      : ""}
                     <Show when={note()}>
                       {(n) => (
                         <>

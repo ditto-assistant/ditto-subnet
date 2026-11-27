@@ -1939,6 +1939,63 @@ export const setBurnSettingsInputSchema = z.object({
   confirmation: z.literal(BURN_CONFIRMATION),
 })
 
+// Clean-board partial burn (ditto-subnet #2911). A paid slot whose agent has
+// not passed operator board review is paid 1 - unattested_slot_burn_share of
+// its share once its grace window has run out; the rest burns. Ranking is
+// untouched. Ships disabled: shadow fractions are still computed and shown on
+// the public board, but the ledger serves nothing until enabled AND every
+// recently-live weight setter reports protocol 36.
+export const CLEAN_BOARD_SCOPE = '*'
+export const CLEAN_BOARD_CONFIRMATION = 'APPLY CLEAN BOARD POLICY'
+export const MAX_ATTESTATION_GRACE_SECONDS = 604_800
+
+export const cleanBoardSettingsSchema = z.object({
+  enabled: z.boolean(),
+  unattested_slot_burn_share: z.number().min(0).max(1),
+  attestation_grace_seconds: z.number().int().min(0).max(MAX_ATTESTATION_GRACE_SECONDS),
+})
+
+export const cleanBoardSettingsRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  settings: cleanBoardSettingsSchema,
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string(),
+  checksum: z.string().regex(/^[0-9a-f]{64}$/),
+})
+
+export const effectiveCleanBoardSettingsSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  settings: cleanBoardSettingsSchema,
+  checksum: z.string().regex(/^(?:[0-9a-f]{64})?$/),
+  source: z.enum(['revision', 'default']),
+  max_age_seconds: z.number().nonnegative(),
+  required_protocol: z.number().int().positive(),
+  // True only when enabled and the weight-setting fleet folds protocol 36;
+  // null when fleet readiness could not be read.
+  served: z.boolean().nullable().default(null),
+})
+
+export const cleanBoardSettingsControlSchema = z.object({
+  current: z.array(cleanBoardSettingsRevisionSchema),
+  history: z.array(cleanBoardSettingsRevisionSchema),
+  default: cleanBoardSettingsSchema,
+  effective: effectiveCleanBoardSettingsSchema,
+})
+
+export const setCleanBoardSettingsInputSchema = z.object({
+  scope: z.literal(CLEAN_BOARD_SCOPE).default(CLEAN_BOARD_SCOPE),
+  expectedRevision: z.number().int().nonnegative(),
+  settings: cleanBoardSettingsSchema,
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(CLEAN_BOARD_CONFIRMATION),
+})
+
+export type CleanBoardSettingsControl = z.infer<typeof cleanBoardSettingsControlSchema>
+
 export type BurnSettings = z.infer<typeof burnSettingsSchema>
 export type BurnSettingsWrite = z.infer<typeof burnSettingsWriteSchema>
 export type BurnSettingsControl = z.infer<typeof burnSettingsControlSchema>
@@ -9575,6 +9632,13 @@ export const publicEmissionRecipientSchema = z.object({
   // False only for a provisional incumbent whose share validators burn;
   // Platform omits it when true.
   paid: z.boolean().default(true),
+  // Clean-board partial burn (#2911). Platform omits each at its default:
+  // attested when not evaluated, unpaid_fraction at 0, paid_fraction at 1.
+  // paid_fraction is what validators actually pay (1 - unpaid_fraction only
+  // under clean_board_mode "enforce"); a shadow fraction is never applied.
+  attested: z.boolean().nullish(),
+  unpaid_fraction: z.number().min(0).max(1).nullish(),
+  paid_fraction: z.number().min(0).max(1).nullish(),
   // Confirmation-seed depth: distinct champion-anchored CRN seeds this top-5
   // agent has been re-scored on by the continual rescore lane.
   shared_seed_confirmations: z.number().int().nonnegative().default(0),
@@ -9636,6 +9700,11 @@ export const publicKothEmissionsSchema = z.object({
   raw_leader_miner_hotkey: z.string(),
   raw_leader_decision: publicDethroneDecisionSchema.nullable().optional(),
   recipients: z.array(publicEmissionRecipientSchema),
+  // Clean-board partial burn (#2911): enforce when validators apply it,
+  // shadow when it is only published. Absent on an older Platform.
+  clean_board_mode: z.enum(['enforce', 'shadow']).nullish(),
+  clean_board_required_protocol: z.number().int().positive().nullish(),
+  unattested_burn_share: z.number().min(0).max(1).nullish(),
   crown_rules: publicCrownRulesSchema.nullish().default(null),
   king: publicCrownKingSchema.nullish().default(null),
   challengers: z.array(publicCrownChallengerSchema).default([]),

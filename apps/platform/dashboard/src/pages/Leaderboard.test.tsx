@@ -9,7 +9,7 @@ import {
   resetBoardState,
   setLeaderboardVersionView,
 } from "../components/board/board-state";
-import { fx, fxScore, num } from "../lib/format";
+import { fx, fxScore, num, pct } from "../lib/format";
 import { dethroneFloor, displayComposite, rankEntries } from "../lib/scoring";
 import { syncFromLocation } from "../stores/routeStore";
 import { fixtureNameFor, loadFixture } from "../test-fixtures";
@@ -1620,6 +1620,76 @@ describe("provisional champion (protocol 28)", () => {
       row.textContent?.includes(championEntry.agent_name as string),
     ) as HTMLElement;
     expect(championRow.querySelector(".emission-badge.champion")?.textContent).toContain("unpaid");
+  });
+});
+
+describe("clean-board burn (#2911)", () => {
+  const withMode = (mode: "enforce" | "shadow", unpaid = 0.5) =>
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          emissions: {
+            ...payload.emissions,
+            clean_board_mode: mode,
+            recipients: (payload.emissions?.recipients ?? []).map((recipient) =>
+              recipient.role === "champion"
+                ? {
+                    ...recipient,
+                    attested: false,
+                    unpaid_fraction: unpaid,
+                    ...(mode === "enforce" ? { paid_fraction: 1 - unpaid } : {}),
+                  }
+                : recipient,
+            ),
+          },
+        };
+      },
+    });
+  const championShare = (): number =>
+    (loadFixture("leaderboard") as LeaderboardPayload).emissions?.recipients?.find(
+      (recipient) => recipient.role === "champion",
+    )?.share_of_miner_pool as number;
+
+  // The board store keeps the previous payload until its refetch lands, so
+  // wait for the expected payout rather than for any title.
+  it("shows the paid half of an enforced unattested slot", async () => {
+    withMode("enforce");
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("emissions-title").textContent).toContain(
+        pct(championShare() * 0.5) + " of the miner pool",
+      ),
+    );
+    expect(el("emissions-title").textContent).toContain(
+      pct(0.5) + " of its slot unpaid: not board-attested",
+    );
+  });
+
+  it("names the unpaid share of an asymmetric slot, not the paid one", async () => {
+    withMode("enforce", 0.25);
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("emissions-title").textContent).toContain(
+        pct(championShare() * 0.75) + " of the miner pool",
+      ),
+    );
+    expect(el("emissions-title").textContent).toContain(
+      pct(0.25) + " of its slot unpaid: not board-attested",
+    );
+  });
+
+  it("never applies a shadow fraction to the shown payout", async () => {
+    withMode("shadow");
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("emissions-title").textContent).toContain(
+        pct(championShare()) + " of the miner pool.",
+      ),
+    );
+    expect(el("emissions-title").textContent).not.toContain("not board-attested");
   });
 });
 

@@ -863,6 +863,22 @@ the gate, and only after every recently-live weight setter reports protocol
 disabled` is the exact rollback. Both folds call the shared arithmetic and run
 the shared `crown_gate_cases.json` duel cases.
 
+### Unattested paid slots (protocol 36)
+
+A paid slot is meant to pay reviewed work. Platform may serve
+`unpaid_fractions`, a map of `agent_id -> f` with `0 < f <= 1` covering ledger
+entries whose agent took a paid slot but has not passed operator board review
+within its grace window (#2911). The fold picks the champion, tail, tie pools
+and score-ceiling cohort exactly as without it. A named recipient then pays
+`share × (1 − f)` to its hotkey. The other `share × f` burns to the owner hotkey
+after the treasury service bucket is reserved, the same path the protocol-28
+provisional incumbent's slot takes, so the collector's share never moves.
+
+The map is all-or-nothing. A key that is not a ledger entry, or a value outside
+`(0, 1]`, makes every validator ignore it and pay every slot in full. Platform
+serves it only after every recently-live weight setter reports protocol 36, and
+an empty map folds exactly as protocol 35.
+
 ### Continual retest seed budget
 
 Platform owns how many shared seeds the continual retest lane buys. Each round

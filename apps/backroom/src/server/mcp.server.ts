@@ -262,6 +262,7 @@ import {
   ownerFootprintLookupInputSchema,
   agentEmissionEligibilityInputSchema,
   setBurnSettingsInputSchema,
+  setCleanBoardSettingsInputSchema,
   setTrackShareSettingsInputSchema,
   setEmissionAllocationInputSchema,
   setEfficiencyBonusSettingsInputSchema,
@@ -487,8 +488,10 @@ import {
   fetchAgentEmissionEligibility,
   setValidatorIssuancePause,
   fetchBurnSettings,
+  fetchCleanBoardSettings,
   fetchEmissionEligibility,
   setBurnSettings,
+  setCleanBoardSettings,
   fetchTrackShareSettings,
   setTrackShareSettings,
   fetchEmissionAllocation,
@@ -1062,6 +1065,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Set burn/payout curve; an allocation owns burn once set. MOVES TAO. See tool help.',
   get_burn_settings:
     'Read burn, miner remainder, revision and fleet fold. Optional history, default 0.',
+  get_clean_board_policy:
+    'Read clean-board burn for unattested paid slots: share, grace, v36 serving; history opt-in.',
+  set_clean_board_policy:
+    'Enable/tune the clean-board burn of unattested paid slots. MOVES TAO. See tool help.',
   get_edge_lane_settings: 'Ditto Edge shadow lane policy (off|shadow), revision; history opt-in.',
   get_edge_lane_overview: 'Ditto Edge shadow lane: mode, nodes, objects, recent windows; pays nothing.',
   list_edge_lane_nodes: 'Ditto Edge nodes: status, held bytes, last poll, latest window.',
@@ -2690,7 +2697,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get production score leaderboard',
       description:
-        'Ranked SN118 leaderboard straight from the production score ledger (what dittobench.ai renders), one best submission per miner. Each entry carries the composite with per-axis tool/memory means, quorum vs provisional state, emission eligibility, bench_version, dataset_sha256, standard error, rollout settlement state, and the composite breakdown with gate and token-efficiency multipliers, plus the current KOTH emissions fold (champion, protection margin, dethrone decision, confirmation-seed depth per recipient) and the crown standings: `emissions.crown_rules` (min shared-seed confirmations to dethrone, official places the King must hold, and whether the fleet enforces them yet), `emissions.king` (official rank, official score, confirmations) and `emissions.challengers` (each challenger\'s shared seeds vs the King, paired lead or deficit, lead still needed, and status outside_standing | needs_confirmations | dueling | would_dethrone). Board `rank` orders by official_composite (the continual mean), not the canonical `composite`. Filter finalized vs provisional entries or pin a historical benchVersion; omit benchVersion for the authoritative pool that drives weights. A newer generation suppressed by its owner representative has no entry here; call get_continual_retest_diagnostic with its exact UUID for the owner comparison and retest-cohort membership. Returns `count` (the filtered total); page with limit/offset when count exceeds the page. Requires backroom:read and never influences weights or emissions.',
+        'Ranked SN118 leaderboard straight from the production score ledger (what dittobench.ai renders), one best submission per miner. Each entry carries the composite with per-axis tool/memory means, quorum vs provisional state, emission eligibility, bench_version, dataset_sha256, standard error, rollout settlement state, and the composite breakdown with gate and token-efficiency multipliers, plus the current KOTH emissions fold (champion, protection margin, dethrone decision, confirmation-seed depth per recipient) and the crown standings: `emissions.crown_rules` (min shared-seed confirmations to dethrone, official places the King must hold, and whether the fleet enforces them yet), `emissions.king` (official rank, official score, confirmations) and `emissions.challengers` (each challenger\'s shared seeds vs the King, paired lead or deficit, lead still needed, and status outside_standing | needs_confirmations | dueling | would_dethrone). The clean-board burn (#2911) rides the same block: `emissions.clean_board_mode` (enforce when validators apply it, shadow when only published), `emissions.unattested_burn_share`, and per recipient `attested`, `unpaid_fraction` (absent means 0) and `paid_fraction` (what validators pay; absent means 1). Board `rank` orders by official_composite (the continual mean), not the canonical `composite`. Filter finalized vs provisional entries or pin a historical benchVersion; omit benchVersion for the authoritative pool that drives weights. A newer generation suppressed by its owner representative has no entry here; call get_continual_retest_diagnostic with its exact UUID for the owner comparison and retest-cohort membership. Returns `count` (the filtered total); page with limit/offset when count exceeds the page. Requires backroom:read and never influences weights or emissions.',
       inputSchema: scoreLeaderboardInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -4182,6 +4189,24 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_clean_board_policy',
+    {
+      title: 'Get clean-board policy',
+      description:
+        'Read the clean-board partial burn (ditto-subnet #2911): a paid slot whose agent has not passed operator board review is paid 1 - unattested_slot_burn_share of its share once attestation_grace_seconds have passed since it first reached its score quorum, and the rest burns. Board-attested means the exact artifact holds a resolved clear in the ATH court from an operator (the court attest step or resolve clear); an owner-link or platform auto-clear does not attest, and a reopen or reject ends the attestation from the next ledger read. Ranking, the crown and tie pooling never change, only the payout. Returns the settings (enabled, unattested_slot_burn_share 0..1, attestation_grace_seconds 0..604800), revision and source (default means no revision or an unreadable one, which serves nothing), required_protocol (36), and effective.served: true only when enabled and every recently-live weight setter reports protocol 36. While not served the fractions are only a shadow rehearsal, published on the public leaderboard emissions block as clean_board_mode=shadow with each recipient\'s attested and unpaid_fraction. History is newest-first and opt-in with historyLimit (default 0). Requires backroom:read and changes nothing.',
+      inputSchema: MCP_SETTINGS_HISTORY_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ historyLimit, historyOffset }) =>
+      result(
+        compacted(
+          pageRevisionHistory(await fetchCleanBoardSettings(), historyLimit, historyOffset),
+          REVISION_LISTS,
+        ),
+      ),
+  )
+
+  registerTool(
     'get_edge_lane_settings',
     {
       title: 'Get Ditto Edge lane settings',
@@ -4535,6 +4560,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => setBurnSettings(input, props.session.email)),
+  )
+
+  registerTool(
+    'set_clean_board_policy',
+    {
+      title: 'Set clean-board policy',
+      description:
+        'Apply one append-only revision of the clean-board partial burn (ditto-subnet #2911) with no validator release. settings is the whole policy: enabled, unattested_slot_burn_share (0..1, the burned fraction of an unattested paid slot) and attestation_grace_seconds (0..604800 of full pay after an agent first reaches its score quorum). Supply expectedRevision exactly as get_clean_board_policy reports it (0 before the first write), an operator reason, and the confirmation "APPLY CLEAN BOARD POLICY". Rollout: keep enabled false and read the shadow numbers on the public board, attest every reviewed-and-kept agent in the ATH court, wait for the validator fleet to report protocol 36, then enable. Platform serves the fractions only while enabled and every recently-live weight setter reports protocol 36, so a mixed fleet never folds two vectors; check effective.served. It moves TAO: the unpaid part of each unattested slot is burned, never reassigned. It lands at the next ledger read or epoch pin, so budget roughly an epoch subnet-wide. Requires backroom:write.',
+      inputSchema: setCleanBoardSettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => setCleanBoardSettings(input, props.session.email)),
   )
 
   registerTool(

@@ -302,6 +302,52 @@ def pin_generator_fraction(served: dict[str, Any]) -> float:
     return generator / (generator + memory)
 
 
+def served_unpaid_fractions(served: dict[str, Any]) -> dict[UUID, float]:
+    """The protocol-36 clean-board fractions frozen with a pin, or ``{}``.
+
+    Keyed into ``served`` only when non-empty, so it is part of the digest and
+    every pin without one keeps its digest. A malformed map reads as absent
+    whole, the way validators refuse it, so the board never projects a burn
+    the fleet would not fold.
+    """
+    raw = served.get("unpaid_fractions")
+    if not isinstance(raw, dict) or not raw:
+        return {}
+    fractions: dict[UUID, float] = {}
+    for key, value in raw.items():
+        try:
+            agent_id = UUID(str(key))
+        except ValueError:
+            return {}
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or not 0.0 < value <= 1.0
+        ):
+            return {}
+        fractions[agent_id] = float(value)
+    return fractions
+
+
+def clean_board_shadow_fractions(context: dict[str, Any]) -> dict[UUID, float]:
+    """What the clean-board policy computed at pin time, served or not.
+
+    Frozen in the pin's context (outside the digest) so a public read can show
+    the shadow rehearsal for exactly the pool the fleet folded.
+    """
+    raw = context.get("clean_board_fractions")
+    if not isinstance(raw, dict):
+        return {}
+    fractions: dict[UUID, float] = {}
+    for key, value in raw.items():
+        try:
+            fractions[UUID(str(key))] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return fractions
+
+
 def pin_provisional_incumbent(served: dict[str, Any]) -> LedgerEntry | None:
     """The crown-only incumbent a pin froze (protocol 28), or ``None``.
 
@@ -358,6 +404,7 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
             pin.incumbent_agent_id if served.get("crown_mode") == "incumbent" else None
         ),
         provisional_incumbent=pin_provisional_incumbent(served),
+        unpaid_fractions=served_unpaid_fractions(served),
         # Bench v13+ finalized-block anchors are chain facts frozen with the
         # pin; a pin taken before any reign was anchored carries none.
         confirmation_seed_anchors=[
@@ -546,7 +593,9 @@ def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
 
     A provisional incumbent folds like any entry but is never paid, so its
     shares are left out and the result sums below one: the remainder is what
-    the validator burns (protocol 28).
+    the validator burns (protocol 28). A clean-board fraction (protocol 36)
+    pays ``1 - f`` of the recipient's share, and the validator burns the rest
+    the same way.
     """
     from ditto.api_server.koth import emission_allocation
 
@@ -585,12 +634,16 @@ def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
     total = sum(allocation.shares)
     if total <= 0.0:
         return None
+    unpaid = served_unpaid_fractions(served)
     shares: dict[str, float] = {}
     for member, share in zip(allocation.members, allocation.shares, strict=True):
         if provisional is not None and member.agent_id == provisional.agent_id:
             continue
+        paid = 1.0 - unpaid.get(member.agent_id, 0.0)
+        if paid <= 0.0:
+            continue
         shares[member.miner_hotkey] = (
-            shares.get(member.miner_hotkey, 0.0) + share / total
+            shares.get(member.miner_hotkey, 0.0) + paid * share / total
         )
     return shares
 
@@ -1176,6 +1229,16 @@ def build_pin_draft(
     reward_eligibility_mode = getattr(snapshot, "reward_eligibility_mode", None)
     if reward_eligibility_mode is not None:
         served["reward_eligibility_mode"] = reward_eligibility_mode
+    # Protocol 36: keyed only when the clean-board burn is served, so every pin
+    # taken without it keeps its digest byte for byte.
+    unpaid_fractions = getattr(snapshot, "unpaid_fractions", None)
+    if unpaid_fractions:
+        served["unpaid_fractions"] = {
+            str(agent_id): float(fraction)
+            for agent_id, fraction in sorted(
+                unpaid_fractions.items(), key=lambda item: str(item[0])
+            )
+        }
     seed_anchors = getattr(snapshot, "confirmation_seed_anchors", None) or ()
     if seed_anchors:
         served["confirmation_seed_anchors"] = [
@@ -1265,6 +1328,16 @@ def build_pin_draft(
             "block_timestamp": schedule.block_timestamp,
         },
     }
+    shadow_fractions = getattr(snapshot, "clean_board_fractions", None)
+    if shadow_fractions:
+        # The clean-board rehearsal, frozen with the pool for public reads. It
+        # is outside the digest: validators fold only ``served``.
+        context["clean_board_fractions"] = {
+            str(agent_id): float(fraction)
+            for agent_id, fraction in sorted(
+                shadow_fractions.items(), key=lambda item: str(item[0])
+            )
+        }
     records = getattr(snapshot, "reward_eligibility_records", None)
     if records is not None:
         # Explanations are frozen with the pool, but do not alter the fold
@@ -1411,6 +1484,8 @@ __all__ = [
     "pin_provisional_incumbent",
     "served_crown_gate",
     "served_rank_shares",
+    "served_unpaid_fractions",
+    "clean_board_shadow_fractions",
     "served_track_shares",
     "ledger_digest",
     "response_from_pin",

@@ -23,6 +23,7 @@ import { EntityButton } from "../ui/EntityButton";
 import { HandleBadge } from "../ui/HandleBadge";
 import { MinerAvatar } from "../ui/MinerAvatar";
 import type { BoardEntry, LeaderboardStore } from "../board/leaderboard-data";
+import { paidShare, paidShareRange, shareRangeText } from "../../lib/payout";
 
 export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
   const store = props.store;
@@ -39,6 +40,7 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
   };
   const jointChampions = () =>
     (emissions()?.recipients || []).filter((recipient) => recipient.role === "joint_champion");
+  const jointPaidRange = () => paidShareRange(jointChampions(), emissions()?.clean_board_mode);
   const name = (): string => {
     const entry = championEntry();
     return (
@@ -49,13 +51,8 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
   };
   const championRecipient = () =>
     (emissions()?.recipients || []).find((r) => r.role === "champion");
-  const share = (): number | undefined => {
-    const e = emissions();
-    const recipient = championRecipient();
-    return recipient && Number.isFinite(recipient.share_of_miner_pool)
-      ? recipient.share_of_miner_pool
-      : e?.champion_share;
-  };
+  const share = (): number | undefined =>
+    paidShare(championRecipient(), emissions()?.clean_board_mode) ?? emissions()?.champion_share;
   /** The King as the crown rules see it (protocol 34); absent from an older
    * Platform, which falls back to the board entry. */
   const king = () => {
@@ -156,18 +153,18 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
               </span>
             </Show>
             <Show
-              when={Number.isFinite(
-                scoreCeilingPool() ? jointChampions()[0]?.share_of_miner_pool : share(),
-              )}
+              when={scoreCeilingPool() ? jointPaidRange() !== undefined : Number.isFinite(share())}
             >
               <span>
-                {scoreCeilingPool() ? "Miner pool each " : "Miner pool "}
+                {scoreCeilingPool()
+                  ? jointPaidRange()?.[0] === jointPaidRange()?.[1]
+                    ? "Miner pool each "
+                    : "Miner pool "
+                  : "Miner pool "}
                 <b>
-                  {pct(
-                    (scoreCeilingPool()
-                      ? jointChampions()[0]?.share_of_miner_pool
-                      : share()) as number,
-                  )}
+                  {scoreCeilingPool()
+                    ? shareRangeText(jointPaidRange() as [number, number], pct)
+                    : pct(share() as number)}
                 </b>
                 {!scoreCeilingPool() && championRecipient()?.paid === false ? " unpaid" : ""}
               </span>

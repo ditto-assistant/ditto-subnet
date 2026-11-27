@@ -1941,6 +1941,50 @@ class PublicEmissionRecipient(BaseModel):
             ),
         ),
     ] = True
+    attested: Annotated[
+        bool | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Whether this exact artifact passed operator board review (a "
+                "resolved clear in the ATH court; #2911). ``None`` when the "
+                "clean-board policy was not evaluated for this projection."
+            ),
+        ),
+    ] = None
+    unpaid_fraction: Annotated[
+        float,
+        Field(
+            default=0.0,
+            ge=0.0,
+            le=1.0,
+            exclude_if=lambda value: value == 0.0,
+            description=(
+                "Absent means 0. The clean-board fraction of this slot the "
+                "policy leaves unpaid: "
+                "an unattested agent past its grace window (#2911). Reported in "
+                "shadow too; ``clean_board_mode`` says whether validators apply "
+                "it."
+            ),
+        ),
+    ] = 0.0
+    paid_fraction: Annotated[
+        float,
+        Field(
+            default=1.0,
+            ge=0.0,
+            le=1.0,
+            exclude_if=lambda value: value == 1.0,
+            description=(
+                "Absent means 1. The fraction of ``share_of_miner_pool`` "
+                "validators actually pay "
+                "this hotkey: ``0`` for an unpaid provisional incumbent, "
+                "``1 - unpaid_fraction`` while the clean-board burn is enforced, "
+                "and ``1`` otherwise. The rest is burned."
+            ),
+        ),
+    ] = 1.0
     shared_seed_confirmations: Annotated[
         int,
         Field(
@@ -2305,6 +2349,32 @@ class PublicKothEmissions(BaseModel):
         ),
     ] = None
     recipients: list[PublicEmissionRecipient] = Field(default_factory=list)
+    clean_board_mode: Annotated[
+        Literal["enforce", "shadow"] | None,
+        Field(
+            default=None,
+            description=(
+                "The clean-board partial burn (#2911): ``enforce`` when the "
+                "policy is enabled and the weight-setting fleet folds it, "
+                "``shadow`` when the fractions are only computed and published. "
+                "``None`` when the policy was not evaluated."
+            ),
+        ),
+    ] = None
+    clean_board_required_protocol: int = 36
+    unattested_burn_share: Annotated[
+        float,
+        Field(
+            default=0.0,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "The share of the miner pool the clean-board policy leaves "
+                "unpaid across all recipients: burned under ``enforce``, what "
+                "would be burned under ``shadow``."
+            ),
+        ),
+    ] = 0.0
     crown_rules: Annotated[
         PublicCrownRules | None,
         Field(

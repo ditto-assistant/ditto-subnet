@@ -772,6 +772,7 @@ describe('Backroom MCP tools', () => {
         'get_stranded_admissions',
         'list_readmissions',
         'get_burn_settings',
+        'get_clean_board_policy',
         'get_edge_lane_settings',
         'get_edge_lane_overview',
         'list_edge_lane_nodes',
@@ -839,6 +840,7 @@ describe('Backroom MCP tools', () => {
         'get_agent_harness_memory',
         'list_confirmation_bundles',
         'set_burn_settings',
+        'set_clean_board_policy',
         'set_track_share_settings',
         'set_emission_allocation',
         'set_continual_retest_settings',
@@ -1228,7 +1230,10 @@ describe('Backroom MCP tools', () => {
     // The audited frontier oracle rerun write (rerun_generator_round_frontier;
     // one-line summary, detail in tool help) adds 707 bytes: measured 256,203
     // bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(256_800)
+    // The clean-board policy read and write (#2911; one-line summaries,
+    // detail in tool help) add 1,579 bytes: measured 257,782 bytes; keep about
+    // 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(258_300)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1298,7 +1303,9 @@ describe('Backroom MCP tools', () => {
       // keep about 200 chars.
       // The ten one-line model_context (CPM) summaries add 665 chars:
       // measured 31,153; keep about 200 chars.
-      31_350,
+      // The two one-line clean-board policy summaries (#2911), with the
+      // summaries added since, measure 31,521; keep about 200 chars.
+      31_720,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

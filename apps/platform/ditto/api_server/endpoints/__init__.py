@@ -26,6 +26,9 @@ from ditto.api_server.endpoints.admin_burn_settings import (
 from ditto.api_server.endpoints.admin_claim_provenance import (
     router as admin_claim_provenance_router,
 )
+from ditto.api_server.endpoints.admin_clean_board_settings import (
+    router as admin_clean_board_settings_router,
+)
 from ditto.api_server.endpoints.admin_competition_improvement import (
     router as admin_competition_improvement_router,
 )
@@ -256,6 +259,7 @@ __all__ = [
     "admin_attestation_router",
     "admin_benchmark_rollout_router",
     "admin_burn_settings_router",
+    "admin_clean_board_settings_router",
     "admin_edge_lane_settings_router",
     "admin_track_share_settings_router",
     "admin_emission_allocation_router",

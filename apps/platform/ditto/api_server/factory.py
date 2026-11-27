@@ -24,6 +24,7 @@ from ditto.api_server.bounty_claims import SimulatedBountyFeeVerifier
 from ditto.api_server.bounty_deadlines import BountyDeadlineSweeper
 from ditto.api_server.bounty_settlement import SimulatedTransferExecutor
 from ditto.api_server.burn_settings import BurnSettingsResolver
+from ditto.api_server.clean_board import CleanBoardSettingsResolver
 from ditto.api_server.competition_improvement_job import CompetitionImprovementJob
 from ditto.api_server.config import (
     ApiServerConfig,
@@ -68,6 +69,7 @@ from ditto.api_server.endpoints import (
     admin_benchmark_rollout_router,
     admin_burn_settings_router,
     admin_claim_provenance_router,
+    admin_clean_board_settings_router,
     admin_competition_improvement_router,
     admin_confirmation_bundles_router,
     admin_confirmation_score_voids_router,
@@ -705,6 +707,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Served on the scoring ledger, so a change reaches the fleet on its next
     # poll instead of on a validator release.
     app.state.burn_settings = BurnSettingsResolver()
+    # Clean-board partial burn (#2911): unattested paid slots pay part of
+    # their share after a grace window. Disabled by default; shadow until on.
+    app.state.clean_board_settings = CleanBoardSettingsResolver()
     # Ditto Edge shadow lane policy (SN-481). Off by default; no mode reaches
     # weights or emissions.
     app.state.edge_lane_settings = EdgeLaneSettingsResolver()
@@ -928,6 +933,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
     app.include_router(admin_claim_provenance_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
+    app.include_router(admin_clean_board_settings_router, prefix="/api/v1")
     app.include_router(admin_edge_lane_settings_router, prefix="/api/v1")
     app.include_router(admin_edge_lane_router, prefix="/api/v1")
     app.include_router(edge_router, prefix="/api/v1")

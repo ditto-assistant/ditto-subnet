@@ -49,6 +49,7 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
+from ditto.db.queries.clean_board import list_board_attested_agent_ids
 from ditto.db.queries.scores import list_eligible_ledger
 
 pytestmark = pytest.mark.asyncio
@@ -1800,6 +1801,122 @@ async def test_clear_on_the_unheld_champion_attests_without_moving_the_crown(
     assert audit.status_code == 200, audit.text
     assert audit.json()["status"] == "resolved"
     assert audit.json()["resolution"] == "clear"
+
+
+async def _automated_clear(
+    maker: async_sessionmaker[AsyncSession], agent_id: UUID, *, actor: str
+) -> None:
+    """A resolved clear an automated path wrote (owner-link or platform)."""
+    async with maker() as session, session.begin():
+        review_id = uuid4()
+        session.add(
+            AthReview(
+                review_id=review_id,
+                agent_id=agent_id,
+                status="resolved",
+                opened_at=_T0,
+                resolved_at=_T0,
+                resolved_by=actor,
+                resolution="clear",
+                resolution_reason="Automatically cleared: same-owner lineage",
+                original_reason="copy hold",
+                original_policy_version=1,
+                original_evidence={},
+                algorithm_provenance={},
+            )
+        )
+        await session.flush()
+        session.add(
+            AthReviewAction(
+                action_id=uuid4(),
+                review_id=review_id,
+                action="clear",
+                reason="Automatically cleared: same-owner lineage",
+                actor=actor,
+                evidence={},
+                created_at=_T0,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "automated_actor",
+    [
+        "owner-link:6d3f8c2a-1b4e-4c7d-9a5f-0e2b8d4c6a10",
+        "platform:deferred-source-review",
+    ],
+)
+async def test_a_board_clear_promotes_an_automated_clear_to_an_attestation(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    automated_actor: str,
+) -> None:
+    """An auto-clear is not board review (#2911); a clear ruling attests it."""
+    board = await _seed_board(maker)
+    _install(app, maker)
+    runner_id, runner_sha = board["runner"]
+    await _automated_clear(maker, runner_id, actor=automated_actor)
+    async with maker() as session:
+        assert await list_board_attested_agent_ids(session, [runner_id]) == set()
+    clear = _ruling(
+        "clear", runner_id, runner_sha, reason="Reviewed: clean board row", refs=()
+    )
+
+    preview, execute = await _preview_and_execute(client, [clear])
+
+    [item] = preview["items"]
+    assert item["disposition"] == "ready"
+    assert item["steps"] == ["attest"]
+    assert "promote the automated clear" in item["message"]
+    assert item["would_change_crown"] is False
+    [applied] = execute["items"]
+    assert applied["status"] == "applied", applied
+    assert applied["steps_applied"] == ["attest"]
+    assert await _status(maker, runner_id) == "scored"
+    review, actions = await _review(maker, runner_id)
+    assert review is not None
+    assert (review.status, review.resolution) == ("resolved", "clear")
+    assert review.resolved_by == _ACTOR
+    assert review.resolution_reason == clear["reason"]
+    assert [action.action for action in actions] == ["clear", "clear"]
+    promotion = actions[-1]
+    assert promotion.actor == _ACTOR
+    assert promotion.evidence["board_attestation"] is True
+    assert promotion.evidence["promoted_from_actor"] == automated_actor
+    assert promotion.evidence["sha256"] == runner_sha
+    async with maker() as session:
+        assert await list_board_attested_agent_ids(session, [runner_id]) == {runner_id}
+
+    # An operator clear is idempotent: the replay changes nothing.
+    replay = await client.post(_PREVIEW, json={"rulings": [clear]}, headers=_HEADERS)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["items"][0]["disposition"] == "already_applied"
+
+
+async def test_the_attest_route_promotes_an_automated_clear_once(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    board = await _seed_board(maker)
+    _install(app, maker)
+    runner_id, runner_sha = board["runner"]
+    await _automated_clear(maker, runner_id, actor=f"owner-link:{uuid4()}")
+    url = f"/api/v1/admin/copy-reviews/{runner_id}/attest"
+    payload = {
+        "expected_sha256": runner_sha,
+        "expected_score_count": 3,
+        "reason": "Reviewed: clean board row",
+    }
+
+    first = await client.post(url, json=payload, headers=_HEADERS)
+    assert first.status_code == 200, first.text
+    assert first.json()["idempotent"] is False
+    assert first.json()["review"]["resolved_by"] == _ACTOR
+    again = await client.post(url, json=payload, headers=_HEADERS)
+    assert again.status_code == 200, again.text
+    assert again.json()["idempotent"] is True
+    _review_row, actions = await _review(maker, runner_id)
+    assert [action.action for action in actions] == ["clear", "clear"]
 
 
 async def test_a_later_reject_supersedes_an_attested_clear(
