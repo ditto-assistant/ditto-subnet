@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 CLEAN_BOARD_PROTOCOL = 36
 """Validator heartbeat protocol whose fold reads ``unpaid_fractions``."""
@@ -92,8 +92,12 @@ class AdminCleanBoardSettingsRequest(BaseModel):
     scope: str = "*"
     expected_revision: Annotated[int, Field(ge=0)]
     settings: CleanBoardSettings
-    reason: Annotated[str, Field(min_length=8)]
-    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    # Judged after trimming, as the database checks them: a whitespace-padded
+    # value must be a 422 here, not an IntegrityError read as a write race.
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8)]
+    actor: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
+    ] = "admin_api"
     confirmation: str
 
 

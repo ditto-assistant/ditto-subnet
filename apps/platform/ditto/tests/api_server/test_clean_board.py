@@ -497,6 +497,36 @@ class TestAdminPolicy:
         unauthorized = await client.get(_URL)
         assert unauthorized.status_code in {401, 403}
 
+    async def test_whitespace_reason_or_actor_is_a_422_not_a_race(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        base: dict[str, Any] = {
+            "expected_revision": 0,
+            "settings": {"enabled": True},
+            "reason": "owner-approved clean board rollout",
+            "actor": "operator@example.com",
+            "confirmation": "APPLY CLEAN BOARD POLICY",
+        }
+        for bad in (
+            {"reason": "   short   "},
+            {"reason": " " * 12},
+            {"actor": "   "},
+            {"actor": " " + "a" * 121 + " "},
+        ):
+            refused = await client.post(_URL, json={**base, **bad}, headers=_HEADERS)
+            assert refused.status_code == 422, (bad, refused.text)
+        padded = await client.post(
+            _URL,
+            json={**base, "reason": "  owner-approved clean board rollout  "},
+            headers=_HEADERS,
+        )
+        assert padded.status_code == 200, padded.text
+        assert padded.json()["reason"] == "owner-approved clean board rollout"
+
 
 class TestPublicBoard:
     async def _recipients(self, client: httpx.AsyncClient) -> tuple[dict, dict]:
