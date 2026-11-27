@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     ckpt = args.out / "ckpt.pt"
     done_items, step, history = 0, 0, []
     if ckpt.exists():
-        state = torch.load(ckpt, map_location=args.device, weights_only=False)
+        state = torch.load(ckpt, map_location=args.device, weights_only=True)
         head.load_state_dict(state["head"])
         if lora:
             names = {n for n, p in net.named_parameters() if p.requires_grad}

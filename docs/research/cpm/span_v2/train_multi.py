@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     ckpt = args.out / "ckpt.pt"
     done_items, step, history = 0, 0, []
     if ckpt.exists():
-        state = torch.load(ckpt, map_location=args.device, weights_only=False)
+        state = torch.load(ckpt, map_location=args.device, weights_only=True)
         head.load_state_dict(state["head"])
         names = {n for n, p in net.named_parameters() if p.requires_grad}
         missing = names - set(state["lora"])
@@ -145,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         done_items, step, history = state["items"], state["step"], state["history"]
         log(f"resumed at item {done_items} step {step}")
     elif args.init:
-        state = torch.load(args.init, map_location=args.device, weights_only=False)
+        state = torch.load(args.init, map_location=args.device, weights_only=True)
         head.load_state_dict(state["head"])
         names = {n for n, p in net.named_parameters() if p.requires_grad}
         missing = names - set(state["lora"])
