@@ -9632,6 +9632,13 @@ export const publicEmissionRecipientSchema = z.object({
   // False only for a provisional incumbent whose share validators burn;
   // Platform omits it when true.
   paid: z.boolean().default(true),
+  // Clean-board partial burn (#2911). Platform omits each at its default:
+  // attested when not evaluated, unpaid_fraction at 0, paid_fraction at 1.
+  // paid_fraction is what validators actually pay (1 - unpaid_fraction only
+  // under clean_board_mode "enforce"); a shadow fraction is never applied.
+  attested: z.boolean().nullish(),
+  unpaid_fraction: z.number().min(0).max(1).nullish(),
+  paid_fraction: z.number().min(0).max(1).nullish(),
   // Confirmation-seed depth: distinct champion-anchored CRN seeds this top-5
   // agent has been re-scored on by the continual rescore lane.
   shared_seed_confirmations: z.number().int().nonnegative().default(0),
@@ -9693,6 +9700,11 @@ export const publicKothEmissionsSchema = z.object({
   raw_leader_miner_hotkey: z.string(),
   raw_leader_decision: publicDethroneDecisionSchema.nullable().optional(),
   recipients: z.array(publicEmissionRecipientSchema),
+  // Clean-board partial burn (#2911): enforce when validators apply it,
+  // shadow when it is only published. Absent on an older Platform.
+  clean_board_mode: z.enum(['enforce', 'shadow']).nullish(),
+  clean_board_required_protocol: z.number().int().positive().nullish(),
+  unattested_burn_share: z.number().min(0).max(1).nullish(),
   crown_rules: publicCrownRulesSchema.nullish().default(null),
   king: publicCrownKingSchema.nullish().default(null),
   challengers: z.array(publicCrownChallengerSchema).default([]),

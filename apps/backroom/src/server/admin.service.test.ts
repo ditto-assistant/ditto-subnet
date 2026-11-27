@@ -4960,6 +4960,50 @@ describe('production score reads', () => {
     })
   })
 
+  // #2911: the clean-board fields survive the read instead of being stripped.
+  it('keeps the clean-board emission fields', async () => {
+    delete process.env.DITTO_ADMIN_API_TOKEN
+    const [crowned] = emissions.recipients
+    const enforced = {
+      ...leaderboard,
+      emissions: {
+        ...emissions,
+        clean_board_mode: 'enforce',
+        clean_board_required_protocol: 36,
+        unattested_burn_share: 0.07,
+        recipients: [
+          { ...crowned, attested: true },
+          {
+            ...crowned,
+            role: 'tail',
+            agent_id: provisionalAgentId,
+            miner_hotkey: '5NewMiner',
+            raw_rank: 2,
+            share_of_miner_pool: 0.14,
+            attested: false,
+            unpaid_fraction: 0.5,
+            paid_fraction: 0.5,
+          },
+        ],
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(enforced)))
+
+    const page = await fetchScoreLeaderboard({ status: 'finalized', limit: 1, offset: 0 })
+
+    expect(page.emissions).toMatchObject({
+      clean_board_mode: 'enforce',
+      clean_board_required_protocol: 36,
+      unattested_burn_share: 0.07,
+      recipients: [
+        { agent_id: topAgentId, attested: true },
+        { agent_id: provisionalAgentId, attested: false, unpaid_fraction: 0.5, paid_fraction: 0.5 },
+      ],
+    })
+    // Absent fields stay absent: absent unpaid/paid fractions mean 0 and 1.
+    expect(page.emissions?.recipients[0]).not.toHaveProperty('paid_fraction')
+  })
+
   // #2981: a score-ceiling joint crown failed every leaderboard read, and an
   // unpaid provisional incumbent read as paid.
   it('relays a joint crown and an unpaid recipient', async () => {
