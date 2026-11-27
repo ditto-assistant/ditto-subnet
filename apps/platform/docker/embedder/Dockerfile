@@ -38,7 +38,7 @@ RUN huggingface-cli download "$MODEL_ID" \
     --local-dir-use-symlinks False
 
 # --- stage 2: the TEI runtime with the model already on disk ---
-FROM ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07
+FROM ghcr.io/huggingface/text-embeddings-inference:cpu-1.10.0@sha256:f0a4bb206b9d4877746b5b9f638e138fe683eeb9787c14d541a12c993b562d86
 RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates && rm -rf /var/lib/apt/lists/*
 
 COPY --from=fetch /model /model
