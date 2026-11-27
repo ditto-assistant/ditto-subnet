@@ -40,7 +40,7 @@ dependencies = [
     # tree-sitter-rust stays pinned to the grammar the scorer's Go binding
     # vendors (v0.21.2): another grammar emits different node types and
     # silently splits the comparison pool.
-    "tree-sitter>=0.25,<0.27",
+    "tree-sitter>=0.25,<0.28",
     "tree-sitter-rust==0.21.2",
     "numpy>=2.0",
 ]
