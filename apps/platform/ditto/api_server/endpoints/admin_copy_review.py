@@ -97,6 +97,7 @@ from ditto.db.queries.benchmark_rollout import (
     open_rollout,
     preserve_desired_authority,
 )
+from ditto.db.queries.clean_board import is_automated_clear_actor
 from ditto.db.queries.copy_hold_reference import (
     ReferencePublicRelease,
     ReferenceReleaseQuery,
@@ -1625,6 +1626,63 @@ async def attest_review(
             select(AthReview).where(AthReview.agent_id == agent_id).with_for_update()
         )
         scored_or_live = agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
+        if (
+            existing is not None
+            and existing.status == "resolved"
+            and existing.resolution == "clear"
+            and scored_or_live
+            and is_automated_clear_actor(existing.resolved_by)
+        ):
+            # An owner-link or platform auto-clear is not a board review
+            # (#2911). Promote it in place to this operator's attestation:
+            # the row stays resolved clear and the agent never leaves the
+            # board, and the action log keeps what it was promoted from.
+            now = datetime.now(UTC)
+            promoted_from = {
+                "promoted_from_actor": existing.resolved_by,
+                "promoted_from_resolved_at": (
+                    existing.resolved_at.isoformat()
+                    if existing.resolved_at is not None
+                    else None
+                ),
+                "promoted_from_reason": existing.resolution_reason,
+            }
+            existing.resolved_by = actor
+            existing.resolved_at = now
+            existing.resolution_reason = payload.reason
+            session.add(
+                AthReviewAction(
+                    action_id=uuid4(),
+                    review_id=existing.review_id,
+                    action="clear",
+                    reason=payload.reason,
+                    actor=actor,
+                    evidence={
+                        "sha256": agent.sha256,
+                        "score_count": score_count,
+                        "previous_status": agent.status.value,
+                        "hold_free": True,
+                        "board_attestation": True,
+                        **promoted_from,
+                    },
+                    created_at=now,
+                )
+            )
+            await session.flush()
+            promoted_actions = await _review_actions(session, existing.review_id)
+            candidate_coldkey, _reference_coldkey = await _review_coldkeys(
+                session, agent, None
+            )
+            return AdminCopyReviewResolveResponse(
+                review=_item(
+                    existing,
+                    agent,
+                    actions=promoted_actions,
+                    miner_coldkey=candidate_coldkey,
+                ),
+                agent_status=agent.status.value,
+                idempotent=False,
+            )
         if existing is not None:
             if (
                 existing.status == "resolved"

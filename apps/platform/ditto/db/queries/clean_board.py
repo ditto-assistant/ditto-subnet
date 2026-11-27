@@ -49,6 +49,17 @@ AUTOMATED_CLEAR_ACTOR_PREFIXES = ("platform:", "owner-link:")
 """``resolved_by`` prefixes of clears no operator made."""
 
 
+def is_automated_clear_actor(resolved_by: str | None) -> bool:
+    """Whether a clear was written by an automated path, not an operator.
+
+    Such a clear does not board-attest. An operator ``attest`` promotes it in
+    place (``attest_review``) instead of requiring a reopen.
+    """
+    return resolved_by is not None and resolved_by.startswith(
+        AUTOMATED_CLEAR_ACTOR_PREFIXES
+    )
+
+
 @dataclass(frozen=True)
 class CleanBoardFacts:
     """What the clean-board fraction reads for one agent."""

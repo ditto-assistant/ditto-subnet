@@ -107,6 +107,7 @@ from ditto.api_server.storage.errors import (
     ObjectNotFoundError,
 )
 from ditto.db.models import Agent, AgentStatus, AthReview, AthReviewAction, Score
+from ditto.db.queries.clean_board import is_automated_clear_actor
 from ditto.db.queries.ledger_epochs import latest_pin
 from ditto.db.queries.terminal_quarantine_reconciliation import (
     TERMINAL_QUARANTINE_AGENT_STATUSES,
@@ -485,7 +486,14 @@ async def _project_board(
     )
 
 
-def _ready_message(steps: list[AthRulingStep], *, reconsidering: bool) -> str:
+def _ready_message(
+    steps: list[AthRulingStep], *, reconsidering: bool, promoting: bool = False
+) -> str:
+    if steps == ["attest"] and promoting:
+        return (
+            "will promote the automated clear to an operator board attestation "
+            "(the agent stays on the board)"
+        )
     if steps == ["attest"]:
         return "will clear without holding (the agent stays on the board)"
     if steps == ["close_terminal"]:
@@ -715,6 +723,7 @@ async def _preview_ruling(
     # open_review reopens exactly that review (``reconsidering_rejection``),
     # retaining the status recorded before the reject so a clear restores it.
     # Any other path into BANNED has no review to reconsider and stays refused.
+    promoting = False
     reconsidering = (
         resolved_as == "reject"
         and agent.status == AgentStatus.BANNED
@@ -742,6 +751,16 @@ async def _preview_ruling(
     elif ruling.action == "clear":
         if held:
             steps = ["clear"]
+        elif (
+            resolved_as == "clear"
+            and scored_or_live
+            and review is not None
+            and is_automated_clear_actor(review.resolved_by)
+        ):
+            # An owner-link or platform auto-clear is not a board review
+            # (#2911): attest promotes it to this operator's clear in place.
+            steps = ["attest"]
+            promoting = True
         elif resolved_as == "clear" and (
             # A cleared below-quorum reject goes back to evaluating.
             scored_or_live or agent.status == AgentStatus.EVALUATING
@@ -858,7 +877,9 @@ async def _preview_ruling(
             ok=True,
             disposition="ready",
             steps=steps,
-            message=_ready_message(steps, reconsidering=reconsidering),
+            message=_ready_message(
+                steps, reconsidering=reconsidering, promoting=promoting
+            ),
         ),
         after,
     )
