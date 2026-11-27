@@ -23,6 +23,7 @@ import { EntityButton } from "../ui/EntityButton";
 import { HandleBadge } from "../ui/HandleBadge";
 import { MinerAvatar } from "../ui/MinerAvatar";
 import type { BoardEntry, LeaderboardStore } from "../board/leaderboard-data";
+import { paidShare } from "../../lib/payout";
 
 export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
   const store = props.store;
@@ -49,13 +50,8 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
   };
   const championRecipient = () =>
     (emissions()?.recipients || []).find((r) => r.role === "champion");
-  const share = (): number | undefined => {
-    const e = emissions();
-    const recipient = championRecipient();
-    return recipient && Number.isFinite(recipient.share_of_miner_pool)
-      ? recipient.share_of_miner_pool
-      : e?.champion_share;
-  };
+  const share = (): number | undefined =>
+    paidShare(championRecipient(), emissions()?.clean_board_mode) ?? emissions()?.champion_share;
   /** The King as the crown rules see it (protocol 34); absent from an older
    * Platform, which falls back to the board entry. */
   const king = () => {

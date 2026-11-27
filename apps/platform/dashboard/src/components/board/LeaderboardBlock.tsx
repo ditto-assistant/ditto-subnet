@@ -59,6 +59,7 @@ import {
   setLeaderboardVersionView,
 } from "./board-state";
 import { leaderboardStore } from "./leaderboard-data";
+import { cleanBoardPaidFraction, paidShare } from "../../lib/payout";
 import type { BoardEntry, LeaderboardStore } from "./leaderboard-data";
 
 /** How many historical versions stay on the row beside "Current rollout".
@@ -561,12 +562,10 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
     const entry = championEntry();
     return entry && entry.rank ? "raw #" + entry.rank : "current score pool";
   };
-  const championShare = (): number | undefined => {
-    const recipient = championRecipient();
-    return recipient && Number.isFinite(recipient.share_of_miner_pool)
-      ? recipient.share_of_miner_pool
-      : emissions()?.champion_share;
-  };
+  const championShare = (): number | undefined =>
+    paidShare(championRecipient(), emissions()?.clean_board_mode) ?? emissions()?.champion_share;
+  const championPaidFraction = (): number | undefined =>
+    cleanBoardPaidFraction(championRecipient(), emissions()?.clean_board_mode);
 
   // Every consensus constant in this strip comes from the fold the API
   // reports (margin, dethrone_z, champion_share, rank_shares, tail_size).
@@ -789,7 +788,12 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
                       <>
                         {" (" + championRank() + ") receives "}
                         {pct(championShare() as number)}
-                        {" of the miner pool."}
+                        {" of the miner pool"}
+                        {championPaidFraction() !== undefined
+                          ? ", " +
+                            pct(championPaidFraction() as number) +
+                            " of its slot pending board review."
+                          : "."}
                       </>
                     }
                   >
@@ -890,8 +894,14 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
                     <Show when={entry()} fallback={label()}>
                       {(e) => <EntityButton kind="agent" id={e().agent_id} label={label()} />}
                     </Show>{" "}
-                    {pct(recipient.share_of_miner_pool as number)}
+                    {pct(
+                      (paidShare(recipient, emissions()?.clean_board_mode) ??
+                        recipient.share_of_miner_pool) as number,
+                    )}
                     {recipient.paid === false ? " unpaid" : ""}
+                    {cleanBoardPaidFraction(recipient, emissions()?.clean_board_mode) !== undefined
+                      ? " (pending board review)"
+                      : ""}
                     <Show when={note()}>
                       {(n) => (
                         <>

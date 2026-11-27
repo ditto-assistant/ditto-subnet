@@ -81,6 +81,7 @@ import { HandleBadge } from "../ui/HandleBadge";
 import { TipTarget } from "../ui/Tooltip";
 import { MinerAvatar } from "../ui/MinerAvatar";
 import { ChainWeightsPanel } from "./ChainWeightsPanel";
+import { cleanBoardPaidFraction, paidShare } from "../../lib/payout";
 
 // Matching agent name, UID, and hotkey covers how people actually look a
 // miner up: by what they called it, by the number on the board, or by
@@ -717,8 +718,17 @@ function BoardRow(props: {
                     ? "Joint crown"
                     : "Tail") +
                   " · " +
-                  pct(recipient().share_of_miner_pool as number) +
-                  (recipient().paid === false ? " · unpaid" : "")}
+                  pct(
+                    (paidShare(recipient(), props.store.emissions()?.clean_board_mode) ??
+                      recipient().share_of_miner_pool) as number,
+                  ) +
+                  (recipient().paid === false ? " · unpaid" : "") +
+                  (cleanBoardPaidFraction(
+                    recipient(),
+                    props.store.emissions()?.clean_board_mode,
+                  ) !== undefined
+                    ? " · pending board review"
+                    : "")}
               </span>
             )}
           </Show>

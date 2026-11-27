@@ -27,6 +27,14 @@ export interface EmissionRecipient {
    * holds this slot while its review is open and validators burn the share
    * instead of reassigning it. Absent means paid. */
   paid?: boolean;
+  /** Clean-board burn (#2911): whether this exact artifact passed operator
+   * board review. Absent when the policy was not evaluated. */
+  attested?: boolean | null;
+  /** The slot fraction the policy leaves unpaid (absent means 0). Published
+   * in shadow too; only `clean_board_mode: "enforce"` applies it. */
+  unpaid_fraction?: number | null;
+  /** The slot fraction validators actually pay (absent means 1). */
+  paid_fraction?: number | null;
   shared_seed_confirmations?: number | null;
 }
 
@@ -91,6 +99,12 @@ export interface EmissionsFold {
   /** "enforce" while the terminal-review gate is withholding from this
    * projection; absent when it is off or in shadow. */
   reward_eligibility_mode?: string | null;
+  /** Clean-board burn (#2911): "enforce" when validators apply the unpaid
+   * fractions, "shadow" when they are only published. */
+  clean_board_mode?: "enforce" | "shadow" | null;
+  clean_board_required_protocol?: number | null;
+  /** Share of the miner pool the policy leaves unpaid across recipients. */
+  unattested_burn_share?: number | null;
   margin?: number;
   dethrone_z?: number;
   champion_share?: number;
