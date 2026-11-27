@@ -367,6 +367,41 @@ def _ledger_provisional_incumbent(ledger: LedgerResponse) -> LedgerEntry | None:
     return provisional
 
 
+def _ledger_unpaid_fractions(ledger: LedgerResponse) -> dict[UUID, float]:
+    """The protocol-36 unpaid fraction of each named paid slot (#2911).
+
+    Platform serves the map only once every recently-live weight setter reports
+    v36, so the whole fleet burns the same fractions in the same epoch. It is
+    all-or-nothing: a key that is not a payable entry, or a value that is not a
+    finite float in ``(0, 1]``, makes the whole map unusable. Like a malformed
+    payout curve (:func:`_ledger_rank_shares`), every validator then ignores it
+    identically and folds exactly as protocol 35, paying every slot in full.
+    """
+    served = getattr(ledger, "unpaid_fractions", None)
+    if not served:
+        return {}
+    payable = {entry.agent_id for entry in ledger.entries}
+    fractions: dict[UUID, float] = {}
+    for agent_id, fraction in served.items():
+        if (
+            not isinstance(agent_id, UUID)
+            or agent_id not in payable
+            or isinstance(fraction, bool)
+            or not isinstance(fraction, (int, float))
+            or not math.isfinite(fraction)
+            or not 0.0 < fraction <= 1.0
+        ):
+            logger.warning(
+                "ledger unpaid_fractions is unusable (%s -> %r); folding every "
+                "slot paid in full",
+                agent_id,
+                fraction,
+            )
+            return {}
+        fractions[agent_id] = float(fraction)
+    return fractions
+
+
 def _receipt_provenance_ready(ledger: Any) -> bool:
     """True when the ledger can take the Pylon receipt path.
 
@@ -3031,6 +3066,8 @@ class ValidatorWorker:
         # slot it occupies burns; it passes the same confirmation and
         # registration filters as any payable entry.
         provisional = _ledger_provisional_incumbent(ledger)
+        # Protocol 36: part of an unattested paid slot burns the same way.
+        unpaid_fractions = _ledger_unpaid_fractions(ledger)
         weight_entries = _ledger_weight_entries(ledger)
         dueling_dropped = dueling_fold_dropped(weight_entries)
         if dueling_dropped:
@@ -3162,6 +3199,7 @@ class ValidatorWorker:
                 unpaid_agent_id=(
                     provisional.agent_id if provisional is not None else None
                 ),
+                unpaid_fractions=unpaid_fractions,
             ),
             router_entries=tuple(
                 e
@@ -3220,9 +3258,10 @@ class ValidatorWorker:
         )
         if paid_fraction < 1.0:
             logger.info(
-                "provisional incumbent %s holds the crown unpaid; %.2f%% of the "
-                "miner vector burns instead of being reassigned",
+                "provisional incumbent %s and %d unattested slot(s) leave part of "
+                "the miner vector unpaid; %.2f%% burns instead of being reassigned",
                 provisional.agent_id if provisional is not None else None,
+                len(unpaid_fractions),
                 (1.0 - paid_fraction) * 100.0,
             )
         self._log_shadow_tracks(registry, track_vectors, router_ledger)

@@ -2458,6 +2458,19 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = None
+    unpaid_fractions: dict[UUID, float] = Field(
+        default_factory=dict,
+        exclude_if=lambda value: not value,
+        description=(
+            "Protocol 36 (#2911). The unpaid fraction of each named entry's "
+            "paid slot: ``agent_id -> f`` with ``0 < f <= 1``, every key one of "
+            "entries. A recipient pays ``share * (1 - f)`` to its hotkey and "
+            "burns ``share * f``; crown, rank, tie pooling and the score-ceiling "
+            "cohort are unchanged. Served only once every recently-live weight "
+            "setter reports v36. Absent or empty folds exactly as protocol 35; "
+            "a map the fold cannot use is ignored whole."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
