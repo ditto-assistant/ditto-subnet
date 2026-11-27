@@ -87,3 +87,5 @@ whole seeds for validation and test.
   Bittensor GPU subnets (Lium first) beside the AWS lane.
 - [open-questions.md](open-questions.md): open questions for ML review
   (train-on-test within a season, noise, copying, metric, determinism).
+- [span-v2.md](span-v2.md): draft v2 span-extraction interface, grading and
+  version plan, with the Mac mini PoC in [`span_v2/`](span_v2/).
