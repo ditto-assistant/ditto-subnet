@@ -185,7 +185,7 @@ async def create_settings_revision(
                 f"(expected {payload.expected_revision}, current {actual_revision})"
             ),
         )
-    settings = payload.settings
+    settings: InferenceConcurrencySettings = payload.settings
     omitted = ADDITIVE_SETTINGS_FIELDS - payload.settings.model_fields_set
     if omitted:
         # Rolling-upgrade compatibility: an older Backroom knows the original

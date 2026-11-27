@@ -253,6 +253,52 @@ class TestWrite:
         assert settings["cost_ceiling_mode"] == "enforce"
         assert settings["embedding_per_ticket_concurrency"] == 10
 
+    async def test_a_mode_change_may_keep_the_stored_ceiling(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A write that moves only the mode is judged with the ceiling it keeps."""
+        _install(app, settings_maker)
+        first = await client.post(
+            _URL,
+            json=_payload(
+                run_cost_ceiling_microusd=5_000_000, cost_ceiling_mode="shadow"
+            ),
+            headers=_HEADERS,
+        )
+        assert first.status_code == 200, first.text
+        promote = _settings(cost_ceiling_mode="enforce")
+        promote.pop("run_cost_ceiling_microusd", None)
+        promote.pop("case_cost_report_microusd", None)
+        moved = await client.post(
+            _URL,
+            json=_payload(expected_revision=1, settings=promote),
+            headers=_HEADERS,
+        )
+        assert moved.status_code == 200, moved.text
+        settings = moved.json()["settings"]
+        assert settings["cost_ceiling_mode"] == "enforce"
+        assert settings["run_cost_ceiling_microusd"] == 5_000_000
+
+    async def test_a_mode_with_no_ceiling_stored_is_still_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Deferring the rule to the merge never lets a ceiling-less mode in."""
+        _install(app, settings_maker)
+        bare = _settings(cost_ceiling_mode="enforce")
+        bare.pop("run_cost_ceiling_microusd", None)
+        bare.pop("case_cost_report_microusd", None)
+        refused = await client.post(
+            _URL, json=_payload(settings=bare), headers=_HEADERS
+        )
+        assert refused.status_code == 422, refused.text
+        assert "needs run_cost_ceiling_microusd" in refused.text
+
     async def test_wrong_confirmation_is_refused(
         self,
         app: FastAPI,

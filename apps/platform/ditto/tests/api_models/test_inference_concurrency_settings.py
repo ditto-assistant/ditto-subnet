@@ -40,6 +40,7 @@ from ditto.api_models.inference_concurrency_settings import (
     AdminInferenceConcurrencySettingsRequest,
     BenchmarkRuntimeSettings,
     InferenceConcurrencySettings,
+    InferenceConcurrencySettingsWrite,
 )
 
 # The values the hosted v7 lane ran at while it was still sized for a local
@@ -261,7 +262,7 @@ class TestWriteContract:
     def _request(self, **settings: Any) -> AdminInferenceConcurrencySettingsRequest:
         return AdminInferenceConcurrencySettingsRequest(
             expected_revision=0,
-            settings=InferenceConcurrencySettings(**settings),
+            settings=InferenceConcurrencySettingsWrite(**settings),
             reason="widen the hosted embedding lane",
             confirmation="APPLY INFERENCE CONCURRENCY SETTINGS",
         )
@@ -455,7 +456,7 @@ class TestChatBudgetsSurviveAnEmbeddingOnlyEdit:
         with pytest.raises(ValidationError) as caught:
             AdminInferenceConcurrencySettingsRequest(
                 expected_revision=3,
-                settings=InferenceConcurrencySettings(
+                settings=InferenceConcurrencySettingsWrite(
                     embedding_per_ticket_concurrency=128,
                     embedding_per_validator_concurrency=128,
                     embedding_global_concurrency=128,

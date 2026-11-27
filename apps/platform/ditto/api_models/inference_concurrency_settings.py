@@ -178,6 +178,10 @@ ADDITIVE_SETTINGS_FIELDS = frozenset(
         "case_cost_report_microusd",
     )
 )
+# The additive fields the cost-ceiling rules read.
+ADDITIVE_COST_CEILING_FIELDS = frozenset(
+    ("run_cost_ceiling_microusd", "cost_ceiling_mode", "case_cost_report_microusd")
+)
 
 DEFAULT_BENCHMARK_CASE_CONCURRENCY = 4
 MAX_BENCHMARK_CASE_CONCURRENCY = 64
@@ -540,8 +544,7 @@ class InferenceConcurrencySettings(BaseModel):
     an unexpired free-trial deadline; ineligible requests use OpenRouter.
     """
 
-    @model_validator(mode="after")
-    def _hierarchy_holds(self) -> InferenceConcurrencySettings:
+    def _cost_ceiling_holds(self) -> None:
         if self.cost_ceiling_mode != "off" and self.run_cost_ceiling_microusd is None:
             raise ValueError(
                 f"cost_ceiling_mode {self.cost_ceiling_mode!r} needs "
@@ -558,6 +561,10 @@ class InferenceConcurrencySettings(BaseModel):
                 f"({self.case_cost_report_microusd}) may not exceed "
                 f"run_cost_ceiling_microusd ({self.run_cost_ceiling_microusd})"
             )
+
+    @model_validator(mode="after")
+    def _hierarchy_holds(self) -> InferenceConcurrencySettings:
+        self._cost_ceiling_holds()
         if self.chat_per_ticket_concurrency > self.chat_per_validator_concurrency:
             raise ValueError(
                 "chat_per_ticket_concurrency "
@@ -632,6 +639,21 @@ class InferenceConcurrencySettings(BaseModel):
         return self
 
 
+class InferenceConcurrencySettingsWrite(InferenceConcurrencySettings):
+    """The settings body of a write, which may omit ``ADDITIVE_SETTINGS_FIELDS``.
+
+    The cost-ceiling rules read additive fields. When a write omits one, the
+    endpoint overlays its current value and re-validates the merged policy as
+    a plain :class:`InferenceConcurrencySettings`, so the rule is judged there
+    rather than against a default the caller never sent. Every other rule, and
+    every rule over fields the write did send, still runs here.
+    """
+
+    def _cost_ceiling_holds(self) -> None:
+        if ADDITIVE_COST_CEILING_FIELDS.issubset(self.model_fields_set):
+            super()._cost_ceiling_holds()
+
+
 class InferenceConcurrencySettingsRevision(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -663,7 +685,7 @@ class AdminInferenceConcurrencySettingsRequest(BaseModel):
 
     scope: str = "*"
     expected_revision: Annotated[int, Field(ge=0)]
-    settings: InferenceConcurrencySettings
+    settings: InferenceConcurrencySettingsWrite
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str

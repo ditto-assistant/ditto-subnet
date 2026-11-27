@@ -14436,7 +14436,7 @@ export interface components {
              * @default *
              */
             scope: string;
-            settings: components["schemas"]["InferenceConcurrencySettings"];
+            settings: components["schemas"]["InferenceConcurrencySettingsWrite"];
         };
         /** AdminInferenceConcurrencySettingsResponse */
         AdminInferenceConcurrencySettingsResponse: {
@@ -30286,6 +30286,111 @@ export interface components {
             /** Scope */
             scope: string;
             settings: components["schemas"]["InferenceConcurrencySettings"];
+        };
+        /**
+         * InferenceConcurrencySettingsWrite
+         * @description The settings body of a write, which may omit ``ADDITIVE_SETTINGS_FIELDS``.
+         *
+         *     The cost-ceiling rules read additive fields. When a write omits one, the
+         *     endpoint overlays its current value and re-validates the merged policy as
+         *     a plain :class:`InferenceConcurrencySettings`, so the rule is judged there
+         *     rather than against a default the caller never sent. Every other rule, and
+         *     every rule over fields the write did send, still runs here.
+         */
+        InferenceConcurrencySettingsWrite: {
+            benchmark_runtime?: components["schemas"]["BenchmarkRuntimeSettings"];
+            /** Case Cost Report Microusd */
+            case_cost_report_microusd?: number | null;
+            /**
+             * Chat Global Concurrency
+             * @default 96
+             */
+            chat_global_concurrency: number;
+            /**
+             * Chat Global Requests Per Minute
+             * @default 23040
+             */
+            chat_global_requests_per_minute: number;
+            /**
+             * Chat Per Ticket Concurrency
+             * @default 16
+             */
+            chat_per_ticket_concurrency: number;
+            /**
+             * Chat Per Ticket Requests Per Minute
+             * @default 1920
+             */
+            chat_per_ticket_requests_per_minute: number;
+            /**
+             * Chat Per Validator Concurrency
+             * @default 48
+             */
+            chat_per_validator_concurrency: number;
+            /**
+             * Chat Per Validator Requests Per Minute
+             * @default 7680
+             */
+            chat_per_validator_requests_per_minute: number;
+            /**
+             * Chat Request Budget
+             * @default 16384
+             */
+            chat_request_budget: number;
+            /**
+             * Chat Token Budget
+             * @default 25000000
+             */
+            chat_token_budget: number;
+            /**
+             * Cost Ceiling Mode
+             * @default off
+             * @enum {string}
+             */
+            cost_ceiling_mode: "off" | "shadow" | "enforce";
+            /**
+             * Danilabs Percent
+             * @default 0
+             */
+            danilabs_percent: number;
+            decision_lane?: components["schemas"]["DecisionLaneSettings"];
+            /**
+             * Embedding Global Concurrency
+             * @default 96
+             */
+            embedding_global_concurrency: number;
+            /**
+             * Embedding Global Requests Per Minute
+             * @default 100000
+             */
+            embedding_global_requests_per_minute: number;
+            /**
+             * Embedding Per Ticket Concurrency
+             * @default 12
+             */
+            embedding_per_ticket_concurrency: number;
+            /**
+             * Embedding Per Ticket Requests Per Minute
+             * @default 10000
+             */
+            embedding_per_ticket_requests_per_minute: number;
+            /**
+             * Embedding Per Validator Concurrency
+             * @default 48
+             */
+            embedding_per_validator_concurrency: number;
+            /**
+             * Embedding Per Validator Requests Per Minute
+             * @default 40000
+             */
+            embedding_per_validator_requests_per_minute: number;
+            /** Run Cost Ceiling Microusd */
+            run_cost_ceiling_microusd?: number | null;
+            /**
+             * Scored Provider Routing
+             * @default throughput
+             * @enum {string}
+             */
+            scored_provider_routing: "throughput" | "bf16_price_order_canary" | "bf16_price_order";
         };
         /**
          * InferenceCostEvidence
