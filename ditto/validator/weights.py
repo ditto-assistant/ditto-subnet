@@ -916,6 +916,7 @@ def compute_weights(
     incumbent_agent_id: UUID | None = None,
     unpaid_agent_id: UUID | None = None,
     crown_gate: CrownGate | None = None,
+    unpaid_fractions: Mapping[UUID, float] | None = None,
 ) -> dict[str, float]:
     """Return ``{miner_hotkey: weight}`` for the KOTH+ATH mechanism.
 
@@ -975,6 +976,15 @@ def compute_weights(
     cohort -- exactly like any other, but whose shares are reported under
     :data:`UNPAID_SHARE_KEY` instead of its hotkey so the caller burns them
     (:func:`split_unpaid_share`). ``None`` leaves the vector exactly as before.
+
+    ``unpaid_fractions`` (protocol 36, #2911) generalises that to part of a slot:
+    a recipient whose ``agent_id`` maps to ``f`` reports ``share * (1 - f)``
+    under its hotkey and ``share * f`` under :data:`UNPAID_SHARE_KEY`, so the
+    caller burns that part. ``f >= 1`` is exactly the provisional incumbent's
+    treatment, and ``unpaid_agent_id`` always counts as ``f = 1``. The fold never
+    reads the map before choosing recipients, so crown, rank, tie pooling and the
+    score-ceiling cohort are the same with or without it, and an empty map
+    reproduces the protocol-35 vector byte for byte.
     """
     eligible = filter_eligible(entries)
     scored = [e for e in eligible if _effective_composite(e) > 0.0]
@@ -1035,14 +1045,24 @@ def compute_weights(
             dethrone_z=dethrone_z,
             statistical_band_cap=statistical_band_cap,
         )
-    weights = {
-        (
-            UNPAID_SHARE_KEY
+    fractions = unpaid_fractions or {}
+    weights: dict[str, float] = {}
+    for index, entry in enumerate(recipients):
+        share = recipient_shares[index]
+        unpaid = (
+            1.0
             if entry.agent_id == unpaid_agent_id
-            else entry.miner_hotkey
-        ): recipient_shares[index]
-        for index, entry in enumerate(recipients)
-    }
+            else fractions.get(entry.agent_id, 0.0)
+        )
+        if unpaid >= 1.0:
+            weights[UNPAID_SHARE_KEY] = weights.get(UNPAID_SHARE_KEY, 0.0) + share
+        elif unpaid > 0.0:
+            weights[entry.miner_hotkey] = share * (1.0 - unpaid)
+            weights[UNPAID_SHARE_KEY] = weights.get(UNPAID_SHARE_KEY, 0.0) + (
+                share * unpaid
+            )
+        else:
+            weights[entry.miner_hotkey] = share
 
     return weights
 

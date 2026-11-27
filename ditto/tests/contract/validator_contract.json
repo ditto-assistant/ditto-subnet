@@ -6590,6 +6590,15 @@
         ],
         "default": null
       },
+      "unpaid_fractions": {
+        "additionalProperties": {
+          "type": "number"
+        },
+        "propertyNames": {
+          "format": "uuid"
+        },
+        "type": "object"
+      },
       "v9_confirmation_mode": {
         "anyOf": [
           {

@@ -172,7 +172,15 @@ from ditto import __version__
 # rotation re-score doubles as duel evidence) by re-deriving its CRN binding;
 # Platform issues those only to v35+ validators. Heartbeat signing bytes are
 # unchanged.
-HEARTBEAT_PROTOCOL_VERSION = 35
+# v36 consumes ``LedgerResponse.unpaid_fractions`` (#2911): a paid slot whose
+# agent has not passed operator board review past its grace window pays
+# ``share * (1 - f)`` and burns ``share * f`` after the service bucket is
+# reserved, exactly as the protocol-28 provisional incumbent burns its whole
+# slot. Crown, rank and the cohort are unchanged. A v35 validator ignores the
+# additive field and pays every slot in full -- a different vector -- so
+# Platform withholds it until every recently-live weight setter reports v36+.
+# Heartbeat signing bytes are unchanged.
+HEARTBEAT_PROTOCOL_VERSION = 36
 
 
 @dataclass(frozen=True)

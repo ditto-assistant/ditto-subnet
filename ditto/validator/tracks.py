@@ -95,6 +95,7 @@ class MemoryFoldParams:
     incumbent_agent_id: UUID | None = None
     unpaid_agent_id: UUID | None = None
     crown_gate: CrownGate | None = None
+    unpaid_fractions: Mapping[UUID, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -139,6 +140,7 @@ def memory_fold(inputs: TrackFoldInputs) -> dict[str, float]:
         incumbent_agent_id=params.incumbent_agent_id,
         unpaid_agent_id=params.unpaid_agent_id,
         crown_gate=params.crown_gate,
+        unpaid_fractions=params.unpaid_fractions,
     )
 
 

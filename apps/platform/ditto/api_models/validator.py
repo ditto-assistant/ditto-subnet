@@ -2638,20 +2638,17 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = None
-    unpaid_fractions: dict[UUID, Annotated[float, Field(gt=0.0, le=1.0)]] = Field(
+    unpaid_fractions: dict[UUID, float] = Field(
         default_factory=dict,
         exclude_if=lambda value: not value,
         description=(
-            "Protocol 36, the clean-board partial burn (#2911). Maps "
-            "agent_id to the fraction of that entry's slot left unpaid: an "
-            "agent that has not passed operator board review once its grace "
-            "window has run out. Every key is an agent_id in entries. The "
-            "fold derives champion, tail, tie pooling and the score-ceiling "
-            "cohort exactly as without it, then reports share * (1 - f) "
-            "under the recipient's hotkey and burns share * f, after the "
-            "service bucket is reserved. Served only while the operator "
-            "policy is enabled and every recently-live weight setter "
-            "reports protocol 36. Absent folds exactly as protocol 35."
+            "Protocol 36 (#2911). The unpaid fraction of each named entry's "
+            "paid slot: ``agent_id -> f`` with ``0 < f <= 1``, every key one of "
+            "entries. A recipient pays ``share * (1 - f)`` to its hotkey and "
+            "burns ``share * f``; crown, rank, tie pooling and the score-ceiling "
+            "cohort are unchanged. Served only once every recently-live weight "
+            "setter reports v36. Absent or empty folds exactly as protocol 35; "
+            "a map the fold cannot use is ignored whole."
         ),
     )
 
