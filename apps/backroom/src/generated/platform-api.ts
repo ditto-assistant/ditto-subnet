@@ -1251,6 +1251,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/clean-board-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_api_v1_admin_clean_board_settings_get"];
+        put?: never;
+        /** Create Settings Revision */
+        post: operations["create_settings_revision_api_v1_admin_clean_board_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/competition-improvement/metrics": {
         parameters: {
             query?: never;
@@ -12432,6 +12450,35 @@ export interface components {
             /** Validator Hotkey */
             validator_hotkey: string;
         };
+        /** AdminCleanBoardSettingsRequest */
+        AdminCleanBoardSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @default *
+             */
+            scope: string;
+            settings: components["schemas"]["CleanBoardSettings"];
+        };
+        /** AdminCleanBoardSettingsResponse */
+        AdminCleanBoardSettingsResponse: {
+            /** Current */
+            current: components["schemas"]["CleanBoardSettingsRevision"][];
+            default: components["schemas"]["CleanBoardSettings"];
+            effective: components["schemas"]["EffectiveCleanBoardSettings"];
+            /** History */
+            history: components["schemas"]["CleanBoardSettingsRevision"][];
+        };
         /** AdminConfirmationBundleListResponse */
         AdminConfirmationBundleListResponse: {
             /** Active Bench Version */
@@ -22496,6 +22543,48 @@ export interface components {
             zeroed_cases: number;
         };
         /**
+         * CleanBoardSettings
+         * @description Complete subnet-global clean-board policy stored per revision.
+         */
+        CleanBoardSettings: {
+            /**
+             * Attestation Grace Seconds
+             * @default 86400
+             */
+            attestation_grace_seconds: number;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Unattested Slot Burn Share
+             * @default 0.5
+             */
+            unattested_slot_burn_share: number;
+        };
+        /** CleanBoardSettingsRevision */
+        CleanBoardSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["CleanBoardSettings"];
+        };
+        /**
          * CodeFingerprint
          * @description A bottom-k MinHash (KMV) sketch of a submission's source.
          *
@@ -26079,6 +26168,30 @@ export interface components {
             /** Scope */
             scope: string;
             settings: components["schemas"]["BurnSettings"];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "revision" | "default";
+        };
+        /** EffectiveCleanBoardSettings */
+        EffectiveCleanBoardSettings: {
+            /** Checksum */
+            checksum: string;
+            /** Max Age Seconds */
+            max_age_seconds: number;
+            /**
+             * Required Protocol
+             * @default 36
+             */
+            required_protocol: number;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            /** Served */
+            served?: boolean | null;
+            settings: components["schemas"]["CleanBoardSettings"];
             /**
              * Source
              * @enum {string}
@@ -32120,6 +32233,13 @@ export interface components {
              */
             treasury_pin?: components["schemas"]["TreasuryLedgerPin"] | components["schemas"]["EnforcingTreasuryPin"] | null;
             /**
+             * Unpaid Fractions
+             * @description Protocol 36 (#2911). The unpaid fraction of each named entry's paid slot: ``agent_id -> f`` with ``0 < f <= 1``, every key one of entries. A recipient pays ``share * (1 - f)`` to its hotkey and burns ``share * f``; crown, rank, tie pooling and the score-ceiling cohort are unchanged. Served only once every recently-live weight setter reports v36. Absent or empty folds exactly as protocol 35; a map the fold cannot use is ignored whole.
+             */
+            unpaid_fractions?: {
+                [key: string]: number;
+            };
+            /**
              * V9 Confirmation Mode
              * @description Fail-closed marker: every Bench v9 entry must carry a valid full-confirmation receipt while present.
              */
@@ -37803,6 +37923,11 @@ export interface components {
              * @description The recipient's folded agent id.
              */
             agent_id: string;
+            /**
+             * Attested
+             * @description Whether this exact artifact passed operator board review (a resolved clear in the ATH court; #2911). ``None`` when the clean-board policy was not evaluated for this projection.
+             */
+            attested?: boolean | null;
             /** Miner Hotkey */
             miner_hotkey: string;
             /**
@@ -37811,6 +37936,12 @@ export interface components {
              * @default true
              */
             paid: boolean;
+            /**
+             * Paid Fraction
+             * @description The fraction of ``share_of_miner_pool`` validators actually pay this hotkey: ``0`` for an unpaid provisional incumbent, ``1 - unpaid_fraction`` while the clean-board burn is enforced, and ``1`` otherwise. The rest is burned.
+             * @default 1
+             */
+            paid_fraction: number;
             /**
              * Raw Rank
              * @description This entry's independent rank by the finalized canonical median ``composite`` -- deliberately a different ordering from the board's ``rank``, which uses ``official_composite``. A champion carrying ``raw_rank: 4`` is not an inconsistency: it means three agents beat it on the single-quorum median while it leads on the continual mean that actually folds into emissions. Do not read this as a leaderboard position.
@@ -37833,6 +37964,12 @@ export interface components {
              * @default 0
              */
             shared_seed_confirmations: number;
+            /**
+             * Unpaid Fraction
+             * @description The clean-board fraction of this slot the policy leaves unpaid: an unattested agent past its grace window (#2911). Reported in shadow too; ``clean_board_mode`` says whether validators apply it.
+             * @default 0
+             */
+            unpaid_fraction: number;
         };
         /**
          * PublicEmissionShare
@@ -38357,6 +38494,16 @@ export interface components {
             /** Champion Share */
             champion_share: number;
             /**
+             * Clean Board Mode
+             * @description The clean-board partial burn (#2911): ``enforce`` when the policy is enabled and the weight-setting fleet folds it, ``shadow`` when the fractions are only computed and published. ``None`` when the policy was not evaluated.
+             */
+            clean_board_mode?: ("enforce" | "shadow") | null;
+            /**
+             * Clean Board Required Protocol
+             * @default 36
+             */
+            clean_board_required_protocol: number;
+            /**
              * Crown Incumbent Active
              * @description Whether the displayed fold defends the crown from the previous pin's champion (crown_mode incumbent) instead of re-deriving it from the earliest lineage on every read.
              * @default false
@@ -38430,6 +38577,12 @@ export interface components {
              * @default 20
              */
             tie_weighting_required_protocol: number;
+            /**
+             * Unattested Burn Share
+             * @description The share of the miner pool the clean-board policy leaves unpaid across all recipients: burned under ``enforce``, what would be burned under ``shadow``.
+             * @default 0
+             */
+            unattested_burn_share: number;
         };
         /**
          * PublicLeaderboardEntry
@@ -38987,7 +39140,7 @@ export interface components {
              * V9 Confirmation Mode
              * @description Active Bench v9 confirmation policy. Shadow publishes measured LongMemEval and ablation evidence without changing ranking or emissions. Enforce makes full confirmation authoritative and suppresses base-only or provisional rows. Null means off.
              */
-            v9_confirmation_mode?: ("shadow" | "enforce") | null;
+            v9_confirmation_mode?: ("enforce" | "shadow") | null;
         };
         /**
          * PublicLedgerActor
@@ -54790,6 +54943,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_settings_api_v1_admin_clean_board_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCleanBoardSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_clean_board_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminCleanBoardSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CleanBoardSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

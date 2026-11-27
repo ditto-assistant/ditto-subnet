@@ -174,6 +174,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'record_bounty_evaluation',
   'decide_bounty_evaluation',
   'set_burn_settings',
+  'set_clean_board_policy',
   'set_track_share_settings',
   'set_emission_allocation',
   'set_confirmation_bundle_settings',

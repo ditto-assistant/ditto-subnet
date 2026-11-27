@@ -460,6 +460,9 @@ import {
   agentEmissionEligibilityInputSchema,
   agentEmissionEligibilitySchema,
   burnSettingsControlSchema,
+  cleanBoardSettingsControlSchema,
+  cleanBoardSettingsRevisionSchema,
+  setCleanBoardSettingsInputSchema,
   trackShareSettingsControlSchema,
   trackShareSettingsRevisionSchema,
   setTrackShareSettingsInputSchema,
@@ -1689,6 +1692,41 @@ export async function fetchAgentEmissionEligibility(rawInput: unknown) {
     `/api/v1/admin/agents/${encodeURIComponent(agentId)}/emission-eligibility`,
   )
   return agentEmissionEligibilitySchema.parse(payload)
+}
+
+const CLEAN_BOARD_SETTINGS_PATH = '/api/v1/admin/clean-board-settings'
+
+export async function fetchCleanBoardSettings() {
+  const payload = await platformAdminRequest(CLEAN_BOARD_SETTINGS_PATH)
+  return cleanBoardSettingsControlSchema.parse(payload)
+}
+
+export async function setCleanBoardSettings(rawInput: unknown, actor: string) {
+  const input = setCleanBoardSettingsInputSchema.parse(rawInput)
+  try {
+    const payload = await platformAdminRequest(CLEAN_BOARD_SETTINGS_PATH, {
+      method: 'POST',
+      actor,
+      body: {
+        scope: input.scope,
+        expected_revision: input.expectedRevision,
+        settings: input.settings,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    })
+    cleanBoardSettingsRevisionSchema.parse(payload)
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause)
+    if (/clean board settings changed/i.test(message)) {
+      throw new Error(
+        `${message}. Nothing was applied: re-read get_clean_board_policy and resubmit with the revision it reports.`,
+      )
+    }
+    throw cause
+  }
+  return fetchCleanBoardSettings()
 }
 
 const BURN_SETTINGS_PATH = '/api/v1/admin/burn-settings'

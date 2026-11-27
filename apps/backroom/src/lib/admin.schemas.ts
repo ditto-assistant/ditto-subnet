@@ -1939,6 +1939,63 @@ export const setBurnSettingsInputSchema = z.object({
   confirmation: z.literal(BURN_CONFIRMATION),
 })
 
+// Clean-board partial burn (ditto-subnet #2911). A paid slot whose agent has
+// not passed operator board review is paid 1 - unattested_slot_burn_share of
+// its share once its grace window has run out; the rest burns. Ranking is
+// untouched. Ships disabled: shadow fractions are still computed and shown on
+// the public board, but the ledger serves nothing until enabled AND every
+// recently-live weight setter reports protocol 36.
+export const CLEAN_BOARD_SCOPE = '*'
+export const CLEAN_BOARD_CONFIRMATION = 'APPLY CLEAN BOARD POLICY'
+export const MAX_ATTESTATION_GRACE_SECONDS = 604_800
+
+export const cleanBoardSettingsSchema = z.object({
+  enabled: z.boolean(),
+  unattested_slot_burn_share: z.number().min(0).max(1),
+  attestation_grace_seconds: z.number().int().min(0).max(MAX_ATTESTATION_GRACE_SECONDS),
+})
+
+export const cleanBoardSettingsRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  settings: cleanBoardSettingsSchema,
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string(),
+  checksum: z.string().regex(/^[0-9a-f]{64}$/),
+})
+
+export const effectiveCleanBoardSettingsSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  settings: cleanBoardSettingsSchema,
+  checksum: z.string().regex(/^(?:[0-9a-f]{64})?$/),
+  source: z.enum(['revision', 'default']),
+  max_age_seconds: z.number().nonnegative(),
+  required_protocol: z.number().int().positive(),
+  // True only when enabled and the weight-setting fleet folds protocol 36;
+  // null when fleet readiness could not be read.
+  served: z.boolean().nullable().default(null),
+})
+
+export const cleanBoardSettingsControlSchema = z.object({
+  current: z.array(cleanBoardSettingsRevisionSchema),
+  history: z.array(cleanBoardSettingsRevisionSchema),
+  default: cleanBoardSettingsSchema,
+  effective: effectiveCleanBoardSettingsSchema,
+})
+
+export const setCleanBoardSettingsInputSchema = z.object({
+  scope: z.literal(CLEAN_BOARD_SCOPE).default(CLEAN_BOARD_SCOPE),
+  expectedRevision: z.number().int().nonnegative(),
+  settings: cleanBoardSettingsSchema,
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(CLEAN_BOARD_CONFIRMATION),
+})
+
+export type CleanBoardSettingsControl = z.infer<typeof cleanBoardSettingsControlSchema>
+
 export type BurnSettings = z.infer<typeof burnSettingsSchema>
 export type BurnSettingsWrite = z.infer<typeof burnSettingsWriteSchema>
 export type BurnSettingsControl = z.infer<typeof burnSettingsControlSchema>

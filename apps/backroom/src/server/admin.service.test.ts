@@ -62,6 +62,8 @@ import {
   updateSubmissionDepositAddress,
   fetchBurnSettings,
   setBurnSettings,
+  fetchCleanBoardSettings,
+  setCleanBoardSettings,
   fetchContinualRetestSettings,
   setContinualRetestSettings,
   fetchQueuePolicySettings,
@@ -2387,6 +2389,125 @@ describe('submission deposit address administration', () => {
         }),
       }),
     )
+  })
+})
+
+describe('clean-board policy administration', () => {
+  const settings = (enabled: boolean, share = 0.5) => ({
+    enabled,
+    unattested_slot_burn_share: share,
+    attestation_grace_seconds: 86_400,
+  })
+  const control = (enabled: boolean, revision = 0) => ({
+    current: revision === 0 ? [] : [
+      {
+        revision,
+        parent_revision: revision - 1,
+        scope: '*',
+        settings: settings(enabled),
+        reason: 'owner-approved clean board rollout',
+        actor: 'operator@omniaura.ai',
+        created_at: '2026-11-27T12:00:00Z',
+        checksum: 'ab'.repeat(32),
+      },
+    ],
+    history: [],
+    default: settings(false),
+    effective: {
+      revision,
+      scope: '*',
+      settings: settings(enabled),
+      checksum: revision === 0 ? '' : 'ab'.repeat(32),
+      source: revision === 0 ? 'default' : 'revision',
+      max_age_seconds: 5,
+      required_protocol: 36,
+      served: false,
+    },
+  })
+
+  it('reads the policy and appends a revision, returning the refreshed read', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const before = control(false)
+    const after = control(true, 1)
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(before))
+      .mockResolvedValueOnce(Response.json(after.current[0]))
+      .mockResolvedValueOnce(Response.json(after))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchCleanBoardSettings()).resolves.toEqual(before)
+    await expect(
+      setCleanBoardSettings(
+        {
+          expectedRevision: 0,
+          settings: settings(true),
+          reason: 'owner-approved clean board rollout',
+          confirmation: 'APPLY CLEAN BOARD POLICY',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).resolves.toEqual(after)
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://platform-api.heyditto.ai/api/v1/admin/clean-board-settings',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          scope: '*',
+          expected_revision: 0,
+          settings: settings(true),
+          reason: 'owner-approved clean board rollout',
+          actor: 'operator@omniaura.ai',
+          confirmation: 'APPLY CLEAN BOARD POLICY',
+        }),
+      }),
+    )
+  })
+
+  it('refuses an out-of-range share or a wrong phrase before the platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    for (const input of [
+      { settings: settings(true, 1.5), confirmation: 'APPLY CLEAN BOARD POLICY' },
+      { settings: settings(true), confirmation: 'APPLY' },
+    ]) {
+      await expect(
+        setCleanBoardSettings(
+          { expectedRevision: 0, reason: 'owner-approved clean board rollout', ...input },
+          'operator@omniaura.ai',
+        ),
+      ).rejects.toThrow()
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('names the recovery when the platform refuses a stale revision', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValueOnce(
+        Response.json(
+          {
+            message:
+              'clean board settings changed; refresh before applying (expected 0, current 2)',
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+    await expect(
+      setCleanBoardSettings(
+        {
+          expectedRevision: 0,
+          settings: settings(true),
+          reason: 'owner-approved clean board rollout',
+          confirmation: 'APPLY CLEAN BOARD POLICY',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow(/re-read get_clean_board_policy/)
   })
 })
 
