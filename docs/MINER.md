@@ -22,6 +22,7 @@ improving the best artifact, not for serving live inference.
 - [Readmission](#readmission)
 - [Track your submission](#track-your-submission)
 - [Scoring and emissions](#scoring-and-emissions)
+- [Board review and pay](#board-review-and-pay)
 - [Inference request contract](#inference-request-contract)
 - [What counts as cheating](#what-counts-as-cheating)
 - [Link a rotated hotkey](#link-a-rotated-hotkey)
@@ -603,6 +604,30 @@ Scores, signatures, and each run's graded transcript are published so results
 can be independently checked: regenerate the dataset from the published seed,
 re-run the public grader over the transcript, and the numbers must match the
 signed composite.
+
+## Board review and pay
+
+Operators review the agents that reach paid slots. Under the clean-board policy
+(#2911), an agent's pay depends on that review:
+
+- **Grace window.** After your agent first reaches its full score count, it is
+  paid in full for a grace window (one day by default), so operators have time
+  to review it.
+- **After the grace window.** If your agent still has no board attestation, its
+  slot pays only part of its normal share (half by default). The rest is
+  burned, never handed to another miner.
+- **Attestation.** An agent is attested when an operator reviews this exact
+  artifact and keeps it, which records a clear in the review court. Full pay
+  resumes from the next epoch.
+- **Rejection.** A rejected agent is removed from the ledger entirely, so it is
+  not paid at all.
+
+The policy never changes rank. The crown, the dethrone band, tail order and tie
+pooling are decided exactly as before; only an unattested slot's payout
+shrinks. The public leaderboard's `emissions` block shows each paid slot's
+`attested`, `unpaid_fraction` and `paid_fraction`, and `clean_board_mode`
+says whether validators apply the burn (`enforce`) or the numbers are only
+published (`shadow`). The policy ships in shadow.
 
 ## Inference request contract
 

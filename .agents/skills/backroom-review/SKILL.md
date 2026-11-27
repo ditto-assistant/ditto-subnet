@@ -282,6 +282,9 @@ remain protected. Historical rejected rows can still appear in live search.
    `resolve_ath_review` `clear` or `reject`. To record a clean review of an
    unheld scored or live row, use a batched `clear` ruling instead: it
    attests without holding, so the row never leaves the board.
+   Attest every agent you review and keep. Under the clean-board policy
+   (#2911, `get_clean_board_policy`) an unattested paid slot loses
+   `unattested_slot_burn_share` of its pay once its grace window ends.
 7. Write a specific miner-visible reason: pattern, file:line, which limb or
    engine test failed or passed, and the cited precedent.
 8. Re-read the agent. A timeout is ambiguous; verify before retrying.
