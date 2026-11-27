@@ -9833,6 +9833,59 @@ class TreasurySettingsRevision(Base):
     )
 
 
+class CleanBoardSettingsRevision(Base):
+    """Append-only operator policy for the clean-board partial burn (#2911).
+
+    Append-only like every other emission-affecting control: after an
+    unexpected weight vector the question is "what was the policy at the
+    time", and only a revision log answers it.
+    """
+
+    __tablename__ = "clean_board_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="clean_board_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="clean_board_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="clean_board_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="clean_board_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="clean_board_settings_actor_check",
+        ),
+        Index(
+            "clean_board_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="clean_board_settings_scope_parent_key",
+        ),
+    )
+
+
 class BurnSettingsRevision(Base):
     """Append-only operator policy for the subnet-owner emission burn.
 

@@ -2638,6 +2638,22 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = None
+    unpaid_fractions: dict[UUID, Annotated[float, Field(gt=0.0, le=1.0)]] = Field(
+        default_factory=dict,
+        exclude_if=lambda value: not value,
+        description=(
+            "Protocol 36, the clean-board partial burn (#2911). Maps "
+            "agent_id to the fraction of that entry's slot left unpaid: an "
+            "agent that has not passed operator board review once its grace "
+            "window has run out. Every key is an agent_id in entries. The "
+            "fold derives champion, tail, tie pooling and the score-ceiling "
+            "cohort exactly as without it, then reports share * (1 - f) "
+            "under the recipient's hotkey and burns share * f, after the "
+            "service bucket is reserved. Served only while the operator "
+            "policy is enabled and every recently-live weight setter "
+            "reports protocol 36. Absent folds exactly as protocol 35."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={

@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import ConfirmationScoreRecord, LedgerEntry, LedgerResponse
 from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL, BurnSettings
+from ditto.api_models.clean_board import CLEAN_BOARD_PROTOCOL, CleanBoardSettings
 from ditto.api_models.continual_retest_settings import (
     CROWN_DUEL_PROTOCOL,
     CROWN_DUEL_SEASONS,
@@ -63,6 +64,7 @@ from ditto.api_models.validator import (
     V9BaseEvidence,
     V9ConfirmationReceipt,
 )
+from ditto.api_server.clean_board import unpaid_fractions as clean_board_fractions
 from ditto.api_server.config import EfficiencyBonusConfig
 from ditto.api_server.confirmation_seed_anchor import list_reign_seed_anchors
 from ditto.api_server.continual_retest_settings import (
@@ -116,6 +118,7 @@ from ditto.chain.errors import (
 )
 from ditto.db.models import Score, ValidatorHeartbeat
 from ditto.db.queries.benchmark_rollout import active_bench_version
+from ditto.db.queries.clean_board import load_clean_board_facts
 from ditto.db.queries.confirmation_scores import (
     confirmation_composites_by_seed,
     confirmation_history_by_agent,
@@ -220,6 +223,10 @@ _RANK_SHARES_PROTOCOL = RANK_SHARES_PROTOCOL
 # shadow and would burn that share, so the map is withheld until every
 # recently-live weight setter reports it.
 _TRACK_SHARES_PROTOCOL = TRACK_SHARES_PROTOCOL
+# The first validator protocol whose fold reads ``unpaid_fractions`` (#2911).
+# Withheld until every recently-live weight setter reports it: an older
+# validator would pay the full slot and the fleet would submit two vectors.
+_CLEAN_BOARD_PROTOCOL = CLEAN_BOARD_PROTOCOL
 
 
 def _fleet_safe_efficiency_adjustments(
@@ -274,6 +281,13 @@ class _LedgerSnapshot:
     (validators fold their compiled memory-only split). Replayed on the stale
     path like ``burn_share``."""
     continual_retest_cohort_size: int = 5
+    unpaid_fractions: dict[UUID, float] | None = None
+    """The clean-board fractions served to the fleet (#2911), or ``None`` while
+    the policy is disabled or the fleet is not on protocol 36. Replayed on the
+    stale path like ``burn_share``."""
+    clean_board_fractions: dict[UUID, float] | None = None
+    """What the policy computes for this pool whether or not it is served: the
+    shadow rehearsal. Internal; frozen with a pin for public reads only."""
     requesting_validator_hotkey: str | None = None
     context: _LedgerContext | None = None
     crown_mode: Literal["incumbent"] | None = None
@@ -314,6 +328,7 @@ class _LedgerPolicy:
     whole resolved policy, not just the settings, so the revision and checksum a
     withheld artifact's record is bound to come from the same read."""
     track_shares: TrackShareSettings = TrackShareSettings()
+    clean_board: CleanBoardSettings = CleanBoardSettings()
     allocation_revision: int = 0
     """The emission allocation that supplied ``burn_share`` and the track map
     (0: the legacy settings did). The epoch pin refuses to insert if it moved,
@@ -338,6 +353,7 @@ class _LedgerContext:
     reward_eligibility_fleet_ready: bool = False
     rank_shares_fleet_ready: bool = False
     track_shares_fleet_ready: bool = False
+    clean_board_fleet_ready: bool = False
 
 
 def _composite_stderr(details: dict | None) -> float | None:
@@ -496,12 +512,19 @@ async def _resolve_ledger_policy(app_state: Any) -> _LedgerPolicy:
         if resolver is not None
         else DEFAULT_POLICY
     )
+    clean_board_resolver = getattr(app_state, "clean_board_settings", None)
+    clean_board = (
+        await clean_board_resolver.resolve(session_maker)
+        if clean_board_resolver is not None
+        else CleanBoardSettings()
+    )
     return _LedgerPolicy(
         efficiency=efficiency,
         continual_retest=continual_retest,
         burn=burn,
         reward_eligibility=eligibility,
         track_shares=track_shares,
+        clean_board=clean_board,
         allocation_revision=allocation.revision if allocation is not None else 0,
     )
 
@@ -569,6 +592,14 @@ async def resolve_ledger_context(
             session, minimum_protocol=_TRACK_SHARES_PROTOCOL, now=now
         )
     )
+    # Read only while the policy is enabled: disabled is the default and
+    # serves nothing whatever the fleet runs.
+    clean_board_fleet_ready = (
+        policy.clean_board.enabled
+        and await live_weight_setter_fleet_supports_protocol(
+            session, minimum_protocol=_CLEAN_BOARD_PROTOCOL, now=now
+        )
+    )
     crown_incumbent_fleet_ready = await live_validator_fleet_supports_protocol(
         session,
         minimum_protocol=_CROWN_INCUMBENT_PROTOCOL,
@@ -596,6 +627,7 @@ async def resolve_ledger_context(
         reward_eligibility_fleet_ready=reward_eligibility_fleet_ready,
         rank_shares_fleet_ready=rank_shares_fleet_ready,
         track_shares_fleet_ready=track_shares_fleet_ready,
+        clean_board_fleet_ready=clean_board_fleet_ready,
     )
 
 
@@ -688,6 +720,7 @@ def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
         continual_retest_cohort_size=snapshot.continual_retest_cohort_size,
         burn_share=snapshot.burn_share,
         track_shares_bps=dict(snapshot.track_shares_bps or {}),
+        unpaid_fractions=dict(snapshot.unpaid_fractions or {}),
         # A live read carries the fleet's crown mode so the marker's readiness
         # is visible, but never an incumbent: only a pin has a previous epoch.
         crown_mode=None,
@@ -1269,6 +1302,31 @@ async def materialize_ledger_snapshot(
         if diagnostic_read_only
         else None,
     )
+    # ── Clean-board partial burn (#2911) ────────────────────────────────────
+    # Computed on the payable pool only (a provisional incumbent is unpaid
+    # whole). Always computed, so shadow publishes the same numbers enforce
+    # would serve; served only while enabled and the fleet folds protocol 36.
+    clean_board_settings = ledger_context.policy.clean_board
+    computed_fractions = clean_board_fractions(
+        (entry.agent_id for entry in entries),
+        await load_clean_board_facts(
+            session, [entry.agent_id for entry in entries], quorum=SCORING_QUORUM
+        ),
+        clean_board_settings,
+        now=now,
+    )
+    served_fractions = (
+        computed_fractions if ledger_context.clean_board_fleet_ready else {}
+    )
+    if computed_fractions:
+        logger.info(
+            "clean board (%s) %s %d unattested slot(s) at %.4f: %s",
+            "enforce" if served_fractions else "shadow",
+            "burning part of" if served_fractions else "would burn part of",
+            len(computed_fractions),
+            clean_board_settings.unattested_slot_burn_share,
+            ", ".join(str(agent_id) for agent_id in list(computed_fractions)[:10]),
+        )
     generated_at = datetime.now(UTC)
     crown_mode: Literal["incumbent"] | None = (
         "incumbent"
@@ -1345,6 +1403,8 @@ async def materialize_ledger_snapshot(
             else None
         ),
         continual_retest_cohort_size=continual_settings.retest_cohort_size,
+        unpaid_fractions=served_fractions or None,
+        clean_board_fractions=computed_fractions,
         requesting_validator_hotkey=requesting_validator_hotkey,
         context=ledger_context,
         confirmation_seed_anchors=confirmation_seed_anchors,
@@ -1374,6 +1434,7 @@ async def materialize_ledger_snapshot(
             "reward_eligibility": ledger_context.reward_eligibility_fleet_ready,
             "rank_shares": ledger_context.rank_shares_fleet_ready,
             "track_shares": ledger_context.track_shares_fleet_ready,
+            "clean_board": ledger_context.clean_board_fleet_ready,
         },
     )
 
@@ -1519,7 +1580,9 @@ async def _require_statistical_cap_requester(
         ledger.crown_gate is not None
         and ledger.crown_gate.duel_window_pairs is not None
     )
-    if not capped and not curved and not split and not gated:
+    # And the clean-board burn: a sub-36 rejoiner pays every slot in full.
+    unpaid = bool(ledger.unpaid_fractions)
+    if not capped and not curved and not split and not gated and not unpaid:
         return ledger
     heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
     seen_at = heartbeat.seen_at if heartbeat is not None else None
@@ -1555,6 +1618,11 @@ async def _require_statistical_cap_requester(
         raise HTTPException(
             status_code=428,
             detail="validator protocol 35 is required for the pinned title duel",
+        )
+    if unpaid and protocol < _CLEAN_BOARD_PROTOCOL:
+        raise HTTPException(
+            status_code=428,
+            detail="validator protocol 36 is required for the pinned clean-board burn",
         )
     return ledger
 
@@ -2000,6 +2068,11 @@ def _serve_last_known(
         raise HTTPException(
             status_code=503,
             detail="scoring ledger unavailable; cannot verify protocol-33 requester",
+        ) from error
+    if snapshot is not None and getattr(snapshot, "unpaid_fractions", None):
+        raise HTTPException(
+            status_code=503,
+            detail="scoring ledger unavailable; cannot verify protocol-36 requester",
         ) from error
     if snapshot is None:
         logger.warning(
