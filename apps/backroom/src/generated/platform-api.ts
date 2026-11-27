@@ -37938,7 +37938,7 @@ export interface components {
             paid: boolean;
             /**
              * Paid Fraction
-             * @description The fraction of ``share_of_miner_pool`` validators actually pay this hotkey: ``0`` for an unpaid provisional incumbent, ``1 - unpaid_fraction`` while the clean-board burn is enforced, and ``1`` otherwise. The rest is burned.
+             * @description Absent means 1. The fraction of ``share_of_miner_pool`` validators actually pay this hotkey: ``0`` for an unpaid provisional incumbent, ``1 - unpaid_fraction`` while the clean-board burn is enforced, and ``1`` otherwise. The rest is burned.
              * @default 1
              */
             paid_fraction: number;
@@ -37966,7 +37966,7 @@ export interface components {
             shared_seed_confirmations: number;
             /**
              * Unpaid Fraction
-             * @description The clean-board fraction of this slot the policy leaves unpaid: an unattested agent past its grace window (#2911). Reported in shadow too; ``clean_board_mode`` says whether validators apply it.
+             * @description Absent means 0. The clean-board fraction of this slot the policy leaves unpaid: an unattested agent past its grace window (#2911). Reported in shadow too; ``clean_board_mode`` says whether validators apply it.
              * @default 0
              */
             unpaid_fraction: number;
