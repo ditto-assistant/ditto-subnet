@@ -32120,6 +32120,13 @@ export interface components {
              */
             treasury_pin?: components["schemas"]["TreasuryLedgerPin"] | components["schemas"]["EnforcingTreasuryPin"] | null;
             /**
+             * Unpaid Fractions
+             * @description Protocol 36 (#2911). The unpaid fraction of each named entry's paid slot: ``agent_id -> f`` with ``0 < f <= 1``, every key one of entries. A recipient pays ``share * (1 - f)`` to its hotkey and burns ``share * f``; crown, rank, tie pooling and the score-ceiling cohort are unchanged. Served only once every recently-live weight setter reports v36. Absent or empty folds exactly as protocol 35; a map the fold cannot use is ignored whole.
+             */
+            unpaid_fractions?: {
+                [key: string]: number;
+            };
+            /**
              * V9 Confirmation Mode
              * @description Fail-closed marker: every Bench v9 entry must carry a valid full-confirmation receipt while present.
              */
