@@ -59,7 +59,12 @@ import {
   setLeaderboardVersionView,
 } from "./board-state";
 import { leaderboardStore } from "./leaderboard-data";
-import { cleanBoardPaidFraction, paidShare } from "../../lib/payout";
+import {
+  cleanBoardPaidFraction,
+  paidShare,
+  paidShareRange,
+  shareRangeText,
+} from "../../lib/payout";
 import type { BoardEntry, LeaderboardStore } from "./leaderboard-data";
 
 /** How many historical versions stay on the row beside "Current rollout".
@@ -548,6 +553,11 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
   const jointChampions = createMemo(() =>
     (emissions()?.recipients || []).filter((r) => r.role === "joint_champion"),
   );
+  // What validators actually pay the joint crown: members can differ once an
+  // unattested slot is enforced (#2911).
+  const jointPaidRange = createMemo(() =>
+    paidShareRange(jointChampions(), emissions()?.clean_board_mode),
+  );
   const tails = createMemo(() => (emissions()?.recipients || []).filter((r) => r.role === "tail"));
   const scoreCeilingPool = (): boolean => emissions()?.allocation_mode === "score_ceiling_pool";
 
@@ -819,8 +829,13 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
               <span class="emission-badge joint_champion">
                 <span aria-hidden="true">♛</span> Score-ceiling joint crown
               </span>
-              {" · " + jointChampions().length + " evidence-tied agents each receive "}
-              {pct(jointChampions()[0]?.share_of_miner_pool as number)}
+              {" · " +
+                jointChampions().length +
+                " evidence-tied agents " +
+                (jointPaidRange()?.[0] === jointPaidRange()?.[1] ? "each receive " : "receive ")}
+              {jointPaidRange()
+                ? shareRangeText(jointPaidRange() as [number, number], pct)
+                : pct(jointChampions()[0]?.share_of_miner_pool as number)}
               {" of the miner pool."}
             </Show>
           </Show>

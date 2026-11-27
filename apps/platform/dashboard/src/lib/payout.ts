@@ -27,3 +27,24 @@ export function paidShare(
   const fraction = cleanBoardPaidFraction(recipient, mode);
   return fraction === undefined ? share : share * fraction;
 }
+
+/** The paid shares of a group of recipients (a score-ceiling joint crown) as
+ * `[lowest, highest]`. Under enforcement an unattested member is paid less
+ * than an attested one, so a single "each receives" figure is only true when
+ * the two match. Undefined when no member has a finite share. */
+export function paidShareRange(
+  recipients: readonly EmissionRecipient[],
+  mode: string | null | undefined,
+): [number, number] | undefined {
+  const shares = recipients
+    .map((recipient) => paidShare(recipient, mode))
+    .filter((share): share is number => share !== undefined);
+  if (shares.length === 0) return undefined;
+  return [Math.min(...shares), Math.max(...shares)];
+}
+
+/** `"12.5%"`, or `"10.0%–12.5%"` when the group's paid shares differ. */
+export function shareRangeText(range: [number, number], pct: (value: number) => string): string {
+  const [low, high] = range;
+  return low === high ? pct(low) : pct(low) + "–" + pct(high);
+}
