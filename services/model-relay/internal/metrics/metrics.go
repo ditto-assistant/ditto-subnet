@@ -51,6 +51,15 @@ var DecisionRequests = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help: "Decision-lane calls by outcome.",
 }, []string{"outcome"})
 
+// CostCeilingWouldDecline is ditto_inference_cost_ceiling_would_decline_total{lane}:
+// shadow-mode admissions the enforce mode would have declined with 4110
+// because settled ledger cost already met the grant's stamped ceiling (#3271).
+// The grant row keeps the per-run count (cost_ceiling_would_decline).
+var CostCeilingWouldDecline = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "ditto_inference_cost_ceiling_would_decline_total",
+	Help: "Hosted-inference admissions a shadow cost ceiling would have declined, by lane.",
+}, []string{"lane"})
+
 // Platform-path families, declared for exposition parity (static on a relay).
 var (
 	ValidatorHeartbeatPayloadDegraded = promauto.NewCounterVec(prometheus.CounterOpts{

@@ -106,6 +106,8 @@ func TestDeclineWireMapping(t *testing.T) {
 		{DeclineModelNotPermitted, LaneInference, 429, 4107, "inference grant does not permit this model"},
 		{DeclineGrantNotExchanged, LaneInference, 429, 4108, "inference grant has not been exchanged for a bearer"},
 		{DeclineReservationTooLarge, LaneInference, 429, 4109, "inference request exceeds the grant's entire token budget"},
+		{DeclineCostCeilingExhausted, LaneInference, 429, 4110, "inference grant has spent its cost ceiling"},
+		{DeclineCostCeilingExhausted, LaneEmbedding, 429, 4110, "embedding grant has spent its cost ceiling"},
 	}
 
 	for _, tc := range cases {

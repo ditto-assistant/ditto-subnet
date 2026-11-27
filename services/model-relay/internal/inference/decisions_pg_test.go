@@ -236,3 +236,79 @@ func TestDecisionTokenWallIsItsOwnAndSparesChat(t *testing.T) {
 			calls.Load(), grantStatus)
 	}
 }
+
+// The decision lane joins the run's cost ceiling (#3271) purely by booking its
+// ledger cost at settlement: 476 receipted input tokens at the stamped
+// $0.042 per million is 20 micro-USD, the same figure as decision_cost.
+func TestDecisionLaneBooksLedgerCostAndHonoursAnEnforcedCeiling(t *testing.T) {
+	var calls atomic.Int32
+	upstream := decisionUpstream(t, decisionPin, http.StatusOK, nil, &calls)
+	f := decisionFixture(t, upstream.URL, true)
+	testutil.SeedSQL(t, f.pool,
+		`UPDATE inference_grants SET cost_ceiling_microusd = 20, cost_ceiling_mode = 'enforce'
+		 WHERE grant_id = $1`, f.grantID)
+
+	// 0 < 20: admitted. The call crosses the ceiling, finishes and is billed.
+	w := postDecision(f, uuid.New())
+	if w.Code != http.StatusOK {
+		t.Fatalf("crossing call must finish: %d %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get(headerLedgerCostMicrousd); got != "20" {
+		t.Fatalf("ledger header after settle: %q", got)
+	}
+	var ledger, decisionCost int64
+	var status string
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT ledger_cost_microusd, decision_cost_microusd, status FROM inference_grants WHERE grant_id = $1`,
+		f.grantID).Scan(&ledger, &decisionCost, &status); err != nil {
+		t.Fatalf("read grant: %v", err)
+	}
+	if ledger != 20 || decisionCost != 20 || status != "exhausted" {
+		t.Fatalf("decision settle must book ledger cost and exhaust: ledger=%d decision=%d status=%s",
+			ledger, decisionCost, status)
+	}
+	var requestLedger int64
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT ledger_cost_microusd FROM inference_requests WHERE grant_id = $1`, f.grantID).Scan(&requestLedger); err != nil {
+		t.Fatalf("read request: %v", err)
+	}
+	if requestLedger != 20 {
+		t.Fatalf("request ledger cost: %d", requestLedger)
+	}
+
+	// The next decision call is the cost wall, not a decision wall.
+	w = postDecision(f, uuid.New())
+	expectEnvelope(t, w, http.StatusTooManyRequests, relayhttp.CodeDeclineCostCeiling, "decision grant has spent its cost ceiling")
+	if got := w.Header().Get(headerLedgerCostMicrousd); got != "20" {
+		t.Fatalf("ledger header on the decline: %q", got)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("the declined call must not reach the provider: calls=%d", calls.Load())
+	}
+}
+
+// Off mode books the decision lane's ledger cost but changes nothing a
+// harness or the grant can see.
+func TestDecisionLaneOffCeilingIsUnchanged(t *testing.T) {
+	var calls atomic.Int32
+	upstream := decisionUpstream(t, decisionPin, http.StatusOK, nil, &calls)
+	f := decisionFixture(t, upstream.URL, true)
+	for range 2 {
+		w := postDecision(f, uuid.New())
+		if w.Code != http.StatusOK {
+			t.Fatalf("off mode must admit: %d %s", w.Code, w.Body.String())
+		}
+		if _, present := w.Header()[headerLedgerCostMicrousd]; present {
+			t.Fatal("off mode must send no ledger header")
+		}
+	}
+	var ledger int64
+	var status string
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT ledger_cost_microusd, status FROM inference_grants WHERE grant_id = $1`, f.grantID).Scan(&ledger, &status); err != nil {
+		t.Fatalf("read grant: %v", err)
+	}
+	if ledger != 40 || status != "active" {
+		t.Fatalf("off mode: ledger=%d status=%s", ledger, status)
+	}
+}

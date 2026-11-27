@@ -41,7 +41,8 @@ and atomic-commit contracts have parity tests.
 - `internal/inference` — the inference plane: `POST /api/v1/inference/
   {exchange,chat/completions,embeddings,confirmation/chat/completions,
   confirmation/embeddings,coding/chat/completions}` handlers, the admission
-  (`begin_inference_request` 17-step gate order) and settlement
+  (`begin_inference_request` 17-step gate order, plus the step-13b cost
+  ceiling) and settlement
   (`finish_inference_request` + `record_route_observation`) transaction
   orchestration, the OpenRouter/Perplexity provider calls with the bounded
   retry/recovery ladder, sr25519 + Ed25519 verification, and the 5s-TTL
@@ -118,6 +119,79 @@ The relay's controls are:
   is returned as an uncharged 400.
 
 No new decline or infra codes are introduced. The lane carries no score.
+
+## Per-run cost ceiling (#3271)
+
+One dollar-denominated ceiling per scoring run, the same whatever mix of
+models a harness uses. Unit walls (chat tokens, embedding tokens, request
+counts) stay as they are.
+
+**Ledger cost, not the provider bill.** At settlement every request books
+`ledger_cost_microusd` = receipted (already clamped) units × the list price
+**stamped on the grant at mint**, onto the request row and added to the
+grant's total:
+
+- chat: `ledger_prompt_price_per_token` / `ledger_completion_price_per_token`
+  (USD per token). Mint stamps the bound route's prices; the aggregate route
+  has none, so mint stamps the median over the model's priced, non-offline
+  discovered provider endpoints. A grant minted with no list price at all
+  falls back to the trusted provider bill so the ceiling still binds.
+- embeddings: `embedding_price_microusd_per_token`, default `0.004`
+  ($0.004 / 1M input tokens). It replaces the constant the relay hard-coded,
+  so the embedding `cost_microusd` is unchanged at the default stamp.
+
+`cost_microusd` / `embedding_cost_microusd` remain the provider bill.
+Missing usage books zero; untrusted usage is priced at the clamp; stale
+reclamation and rotation cancel with zero ledger cost. A future lane joins
+the ceiling purely by adding to `inference_grants.ledger_cost_microusd` at its
+settlement. The decision lane does exactly that: its settle adds the same
+figure it books as `decision_cost_microusd` (receipted input tokens ×
+`decision_input_microusd_per_mtok`, half-to-even) to `ledger_cost_microusd`,
+and its admission runs the same step-8/13b checks. A decision call can
+therefore cross an enforced ceiling and exhaust the grant for every lane,
+while a spent decision *wall* still spares chat.
+
+**Knobs** live on the inference concurrency board
+(`InferenceConcurrencySettings`, written through Backroom with revision,
+actor, reason and checksum): `run_cost_ceiling_microusd` (null = none, max
+$1,000), `cost_ceiling_mode` (`off` | `shadow` | `enforce`, default `off`;
+a live mode requires a ceiling) and `case_cost_report_microusd` (report-only,
+never an admission input). Mint stamps `cost_ceiling_microusd` and
+`cost_ceiling_mode` onto the grant only when the mode is `shadow` or
+`enforce`, so a revision never changes a live run and "a ceiling is stamped"
+means "the ceiling is live".
+
+**Admission** (step 13b, after the token wall), from settled ledger cost
+only — the call that crosses the ceiling finishes and is billed:
+
+| Mode | `ledger_cost_microusd >= ceiling` |
+|---|---|
+| `off`, or null ceiling | nothing; byte-identical to a grant minted before #3271 |
+| `shadow` | admit; `cost_ceiling_would_decline += 1` on the grant and `ditto_inference_cost_ceiling_would_decline_total{lane}` |
+| `enforce` | decline **4110 `COST_CEILING_EXHAUSTED`** (HTTP 429, terminal) on every lane |
+
+The settle transaction is the committed writer of `status = 'exhausted'`
+once settled ledger cost meets an enforced ceiling (on whichever lane
+crossed it). Step 8 checks the cost wall first, so every later chat,
+embedding **and** decision call is 4110, not 4102/4104.
+
+**Wire evidence** (all absent unless the grant has a live ceiling):
+
+- `/exchange` body `cost_ceiling_microusd` (integer) and `cost_ceiling_mode`
+  (`shadow` | `enforce`), plus fallback headers
+  `X-Ditto-Cost-Ceiling-Microusd` / `X-Ditto-Cost-Ceiling-Mode`.
+- Every authenticated proxied response on every lane — successes, provider
+  failures, non-deliverable 409s and terminal 429 declines — carries
+  `X-Ditto-Ledger-Cost-Microusd: <decimal>`: the grant's total after this
+  request's settlement, or the current settled total on a decline. The
+  anonymous 4100 never carries it.
+
+**Rollout order.** (1) Ship the scorer first: `declineFaultFor[4110] = agent`
+only when its own header evidence shows spent ≥ ceiling. (2) Run `shadow`
+until Backroom shows the validator fleet runs a 4110-aware scorer, and size
+the ceiling from the ledger-cost distribution and `would_decline` counts.
+(3) Only then switch to `enforce`. An old broker treats an unknown 4110 as
+platform fault and would re-lease the run indefinitely.
 
 ## Inference trace capture (`internal/traces`)
 
