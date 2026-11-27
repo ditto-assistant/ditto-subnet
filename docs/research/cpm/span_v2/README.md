@@ -49,6 +49,12 @@ $R/eval_multi.py redecode --model /tmp/span2/slots-history/final --logits /tmp/s
 $R/train_multi.py --head slots --matching set --count --level history --k 12 --max-span 96 --data /tmp/span2/train.jsonl --device mps --out /tmp/span2/history-set-count
 $R/reader_eval.py --data /tmp/span2/heldout.jsonl --device mps --out-dir /tmp/span2/reader --packet closed --packet gold:history --packet count=/tmp/span2/eval/history-set-count.preds.jsonl --packet packall
 $R/eval_multi.py chunk --model base --top 3 --data /tmp/span2/heldout.jsonl --device mps --out /tmp/span2/eval/chunk-top3.json
+# Long haystacks (span-v2.md §11): 4–8k-token documents, DATA_VERSION 5
+$R/multi_data.py --seeds 101,102,103,104,105,106,107,109,110,111,112,113 --variants 2 --null-rate 0.35 --doc-tokens 4096,8192 --out /tmp/span3/train-long.jsonl
+$R/multi_data.py --seeds 1,2,3,4,5 --doc-tokens 4096,8192 --null-rate 0.3 --out /tmp/span3/wide-long.jsonl
+$R/train_multi.py --head slots --matching set --count --level history --k 12 --max-span 96 --base qwen3.5-2b --data /tmp/span3/train-long.jsonl --device mps --out /tmp/span3/long2b
+# Curriculum: start from another run's weights (fresh optimiser)
+$R/train_multi.py --head slots --matching set --count --level history --k 12 --max-span 96 --init /tmp/span2/history-set-count/ckpt.pt --data /tmp/span3/train-long.jsonl --device mps --out /tmp/span3/curriculum
 ```
 
 `--device cuda` works the same way. On Apple silicon, the trainer keeps

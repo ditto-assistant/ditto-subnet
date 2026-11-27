@@ -64,6 +64,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--warmup", type=int, default=10, help="optimiser steps")
     ap.add_argument("--ckpt-every", type=int, default=10)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument(
+        "--init",
+        type=Path,
+        help="start from another run's ckpt.pt (head + LoRA weights, fresh optimiser)",
+    )
     args = ap.parse_args(argv)
 
     import torch
@@ -139,6 +144,15 @@ def main(argv: list[str] | None = None) -> int:
         opt.load_state_dict(state["opt"])
         done_items, step, history = state["items"], state["step"], state["history"]
         log(f"resumed at item {done_items} step {step}")
+    elif args.init:
+        state = torch.load(args.init, map_location=args.device, weights_only=False)
+        head.load_state_dict(state["head"])
+        names = {n for n, p in net.named_parameters() if p.requires_grad}
+        missing = names - set(state["lora"])
+        if missing:
+            raise RuntimeError(f"init checkpoint lacks {len(missing)} LoRA tensors")
+        net.load_state_dict(state["lora"], strict=False)
+        log(f"initialised from {args.init} (its step {state['step']})")
 
     def save_ckpt() -> None:
         tmp = ckpt.with_suffix(".tmp")

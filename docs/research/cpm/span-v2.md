@@ -864,3 +864,190 @@ Recommendation:
 
   Then set the dethrone margin from these noise numbers: at least about 0.09
   containment on at least 5 eval seeds, or a mean over several training seeds.
+
+## 11. Long haystacks (4–8k tokens): does harder data make a bigger model pay?
+
+§10 left one question open: the plateau might be a property of easy data, so
+harder documents might open a gap that rewards a bigger model. Real memory
+corpora are 4–50k tokens. This tests the low end, 4–8k.
+
+**Data (DATA_VERSION 5, `multi_data.py --doc-tokens 4096,8192`).**
+- Each document draws its own budget uniformly from 4,096–8,192 tokens: p10
+  about 4,500, median about 6,150, p90 about 7,750, with a median of 64
+  memories.
+- The case's candidates are filled first. v4 had been cutting them at 1.5k
+  tokens; now they mostly fit. Only after that is a document padded with the
+  seed's other memories.
+- A padding memory never holds a needle, history or grounding string of the
+  case, and shares no query word rarer than `PAD_DF` = 0.35 of the seed's
+  memories. Padding ends up as only 2–3% of memories. The extra length is
+  almost entirely the generator's own candidate pool: denser, same-topic
+  distractors, not random history.
+- Same splits and mix as §10: training is seeds 101–113 without 108 (3,263
+  documents, sha256 `3602775f…`). The held-out set is seeds 1–5 (469 positive
+  and 183 null, `0abd8715…`); calibration is seed 108 (121, `f3d262ba…`).
+  Gold strings are identical to v4 on every shared case.
+- Without the flag, the builder's output is still byte-identical to
+  DATA_VERSION 4.
+
+**Runs.** The §10 recipe (history gold, set matching, count head, K = 12,
+LoRA r 16, 1 epoch, memory clipping) trained on the long set, for 0.8B and
+2B. The §10 12-seed model, trained on short documents, serves as the
+baseline. Each model is decoded two ways: with the count head, and with no
+count and a null margin calibrated on seed 108 (`calibrate.py`), so that no
+model is judged at an operating point it was not tuned for.
+
+**Results on the 4–8k held-out set** (needle contained over 469 positive
+documents, 95% bootstrap; reader is Qwen3.5-2B over 409 answer documents):
+
+| Packet | Answer contained | All needles | Null correct | Tokens | Reader accuracy | Absence declined | Null declined |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Short-trained 0.8B, count | **0.711** [0.67, 0.75] | 0.599 | 0.918 | 98 | **0.491** | 0.817 | 0.944 |
+| Short-trained 0.8B, calibrated (−3.5) | 0.702 [0.67, 0.74] | 0.586 | 0.896 | 86 | 0.487 | 0.783 | 0.922 |
+| Long-trained 0.8B, count | 0.570 [0.53, 0.61] | 0.478 | 0.978 | 61 | 0.423 | 0.817 | 0.956 |
+| Long-trained 0.8B, calibrated (−7.0) | 0.642 [0.60, 0.68] | 0.520 | 0.907 | 70 | 0.450 | 0.800 | 0.933 |
+| Long-trained 2B, count | 0.511 [0.47, 0.55] | 0.452 | 0.885 | 46 | 0.381 | 0.883 | 0.933 |
+| Long-trained 2B, calibrated (−3.0) | 0.618 [0.58, 0.66] | 0.516 | 0.918 | 59 | 0.474 | 0.767 | 0.922 |
+| v1 top 3 memories | 0.717 [0.68, 0.75] | 0.638 | – | 609 | 0.501 | 0.733 | 0.878 |
+| Whole document | – | – | – | 6,150 | **0.550** | 0.300 | 0.778 |
+| Oracle history gold | – | – | – | 76 | 0.638 | 0.800 | 0.967 |
+
+Paired differences on the same documents (needle contained | reader accuracy):
+
+| Comparison | Needle contained | Reader accuracy |
+| --- | --- | --- |
+| 2B − 0.8B, both long-trained, calibrated | −0.024 [−0.062, 0.014] | +0.024 [−0.017, 0.066] |
+| Long − short training, 0.8B, calibrated | −0.060 [−0.099, −0.020] | −0.037 [−0.078, 0.007] |
+| Long-trained 2B − short-trained 0.8B, calibrated | −0.083 [−0.126, −0.044] | −0.012 [−0.054, 0.029] |
+| Short-trained 0.8B − v1 top 3 | −0.007 [−0.052, 0.041] | −0.010 [−0.061, 0.039] |
+| Short-trained 0.8B − whole document (reader) | – | −0.059 [−0.108, −0.005] |
+
+**An earlier attempt, and why it was rebuilt.** The first long build padded
+with a looser filter: it dropped only gold strings and query words under 2%
+of the seed. The short-trained model then put 13% of its spans in memories
+that no v4 document held, and some of those were plainly relevant (another
+line of the same v13 case file). So the 2B run was stopped at about step 230
+and the data rebuilt with the filter above. The direction did not change:
+- that build's long-trained 0.8B reached 0.614 contained (count head);
+- a curriculum run (the short model fine-tuned on a quarter epoch of long
+  documents) reached 0.676, against 0.723 for the short model on the same set.
+
+Padding noise was not the cause.
+
+**What the runs say:**
+
+1. **A short-trained model carries to 4–8k.** Training on 1.5k-token
+   documents and running on 4–8k loses about 0.065 containment against the
+   short held-out set (0.776 → 0.711). It still matches v1's top 3 on both
+   containment and reader accuracy, at a sixth of the tokens.
+2. **Training directly on long documents is worse, not better,** at equal
+   document count and 1 epoch. This held in three long runs (two data builds
+   and the curriculum).
+   - The long-trained model becomes over-conservative: its count head
+     under-predicts and its calibrated margin is −7, twice the short model's
+     −3.5.
+   - Calibration recovers part of the gap, not all of it (−0.060).
+   - Each long document also costs about 6× as much Mac time. On MPS,
+     Qwen3.5's linear-attention layers fall back to a reference PyTorch
+     kernel.
+3. **The bigger model does not pay on harder data at this size.** The 2B is
+   level with the 0.8B on long documents (−0.024 [−0.062, 0.014]). Both end
+   training at the same loss, about 1.0 per document, against 0.6 for short
+   training. A 2.6× larger model that fits its training data no better points
+   to a floor in the labels, not to capacity.
+4. **The floor is unlabelled relevance.** The long-trained losses concentrate
+   in the families where the candidate pool holds many same-topic memories
+   that the history gold does not mark:
+   - `v13-open-program`: 0.58 → 0.43 for the 0.8B;
+   - `world-story-owner-current`: 0.79 → 0.60;
+   - `v13-personal-program`: 0.39 → 0.28.
+
+   These memories are struck statements, proposals, and older owners. Labelled
+   negative, they teach the model to hold back. In a 1.5k-token document few of
+   them fit, which is why short training learns a looser policy that happens to
+   score better.
+5. **At 4–8k the whole document answers best but declines worst.** The 2B
+   reader gets 0.550 from 6,150 tokens against 0.491 from 98, but it declines
+   only 30% of absence questions and 78% of nulls. The span packets decline
+   77–88% and 92–96%. The oracle packet (0.638) shows the headroom is still in
+   what the packet selects.
+
+**What this means for data design.** More length only helps once the gold
+labels every memory that matters among the candidates, not only the answer
+clause and its distractor strings. Before going past 8k:
+- label struck, proposed and superseded statements, and same-entity history,
+  as relevant (the graded-relevance labels: answer, supporting, identity,
+  irrelevant);
+- or train only on the reader-verified minimal packet, and leave the remaining
+  candidates unlabelled (no loss), rather than negative.
+
+Until then, the efficient recipe is to train on short documents and run on
+long ones.
+
+**What this means for the GPU verdict in §10.** It stands, with one change.
+The capacity test (2B, higher rank, full fine-tune at 24–48 seeds) is worth
+renting only on relabelled data: on current labels the 2B did not beat the
+0.8B at either length.
+
+**Caveats.**
+- One training seed per configuration. §10 measured training-seed noise at
+  0.085–0.089, but the direction of item 2 replicated three times.
+- One epoch, LoRA r 16, Mac fp32.
+- 4–8k only: 50k is untested.
+- Reader accuracy comes from the 2B reader.
+
+## 12. A hard-case objective for the generator competition (proposal, design only)
+
+Proposal: make the existing data-generation competition produce the cases the
+CPM still fails. It needs no new mechanism, only a different objective for
+the generator competition. Nothing here changes the live competition, a
+validator or a `score_version`.
+
+**Objective.** Score a generated case only when it is both of these:
+- **valid:** production-class readers answer it correctly from the case's own
+  gold packet;
+- **hard:** reference CPMs fail it.
+
+As the CPM improves, the data gets harder: the moving ceiling a model
+competition lacks (§10).
+
+**Prototype on existing results** (wide-v4 held-out, 2B reader). "Valid"
+means the reader is right from the oracle history packet. "Hard" means the
+24-seed model's packet fails. "Robust" means all five reference models fail
+(24 seeds, 12 seeds × 2 training seeds, 6 seeds, 6 seeds 2B).
+
+| Family | Answer cases | Valid | Hard | Robust |
+| --- | --- | --- | --- | --- |
+| v13-personal-program | 40 | 38 | 23 | 5 |
+| v13-open-program | 60 | 44 | 13 | 4 |
+| world-story-owner-current | 35 | 31 | 9 | 3 |
+| world-story-order | 31 | 17 | 5 | 0 |
+| injection-classic | 5 | 5 | 4 | 2 |
+| world-story-next-action | 32 | 7 | 3 | 1 |
+| world-story-x-owner-email | 35 | 11 | 3 | 0 |
+| 21 other families | 158 | 115 | 1 | 0 |
+| **Total** | 396 | 268 | 61 | 15 |
+
+**Design rules this suggests:**
+- **Judge hardness against an ensemble, not the champion.** Only 15 of the 61
+  cases the 24-seed model misses are missed by every reference model. The
+  rest are mostly training-seed luck (§10), and paying for them would reward
+  generators for noise.
+- **Use production readers for validity.** With the 2B reader, 128 of 396
+  cases (32%) are not answerable even from the oracle packet. A weak validity
+  reader throws away good cases and keeps cases it happens to read.
+- **Require complete labels.** §11 shows that a case can be "hard" because its
+  gold leaves relevant memories unlabelled. A generator could farm that, so a
+  valid case must label every memory that matters (graded relevance), and an
+  audit should check that the gold packet is sufficient.
+- **Cap the share of any one family**, so the objective cannot be met by
+  flooding a single weakness. Today the yield sits almost entirely in v13
+  programs and owner-current.
+- **Run it in shadow first**, as its own season, before any weight.
+
+Open questions:
+- how to verify "every relevant memory is labelled" without a human;
+- whether the ensemble should include each season's top miner models (open
+  weights at submit);
+- how to keep generators from tuning cases to the reference models' known
+  quirks.

@@ -40,6 +40,15 @@ pairs, up to 4 hard distractors and random candidates, up to DOC_TOKEN_BUDGET.
 Non-evidence pairs that also hold a gold string are left out, so the gold is
 unambiguous. Docs with more than MAX_GOLD needle spans are skipped.
 
+Long haystacks (`--doc-tokens LO,HI`, DATA_VERSION 5): each document draws its
+own token budget uniformly from [LO, HI] and, after the case's candidates, is
+padded with the seed's other memories (the same user's unrelated history). A
+padding memory never holds a needle, history or grounding string of the case
+(case-insensitive substring) or any query word rarer than PAD_DF of the seed's
+memories (names, case-file ids, topics), and is never evidence, so the gold
+stays unambiguous; each pair records `pad`. Without the flag the output is
+byte-identical to DATA_VERSION 4.
+
 Everything is a pure function of (bench_version, seed, case_id, variant).
 
     uv run --project services/cpm-scorer python \\
@@ -80,9 +89,11 @@ from span_data import (  # noqa: E402
 )
 
 DATA_VERSION = 4
+LONG_DATA_VERSION = 5
 MAX_GOLD = 12  # needle spans per document; the fixed output buffer is K = 12
 MAX_CLAUSE_TOKENS = 96
 RARE_DF = 0.02
+PAD_DF = 0.35  # long haystacks: padding shares no query word rarer than this
 LEVELS = ("needle", "anchored", "clause", "history", "evidence")
 HISTORY_TYPES = ("distractor", "forbidden")
 WORD = re.compile(r"[a-z0-9][a-z0-9@._'-]*[a-z0-9]")
@@ -143,6 +154,7 @@ def build_examples(
     variants: int,
     null_rate: float,
     stats: Counter,
+    doc_tokens: tuple[int, int] | None = None,
 ) -> list:
     pairs = {p["pair_id"]: p for p in records["pairs"]}
     text = {pid: memory_text(p) for pid, p in pairs.items()}
@@ -215,9 +227,40 @@ def build_examples(
             and pid not in gold_spans
             and not (pair_words[pid] & q_rare)
         ]
+        pad: list[str] = []
+        if doc_tokens:
+            needles = {
+                s["text"].lower()
+                for sp in (*gold_spans.values(), *hist_spans.values())
+                for s in sp
+                if s.get("text")
+            } | {g.lower() for g in ground}
+            cands = set(case["candidate_pair_ids"])
+            q_pad = {
+                w
+                for w in words(case["query"] or "")
+                if len(w) >= 4 and df[w] < PAD_DF * len(pairs)
+            }
+            pad = [
+                pid
+                for pid in sorted(pairs)
+                if pid not in cands
+                and pid not in rel
+                and pid not in case["spans"]
+                and pid not in gold_spans
+                and not (pair_words[pid] & q_pad)
+                and not any(n in text[pid].lower() for n in needles)
+            ]
 
         for v in range(variants):
             rng = case_rng(seed_key, cid, v)
+            budget = DOC_TOKEN_BUDGET
+            extra: list[str] = []
+            if doc_tokens:
+                budget = rng.randint(*doc_tokens)
+                extra = list(pad)
+                pad_set = set(pad)
+                rng.shuffle(extra)
             docs = []
             n_gold = sum(len(gold_spans[pid]) for pid in must)
             used = sum(pair_tokens(pid) for pid in must) + sep_tokens * len(must)
@@ -225,7 +268,7 @@ def build_examples(
                 stats[f"{kind}:no_gold_in_evidence"] += 1
             elif n_gold > MAX_GOLD:
                 stats[f"{kind}:too_many_gold"] += 1
-            elif used > DOC_TOKEN_BUDGET:
+            elif used > budget:
                 stats[f"{kind}:gold_pairs_over_budget"] += 1
             else:
                 support = [pid for pid in clean if pid in rel]
@@ -233,20 +276,22 @@ def build_examples(
                 rand = [pid for pid in clean if pid not in rel and pid not in hard_ids]
                 for lst in (support, hard, rand):
                     rng.shuffle(lst)
-                docs.append((kind, must, [*support, *hard[:MAX_HARD], *rand], used))
+                docs.append(
+                    (kind, must, [*support, *hard[:MAX_HARD], *rand, *extra], used)
+                )
             if rng.random() < null_rate:
                 pool = list(null_pool)
                 rng.shuffle(pool)
-                docs.append(("null", [], pool, 0))
+                docs.append(("null", [], [*pool, *extra], 0))
             for dkind, fixed, order, used in docs:
                 chosen = list(fixed)
                 for pid in order:
                     n = pair_tokens(pid)
-                    if n > MAX_PAIR_TOKENS or used + sep_tokens + n > DOC_TOKEN_BUDGET:
+                    if n > MAX_PAIR_TOKENS or used + sep_tokens + n > budget:
                         continue
                     chosen.append(pid)
                     used += sep_tokens + n
-                if dkind == "null" and used < DOC_TOKEN_BUDGET // 2:
+                if dkind == "null" and used < budget // 2:
                     stats["null:too_small"] += 1
                     continue
                 rng.shuffle(chosen)
@@ -266,6 +311,8 @@ def build_examples(
                             "distractor": pid in hard_ids,
                         }
                     )
+                    if doc_tokens:
+                        bounds[-1]["pad"] = pid in pad_set
                     if dkind != "null" and pid in gold_spans:
                         for g in pair_gold(pairs[pid], gold_spans[pid]):
                             a, b = g["needle"]
@@ -301,7 +348,7 @@ def build_examples(
                     cursor += len(text[pid])
                 doc = "".join(parts)
                 rec = {
-                    "data_version": DATA_VERSION,
+                    "data_version": LONG_DATA_VERSION if doc_tokens else DATA_VERSION,
                     "seed_key": seed_key,
                     "case_id": cid,
                     "variant": v,
@@ -327,8 +374,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--base", default="qwen3.5-0.8b")
     ap.add_argument("--variants", type=int, default=1, help="documents per case")
     ap.add_argument("--null-rate", type=float, default=1.0)
+    ap.add_argument(
+        "--doc-tokens",
+        help="LO,HI: per-document token budget, padded from the seed (v5)",
+    )
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
+    doc_tokens = None
+    if args.doc_tokens:
+        lo, hi = (int(x) for x in args.doc_tokens.split(","))
+        doc_tokens = (lo, hi)
     tok = m.load_tokenizer(m.download_base(get_base(args.base)))
     cache = default_cache_dir()
     gen = build_generate(find_datagen_dir(), cache)
@@ -340,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
         recs = export_records(art, key)
         raw_cases = {c["id"]: c for c in art.get("memory_cases") or []}
         ex = build_examples(
-            recs, raw_cases, key, tok, args.variants, args.null_rate, stats
+            recs, raw_cases, key, tok, args.variants, args.null_rate, stats, doc_tokens
         )
         print(f"{key}: {len(ex)} examples", file=sys.stderr)
         rows.extend(ex)
