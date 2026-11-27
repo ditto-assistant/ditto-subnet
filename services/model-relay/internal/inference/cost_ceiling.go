@@ -50,6 +50,33 @@ func costCeilingEnforcedAndReached(g *postgres.InferenceGrant) bool {
 	return g != nil && g.CostCeilingMode == costCeilingModeEnforce && costCeilingReached(g)
 }
 
+// exhaustedOnlyByCostCeiling reports a grant that a sibling's settlement
+// exhausted at its enforced cost ceiling, with the token wall still unspent.
+// A call admitted before that settlement was admitted under the ceiling and
+// is billed in full, so it is still delivered: the "crossing call finishes"
+// rule, applied to every call already in flight. Admission refuses anything
+// new with 4110. The token wall keeps its own behaviour.
+func exhaustedOnlyByCostCeiling(g *postgres.InferenceGrant) bool {
+	return g != nil && g.Status == "exhausted" && costCeilingEnforcedAndReached(g) &&
+		g.PromptTokens+g.CompletionTokens < g.TokenBudget
+}
+
+// dittoRouterMeterable reports whether a Ditto Router receipt can be booked
+// against the grant's ceiling. The Router's usage.cost is optional, and a
+// chat grant minted with no list price books the provider bill, so a missing
+// bill there would book zero and the ceiling could never bind. Such a grant
+// stays on OpenRouter while its ceiling is live: that path always carries an
+// authoritative bill (the aggregate route requires usage.cost, and a priced
+// route is billed at its stamped prices).
+func dittoRouterMeterable(g *postgres.InferenceGrant) bool {
+	if !costCeilingActive(g) {
+		return true
+	}
+	_, promptOK := finitePrice(g.LedgerPromptPricePerToken.Float64, g.LedgerPromptPricePerToken.Valid)
+	_, completionOK := finitePrice(g.LedgerCompletionPricePerToken.Float64, g.LedgerCompletionPricePerToken.Valid)
+	return promptOK && completionOK
+}
+
 // setLedgerCostHeader stamps X-Ditto-Ledger-Cost-Microusd with the grant's
 // settled total when (and only when) the grant has an active ceiling.
 func setLedgerCostHeader(w http.ResponseWriter, g *postgres.InferenceGrant) {

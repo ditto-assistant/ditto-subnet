@@ -419,7 +419,7 @@ func exchangeWithCeiling(t *testing.T, ceiling int64, mode string) *httptest.Res
 	upstream := fakeChatUpstream(t, nil)
 	t.Cleanup(upstream.Close)
 	f := newPGFixtureWithHotkey(t, chatTestConfig(t, upstream.URL), hotkey)
-	testutil.SeedSQL(t, f.pool, `UPDATE inference_grants SET status = 'pending', bearer_digest = NULL, broker_public_key = NULL, generation = 0`)
+	testutil.SeedSQL(t, f.pool, `UPDATE inference_grants SET status = 'pending', bearer_digest = NULL, broker_public_key = NULL, generation = 0 WHERE grant_id = $1`, f.grantID)
 	f.stampCostCeiling(t, ceiling, mode)
 
 	brokerPub, _, _ := ed25519.GenerateKey(nil)

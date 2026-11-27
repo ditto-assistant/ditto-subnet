@@ -189,3 +189,60 @@ func TestDecisionLaneLedgerMatchesTheDecisionMeter(t *testing.T) {
 		t.Fatalf("overflow must clamp, got %d", got)
 	}
 }
+
+// A call already in flight when a sibling's settlement spends an enforced
+// ceiling is still delivered; a token-wall exhaustion keeps its own rule.
+func TestExhaustedOnlyByCostCeiling(t *testing.T) {
+	g := pricedGrant()
+	g.Status = "exhausted"
+	g.TokenBudget = 1000
+	g.PromptTokens, g.CompletionTokens = 100, 50
+	g.CostCeilingMicrousd = pgtype.Int8{Int64: 100, Valid: true}
+	g.CostCeilingMode = costCeilingModeEnforce
+	g.LedgerCostMicrousd = 100
+	if !exhaustedOnlyByCostCeiling(g) {
+		t.Fatal("an enforced, spent ceiling with tokens left must still deliver in-flight calls")
+	}
+	g.PromptTokens = 950
+	if exhaustedOnlyByCostCeiling(g) {
+		t.Fatal("a spent token wall keeps refusing delivery")
+	}
+	g.PromptTokens = 100
+	g.CostCeilingMode = costCeilingModeShadow
+	if exhaustedOnlyByCostCeiling(g) {
+		t.Fatal("shadow never exhausts a grant, so it never excuses one")
+	}
+	g.CostCeilingMode = costCeilingModeEnforce
+	g.Status = "revoked"
+	if exhaustedOnlyByCostCeiling(g) {
+		t.Fatal("a revoked grant is never deliverable")
+	}
+}
+
+// Under a live ceiling, an unpriced grant books the provider bill, so it
+// stays off the Ditto Router, whose usage.cost is optional.
+func TestDittoRouterMeterable(t *testing.T) {
+	priced := pricedGrant()
+	unpriced := pricedGrant()
+	unpriced.LedgerPromptPricePerToken = pgtype.Float8{}
+	if !dittoRouterMeterable(priced) || !dittoRouterMeterable(unpriced) {
+		t.Fatal("with no live ceiling every grant may take the Router")
+	}
+	for _, g := range []*postgres.InferenceGrant{priced, unpriced} {
+		g.CostCeilingMicrousd = pgtype.Int8{Int64: 100, Valid: true}
+		g.CostCeilingMode = costCeilingModeShadow
+	}
+	if !dittoRouterMeterable(priced) {
+		t.Fatal("a priced grant books list price, so the Router is meterable")
+	}
+	if dittoRouterMeterable(unpriced) {
+		t.Fatal("an unpriced grant under a live ceiling must stay on OpenRouter")
+	}
+	nonFinite := pricedGrant()
+	nonFinite.CostCeilingMicrousd = pgtype.Int8{Int64: 100, Valid: true}
+	nonFinite.CostCeilingMode = costCeilingModeEnforce
+	nonFinite.LedgerCompletionPricePerToken = pgtype.Float8{Float64: math.Inf(1), Valid: true}
+	if dittoRouterMeterable(nonFinite) {
+		t.Fatal("a non-finite stamp is no list price")
+	}
+}

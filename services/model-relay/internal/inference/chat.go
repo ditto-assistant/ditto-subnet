@@ -396,7 +396,8 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		// Do not attribute a direct gateway's health to the OpenRouter route.
 		outcome.recordObservation = false
 		recovered, exhausted = completeChatViaDaniLabs(ctx, d.Upstream, cfg, upstreamPayload, model, d.sleep())
-	} else if d.Cfg != nil && d.Cfg.DittoRouter.RoutesLane(config.DittoRouterLaneCompetition) {
+	} else if d.Cfg != nil && d.Cfg.DittoRouter.RoutesLane(config.DittoRouterLaneCompetition) &&
+		dittoRouterMeterable(&reservedGrant) {
 		if onBehalfOf, linked := d.dittoRouterOnBehalfOf(ctx, reservedGrant.AgentID); linked {
 			// The Router is Ditto's own upstream: one user's 402 or a Router
 			// outage must not cool the shared route, and a Router success must

@@ -117,6 +117,22 @@ def cost_ceiling_enforced_and_reached(grant: InferenceGrant) -> bool:
     return grant.cost_ceiling_mode == "enforce" and cost_ceiling_reached(grant)
 
 
+def _exhausted_only_by_cost_ceiling(grant: InferenceGrant) -> bool:
+    """A sibling's settlement exhausted the grant at its enforced ceiling.
+
+    The token wall is still unspent. A call admitted before that settlement
+    was admitted under the ceiling and is billed in full, so it is still
+    delivered: the crossing-call rule, applied to every call in flight. New
+    calls are refused with 4110 at admission. The token wall keeps its own
+    behaviour. Mirrors the relay's ``exhaustedOnlyByCostCeiling``.
+    """
+    return (
+        grant.status == "exhausted"
+        and cost_ceiling_enforced_and_reached(grant)
+        and grant.prompt_tokens + grant.completion_tokens < grant.token_budget
+    )
+
+
 def ledger_cost_headers(grant: InferenceGrant | None) -> dict[str, str]:
     """``X-Ditto-Ledger-Cost-Microusd`` for a grant with an active ceiling.
 
@@ -1169,7 +1185,7 @@ async def finish_inference_request(
     deliverable = (
         status == "completed"
         and usage_available
-        and grant.status == "active"
+        and (grant.status == "active" or _exhausted_only_by_cost_ceiling(grant))
         and grant.generation == generation
         and was_started
         and _aware(grant.expires_at) > now

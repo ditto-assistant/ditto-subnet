@@ -58,6 +58,24 @@ async def test_declines_without_a_live_ceiling_carry_no_ledger_header(
     assert "X-Ditto-Ledger-Cost-Microusd" not in response.headers
 
 
+@pytest.mark.asyncio
+async def test_at_capacity_keeps_the_ledger_evidence(
+    app: FastAPI, client: httpx.AsyncClient
+) -> None:
+    @app.get("/_test/at_capacity")
+    async def _raise() -> dict[str, Any]:
+        raise InferenceDeclinedError(
+            InferenceDecline.AT_CAPACITY,
+            lane="inference",
+            headers={"X-Ditto-Ledger-Cost-Microusd": "77"},
+        )
+
+    response = await client.get("/_test/at_capacity")
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "1"
+    assert response.headers["X-Ditto-Ledger-Cost-Microusd"] == "77"
+
+
 def _exchange(**extra: object) -> dict[str, object]:
     return InferenceExchangeResponse(
         grant_id=uuid4(),

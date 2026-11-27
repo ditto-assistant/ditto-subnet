@@ -86,7 +86,7 @@ func finishInferenceRequest(ctx context.Context, q *postgres.Queries, p finishPa
 	}
 	deliverable := p.status == "completed" &&
 		p.usageAvailable &&
-		grant.Status == "active" &&
+		(grant.Status == "active" || exhaustedOnlyByCostCeiling(&grant)) &&
 		int64(grant.Generation) == p.generation &&
 		wasStarted &&
 		grant.ExpiresAt.Time.After(p.now) &&

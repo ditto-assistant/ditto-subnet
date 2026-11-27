@@ -345,6 +345,53 @@ async def test_enforce_lets_the_crossing_call_finish_then_4110_on_both_lanes(
 
 
 @pytest.mark.asyncio
+async def test_a_sibling_admitted_under_the_ceiling_is_still_delivered(
+    session: AsyncSession,
+) -> None:
+    """A call in flight when a sibling's settle spends the ceiling still lands."""
+    config = _ceiling_config(5, "enforce")
+    async with session.begin():
+        _, grant, bearer, now = await _live_grant(session, config)
+        nonces = [uuid4(), uuid4()]
+        for nonce in nonces:  # both admitted at ledger 0 < 5
+            accepted = await begin_inference_request(
+                session,
+                grant_id=grant.grant_id,
+                nonce=nonce,
+                bearer=bearer,
+                model=_CHAT_MODEL,
+                token_reservation=250,
+                now=now,
+                config=config,
+            )
+            assert not isinstance(accepted, InferenceDecline)
+        delivered = []
+        for nonce in nonces:
+            delivered.append(
+                await finish_inference_request(
+                    session,
+                    grant_id=grant.grant_id,
+                    nonce=nonce,
+                    generation=grant.generation,
+                    status="completed",
+                    prompt_tokens=200,
+                    completion_tokens=25,
+                    cost_microusd=5_000,
+                    usage_available=True,
+                    now=now,
+                )
+            )
+            # The first settle (9 >= 5) exhausts the grant at its ceiling.
+            assert grant.status == "exhausted"
+        assert delivered == [True, True]
+        assert grant.ledger_cost_microusd == 2 * _LEDGER_PER_CALL
+        assert (
+            await _chat(session, grant=grant, bearer=bearer, now=now, config=config)
+            is InferenceDecline.COST_CEILING_EXHAUSTED
+        )
+
+
+@pytest.mark.asyncio
 async def test_cost_wall_is_named_before_the_token_wall(session: AsyncSession) -> None:
     config = replace(_ceiling_config(5, "enforce"), token_budget=225)
     async with session.begin():

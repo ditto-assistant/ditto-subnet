@@ -348,7 +348,8 @@ def register_exception_handlers(app: FastAPI) -> None:
                 503,
                 ERROR_CODE_INFERENCE_AT_CAPACITY,
                 f"{exc.lane} lane is at capacity",
-                headers={"Retry-After": "1"},
+                # Keep the authenticated ledger evidence the caller attached.
+                headers={**(exc.headers or {}), "Retry-After": "1"},
             )
         terminal = _TERMINAL_DECLINE_RESPONSES.get(exc.decline)
         if terminal is not None:
