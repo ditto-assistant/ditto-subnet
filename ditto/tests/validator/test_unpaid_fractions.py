@@ -240,6 +240,39 @@ class TestLedgerResolver:
         ).model_dump(mode="json")
         assert served["unpaid_fractions"] == {str(entries[0].agent_id): 0.5}
 
+    @pytest.mark.parametrize(
+        "served",
+        [
+            {"VALID": True},
+            {"VALID": "0.5"},
+            {"VALID": None},
+            {"VALID": [0.5]},
+            {"VALID": 10**400},
+            {"VALID": -(10**400)},
+            {"not-a-uuid": 0.5},
+            [0.5],
+        ],
+    )
+    def test_a_coercible_malformed_map_is_dropped_whole(self, served: Any) -> None:
+        """``true`` must never parse as ``1.0`` and burn a whole slot."""
+        entries = _five()
+        if isinstance(served, dict) and "VALID" in served:
+            served = {str(entries[0].agent_id): served["VALID"]}
+        raw = LedgerResponse(entries=entries, count=6).model_dump(mode="json")
+        raw["unpaid_fractions"] = served
+        ledger = LedgerResponse.model_validate(raw)
+        assert ledger.unpaid_fractions == {}
+        assert _ledger_unpaid_fractions(ledger) == {}
+        # The rest of the ledger still parses and folds in full.
+        assert len(ledger.entries) == len(entries)
+
+    def test_a_well_formed_wire_map_still_parses(self) -> None:
+        entries = _five()
+        raw = LedgerResponse(entries=entries, count=6).model_dump(mode="json")
+        raw["unpaid_fractions"] = {str(entries[0].agent_id): 0.5}
+        ledger = LedgerResponse.model_validate(raw)
+        assert _ledger_unpaid_fractions(ledger) == {entries[0].agent_id: 0.5}
+
 
 class TestWorker:
     async def test_a_half_unattested_champion_through_the_worker(self) -> None:
