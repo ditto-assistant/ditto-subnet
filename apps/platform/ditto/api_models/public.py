@@ -1945,6 +1945,7 @@ class PublicEmissionRecipient(BaseModel):
         bool | None,
         Field(
             default=None,
+            exclude_if=lambda value: value is None,
             description=(
                 "Whether this exact artifact passed operator board review (a "
                 "resolved clear in the ATH court; #2911). ``None`` when the "
@@ -1958,8 +1959,10 @@ class PublicEmissionRecipient(BaseModel):
             default=0.0,
             ge=0.0,
             le=1.0,
+            exclude_if=lambda value: value == 0.0,
             description=(
-                "The clean-board fraction of this slot the policy leaves unpaid: "
+                "Absent means 0. The clean-board fraction of this slot the "
+                "policy leaves unpaid: "
                 "an unattested agent past its grace window (#2911). Reported in "
                 "shadow too; ``clean_board_mode`` says whether validators apply "
                 "it."
@@ -1972,8 +1975,10 @@ class PublicEmissionRecipient(BaseModel):
             default=1.0,
             ge=0.0,
             le=1.0,
+            exclude_if=lambda value: value == 1.0,
             description=(
-                "The fraction of ``share_of_miner_pool`` validators actually pay "
+                "Absent means 1. The fraction of ``share_of_miner_pool`` "
+                "validators actually pay "
                 "this hotkey: ``0`` for an unpaid provisional incumbent, "
                 "``1 - unpaid_fraction`` while the clean-board burn is enforced, "
                 "and ``1`` otherwise. The rest is burned."

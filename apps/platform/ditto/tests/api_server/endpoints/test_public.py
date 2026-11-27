@@ -3181,6 +3181,7 @@ class TestPublicLeaderboard:
                 "miner_hotkey": _MINER_A,
                 "raw_rank": 2,
                 "share_of_miner_pool": pytest.approx(0.65 / 0.79),
+                "attested": False,
                 "shared_seed_confirmations": 0,
             },
             {
@@ -3189,6 +3190,7 @@ class TestPublicLeaderboard:
                 "miner_hotkey": _MINER_B,
                 "raw_rank": 1,
                 "share_of_miner_pool": pytest.approx(0.14 / 0.79),
+                "attested": False,
                 "shared_seed_confirmations": 0,
             },
         ]
@@ -4094,6 +4096,7 @@ class TestPublicLeaderboard:
                 "miner_hotkey": _MINER_B,
                 "raw_rank": 1,
                 "share_of_miner_pool": 1.0,
+                "attested": False,
                 "shared_seed_confirmations": 0,
             }
         ]
@@ -4423,6 +4426,7 @@ class TestPublicLeaderboard:
                 "miner_hotkey": "5" + "T" * 47,
                 "raw_rank": 1,
                 "share_of_miner_pool": 1.0,
+                "attested": False,
                 "shared_seed_confirmations": 0,
             }
         ]

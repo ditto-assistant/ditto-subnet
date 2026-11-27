@@ -520,10 +520,10 @@ class TestPublicBoard:
         assert emissions["clean_board_mode"] == "shadow"
         assert emissions["clean_board_required_protocol"] == 36
         king, tail = recipients[str(leader)], recipients[str(runner_up)]
-        assert king["attested"] is True and king["unpaid_fraction"] == 0.0
+        assert king["attested"] is True and "unpaid_fraction" not in king
         assert tail["attested"] is False and tail["unpaid_fraction"] == 0.5
-        # Shadow: nobody is actually paid less.
-        assert king["paid_fraction"] == 1.0 and tail["paid_fraction"] == 1.0
+        # Shadow: nobody is actually paid less (absent means 1).
+        assert "paid_fraction" not in king and "paid_fraction" not in tail
         assert emissions["unattested_burn_share"] == pytest.approx(
             tail["share_of_miner_pool"] * 0.5
         )
@@ -546,7 +546,7 @@ class TestPublicBoard:
         king, tail = recipients[str(leader)], recipients[str(runner_up)]
         # Ranks and shares are untouched; only the paid fraction moves.
         assert emissions["champion_agent_id"] == str(leader)
-        assert king["paid_fraction"] == 1.0
+        assert "paid_fraction" not in king
         assert tail["paid_fraction"] == pytest.approx(0.5)
         burned = tail["share_of_miner_pool"] * 0.5
         assert emissions["unattested_burn_share"] == pytest.approx(burned)
