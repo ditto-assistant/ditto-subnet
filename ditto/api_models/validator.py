@@ -2488,6 +2488,10 @@ class LedgerResponse(BaseModel):
         for key, fraction in value.items():
             if isinstance(fraction, bool) or not isinstance(fraction, (int, float)):
                 return {}
+            # A valid fraction is at most 1, so a larger integer is malformed,
+            # and one too large for a float would otherwise fail the ledger.
+            if isinstance(fraction, int) and not 0 <= fraction <= 1:
+                return {}
             if not isinstance(key, UUID):
                 try:
                     UUID(str(key))

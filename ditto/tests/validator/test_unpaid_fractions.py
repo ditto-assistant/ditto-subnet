@@ -247,6 +247,8 @@ class TestLedgerResolver:
             {"VALID": "0.5"},
             {"VALID": None},
             {"VALID": [0.5]},
+            {"VALID": 10**400},
+            {"VALID": -(10**400)},
             {"not-a-uuid": 0.5},
             [0.5],
         ],
