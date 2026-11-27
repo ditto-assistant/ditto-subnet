@@ -2488,9 +2488,10 @@ class LedgerResponse(BaseModel):
         for key, fraction in value.items():
             if isinstance(fraction, bool) or not isinstance(fraction, (int, float)):
                 return {}
-            # A valid fraction is at most 1, so a larger integer is malformed,
-            # and one too large for a float would otherwise fail the ledger.
-            if isinstance(fraction, int) and not 0 <= fraction <= 1:
+            # The contract is 0 < f <= 1. Checking the raw number also keeps an
+            # integer too large for a float from failing the ledger, and a NaN
+            # fails the comparison, so it is dropped too.
+            if not 0 < fraction <= 1:
                 return {}
             if not isinstance(key, UUID):
                 try:
