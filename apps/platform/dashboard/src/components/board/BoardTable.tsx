@@ -258,6 +258,10 @@ function emissionsColTip(store: LeaderboardStore): string {
       ? " The dethrone threshold is outside the attainable score range, so every best-score evidence tie shares the full miner pool equally, even beyond the normal tail cutoff."
       : " Evidence-tied recipients pool only the ranked shares of the slots they occupy."
     : "";
+  const cleanBoardCopy =
+    emissions.clean_board_mode === "enforce"
+      ? " Shares are allocated slots: a slot that is not board-attested is paid only its paid fraction, and the rest burns."
+      : "";
   return (
     "Current KOTH role. The base ranked schedule gives the incumbent " +
     pct(share) +
@@ -270,7 +274,8 @@ function emissionsColTip(store: LeaderboardStore): string {
         pct(1 - share) +
         ".") +
     rankedCopy +
-    tieCopy
+    tieCopy +
+    cleanBoardCopy
   );
 }
 

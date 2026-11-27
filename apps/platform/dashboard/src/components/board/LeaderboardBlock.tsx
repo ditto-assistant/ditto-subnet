@@ -589,7 +589,10 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
         "The incumbent's required dethrone score is at or above the best challenger's attainable score ceiling. " +
         "A single-winner crown would therefore be impossible to win. The fold instead pays the highest evidence-tied cohort, anchored on raw #1, and includes every tied destination beyond the normal tail cutoff. " +
         n +
-        " joint champions split the full miner pool equally; missing paired evidence cannot widen the cohort."
+        " joint champions split the full miner pool equally; missing paired evidence cannot widen the cohort." +
+        (e.clean_board_mode === "enforce"
+          ? " The split is of allocated slots: a slot that is not board-attested is paid only its paid fraction, and the rest burns."
+          : "")
       );
     }
     const champion = championEntry();
