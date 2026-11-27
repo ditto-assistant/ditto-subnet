@@ -2458,6 +2458,47 @@ CREATE TABLE public.cla_versions (
 
 
 --
+-- Name: clean_board_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.clean_board_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    scope text NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_clean_board_settings_revisions_clean_board_settings__400d CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_clean_board_settings_revisions_clean_board_settings__8c92 CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_clean_board_settings_revisions_clean_board_settings__8d3c CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_clean_board_settings_revisions_clean_board_settings__8dda CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_clean_board_settings_revisions_clean_board_settings__da11 CHECK ((scope = '*'::text))
+);
+
+
+--
+-- Name: clean_board_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.clean_board_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: clean_board_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.clean_board_settings_revisions_revision_seq OWNED BY public.clean_board_settings_revisions.revision;
+
+
+--
 -- Name: coding_capability_certifications; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -8810,6 +8851,13 @@ ALTER TABLE ONLY public.burn_settings_revisions ALTER COLUMN revision SET DEFAUL
 
 
 --
+-- Name: clean_board_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.clean_board_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.clean_board_settings_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: confirmation_bundle_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -9207,6 +9255,14 @@ ALTER TABLE ONLY public.burn_settings_revisions
 
 ALTER TABLE public.scores
     ADD CONSTRAINT ck_scores_scores_dueling_bench_floor CHECK ((((dueling_season_id IS NULL) AND (dueling IS NULL)) OR (bench_version >= 16))) NOT VALID;
+
+
+--
+-- Name: clean_board_settings_revisions clean_board_settings_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.clean_board_settings_revisions
+    ADD CONSTRAINT clean_board_settings_scope_parent_key UNIQUE (scope, parent_revision);
 
 
 --
@@ -10607,6 +10663,14 @@ ALTER TABLE ONLY public.cla_signatures
 
 ALTER TABLE ONLY public.cla_versions
     ADD CONSTRAINT pk_cla_versions PRIMARY KEY (version);
+
+
+--
+-- Name: clean_board_settings_revisions pk_clean_board_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.clean_board_settings_revisions
+    ADD CONSTRAINT pk_clean_board_settings_revisions PRIMARY KEY (revision);
 
 
 --
@@ -13059,6 +13123,13 @@ CREATE UNIQUE INDEX burn_settings_scope_revision_idx ON public.burn_settings_rev
 --
 
 CREATE INDEX cla_shadow_uploads_netuid_idx ON public.cla_shadow_uploads USING btree (netuid);
+
+
+--
+-- Name: clean_board_settings_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX clean_board_settings_scope_revision_idx ON public.clean_board_settings_revisions USING btree (scope, revision);
 
 
 --
