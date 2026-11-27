@@ -1624,7 +1624,7 @@ describe("provisional champion (protocol 28)", () => {
 });
 
 describe("clean-board burn (#2911)", () => {
-  const withMode = (mode: "enforce" | "shadow") =>
+  const withMode = (mode: "enforce" | "shadow", unpaid = 0.5) =>
     renderPage({
       patch: (name, body) => {
         if (name !== "leaderboard") return body;
@@ -1639,8 +1639,8 @@ describe("clean-board burn (#2911)", () => {
                 ? {
                     ...recipient,
                     attested: false,
-                    unpaid_fraction: 0.5,
-                    ...(mode === "enforce" ? { paid_fraction: 0.5 } : {}),
+                    unpaid_fraction: unpaid,
+                    ...(mode === "enforce" ? { paid_fraction: 1 - unpaid } : {}),
                   }
                 : recipient,
             ),
@@ -1664,7 +1664,20 @@ describe("clean-board burn (#2911)", () => {
       ),
     );
     expect(el("emissions-title").textContent).toContain(
-      pct(0.5) + " of its slot pending board review",
+      pct(0.5) + " of its slot unpaid: not board-attested",
+    );
+  });
+
+  it("names the unpaid share of an asymmetric slot, not the paid one", async () => {
+    withMode("enforce", 0.25);
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("emissions-title").textContent).toContain(
+        pct(championShare() * 0.75) + " of the miner pool",
+      ),
+    );
+    expect(el("emissions-title").textContent).toContain(
+      pct(0.25) + " of its slot unpaid: not board-attested",
     );
   });
 
@@ -1676,7 +1689,7 @@ describe("clean-board burn (#2911)", () => {
         pct(championShare()) + " of the miner pool.",
       ),
     );
-    expect(el("emissions-title").textContent).not.toContain("pending board review");
+    expect(el("emissions-title").textContent).not.toContain("not board-attested");
   });
 });
 

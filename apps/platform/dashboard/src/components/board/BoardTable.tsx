@@ -727,7 +727,7 @@ function BoardRow(props: {
                     recipient(),
                     props.store.emissions()?.clean_board_mode,
                   ) !== undefined
-                    ? " · pending board review"
+                    ? " · not board-attested"
                     : "")}
               </span>
             )}

@@ -791,8 +791,8 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
                         {" of the miner pool"}
                         {championPaidFraction() !== undefined
                           ? ", " +
-                            pct(championPaidFraction() as number) +
-                            " of its slot pending board review."
+                            pct(1 - (championPaidFraction() as number)) +
+                            " of its slot unpaid: not board-attested."
                           : "."}
                       </>
                     }
@@ -900,7 +900,7 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
                     )}
                     {recipient.paid === false ? " unpaid" : ""}
                     {cleanBoardPaidFraction(recipient, emissions()?.clean_board_mode) !== undefined
-                      ? " (pending board review)"
+                      ? " (not board-attested)"
                       : ""}
                     <Show when={note()}>
                       {(n) => (
