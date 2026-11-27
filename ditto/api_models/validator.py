@@ -2472,6 +2472,29 @@ class LedgerResponse(BaseModel):
         ),
     )
 
+    @field_validator("unpaid_fractions", mode="before")
+    @classmethod
+    def _an_unusable_map_is_empty(cls, value: Any) -> Any:
+        """Drop the whole map before lax coercion can rewrite a malformed one.
+
+        Lax parsing would read ``true`` as ``1.0`` (a whole slot burned) and
+        ``"0.5"`` as ``0.5``, and an unparseable key would fail the entire
+        ledger. Any of those makes the map unusable as a whole, which folds
+        every slot paid in full, as protocol 35 does: the same all-or-nothing
+        rule the fold applies to keys and ranges.
+        """
+        if value is None or not isinstance(value, dict):
+            return {}
+        for key, fraction in value.items():
+            if isinstance(fraction, bool) or not isinstance(fraction, (int, float)):
+                return {}
+            if not isinstance(key, UUID):
+                try:
+                    UUID(str(key))
+                except ValueError:
+                    return {}
+        return value
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
